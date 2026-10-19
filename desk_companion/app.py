@@ -18,16 +18,12 @@ import win32api
 import win32con
 import win32gui
 
-from .assistant import (
-    TOOL_CONTRACT,
-    list_providers,
-    spoken_answer,
-)
+from .assistant import spoken_answer
+from .assistant_settings import AssistantSettingsService
 from .conversation import ConversationService
 from .automation import AutomationScheduler
 from .board_workbench import BoardWorkbench
 from .bridge import Bridge
-from .envconf import parse_env_file, public_llm_env, write_llm_env
 from .layered import enable_dpi_aware, work_area
 from .logutil import crash, install_crash_hooks, log, mark_ready, start_os_watchdog
 from .memory import (
@@ -94,6 +90,7 @@ class App(BoardWorkbench):
         self.conversation = ConversationService(self.state, dispatch=self.ui,
             on_delta=None if headless else self.on_llm_delta,
             on_status=None if headless else self.on_stream_status)
+        self.assistant_settings = AssistantSettingsService(self.conversation)
         self.automation = AutomationScheduler(self)
         self.bridge = Bridge(self)
         self._queue: queue.Queue = queue.Queue()
@@ -332,9 +329,6 @@ class App(BoardWorkbench):
     def try_build_agent(self) -> None:
         return self.conversation.try_build_agent()
 
-    def _rebuild_agent(self) -> None:
-        return self.conversation.rebuild_agent()
-
     def _record_usage(self, agent, run_id: str) -> dict:
         return self.conversation.record_usage(agent, run_id)
 
@@ -468,179 +462,34 @@ class App(BoardWorkbench):
             return {"ok": False, "error": str(exc)}
 
     def board_persona(self) -> dict:
-        try:
-            return {
-                "ok": True,
-                "persona": self.state.persona,
-                "max_steps": self.state.max_steps,
-                "nudge_enabled": self.state.nudge_enabled,
-                "tool_contract": TOOL_CONTRACT,
-            }
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.assistant_settings.load_persona()
 
     def save_persona(self, payload: dict) -> dict:
-        if not isinstance(payload, dict):
-            return {"ok": False, "error": "人设保存参数必须是对象。"}
-        try:
-            if self._agent_running:
-                raise RuntimeError("助手正在回复，等这句说完再保存。")
-            persona = str(payload.get("persona") or "").strip()
-            if not persona:
-                raise RuntimeError("人设不能为空。")
-            max_steps = int(payload.get("max_steps"))
-            if max_steps < 1:
-                raise RuntimeError("max_steps 至少为 1。")
-            nudge = payload.get("nudge_enabled")
-            if type(nudge) is not bool:
-                raise RuntimeError("主动搭话必须是 true/false。")
-            self.state.persona = persona
-            self.state.max_steps = max_steps
-            self.state.nudge_enabled = nudge
-            self.state.save()
-            self._rebuild_agent()
-            return {"ok": True, "message": "人设已保存。"}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.assistant_settings.save_persona(payload)
 
     def board_model(self) -> dict:
-        try:
-            pub = public_llm_env()
-            model = pub["model"]
-            price = self.state.model_prices.get(model) or {}
-            return {
-                "ok": True,
-                "providers": list_providers(),
-                "base_url": pub["base_url"],
-                "model": model,
-                "has_key": pub["has_key"],
-                "agent_ok": self.agent is not None,
-                "agent_error": self._agent_error,
-                "input_cny_per_mtok": price.get("input_cny_per_mtok"),
-                "output_cny_per_mtok": price.get("output_cny_per_mtok"),
-            }
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.assistant_settings.load_model()
 
     def board_models(self) -> dict:
-        from .model_catalog import public_catalog
-
-        try:
-            return {"ok": True, **public_catalog()}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.assistant_settings.load_models()
 
     def save_model_entry(self, payload: dict) -> dict:
-        from .model_catalog import public_catalog, upsert_entry
-
-        if not isinstance(payload, dict):
-            return {"ok": False, "error": "模型保存参数必须是对象。"}
-        try:
-            if self._agent_running:
-                raise RuntimeError("助手正在回复，等这句说完再保存。")
-            cat = upsert_entry(payload)
-            self._bind_active_llm()
-            return {"ok": True, "message": "模型已保存。", **public_catalog(cat)}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.assistant_settings.save_model_entry(payload)
 
     def delete_model_entry(self, model_id: str) -> dict:
-        from .model_catalog import delete_entry, public_catalog
-
-        try:
-            if self._agent_running:
-                raise RuntimeError("助手正在回复，等这句说完再删除。")
-            cat = delete_entry(model_id)
-            self._bind_active_llm()
-            return {"ok": True, "message": "模型已删除。", **public_catalog(cat)}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.assistant_settings.delete_model_entry(model_id)
 
     def use_model(self, model_id: str) -> dict:
-        from .model_catalog import activate, public_catalog
-
-        try:
-            if self._agent_running:
-                raise RuntimeError("助手正在回复，等这句说完再换模型。")
-            activate(model_id)
-            self._bind_active_llm()
-            return {"ok": True, "message": "已切换模型。", **public_catalog()}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.assistant_settings.use_model(model_id)
 
     def engage_model(self, model_id: str = "") -> None:
         return self.conversation.engage_model(model_id)
 
-    def _bind_active_llm(self) -> None:
-        return self.conversation.bind_active_llm()
-
     def save_model(self, payload: dict) -> dict:
-        if not isinstance(payload, dict):
-            return {"ok": False, "error": "模型保存参数必须是对象。"}
-        try:
-            if self._agent_running:
-                raise RuntimeError("助手正在回复，等这句说完再保存。")
-            base_url = str(payload.get("base_url") or "").strip()
-            model = str(payload.get("model") or "").strip()
-            api_key = str(payload.get("api_key") or "").strip()
-            if not api_key:
-                api_key = parse_env_file().get("ATLAS_API_KEY") or ""
-            write_llm_env(api_key=api_key, base_url=base_url, model=model)
-            prices = dict(self.state.model_prices)
-            inn_raw = payload.get("input_cny_per_mtok")
-            out_raw = payload.get("output_cny_per_mtok")
-            blank = inn_raw in (None, "") and out_raw in (None, "")
-            if blank:
-                prices.pop(model, None)
-            else:
-                if inn_raw in (None, "") or out_raw in (None, ""):
-                    raise RuntimeError("输入、输出单价要一起填，或都留空。")
-                inn = float(inn_raw)
-                outv = float(out_raw)
-                if inn < 0 or outv < 0:
-                    raise RuntimeError("单价不能为负。")
-                prices[model] = {
-                    "input_cny_per_mtok": inn,
-                    "output_cny_per_mtok": outv,
-                }
-            self.state.model_prices = prices
-            self.state.save()
-            self._rebuild_agent()
-            return {"ok": True, "message": "模型配置已保存。"}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.assistant_settings.save_model(payload)
 
     def test_model(self, payload: dict) -> dict:
-        if not isinstance(payload, dict):
-            return {"ok": False, "error": "测试参数必须是对象。"}
-        try:
-            from openai import OpenAI
-
-            base_url = str(payload.get("base_url") or "").strip()
-            model = str(payload.get("model") or "").strip()
-            api_key = str(payload.get("api_key") or "").strip()
-            if not api_key:
-                entry_id = str(payload.get("id") or "").strip()
-                if entry_id:
-                    from .model_catalog import require_item
-
-                    api_key = require_item(entry_id)["api_key"]
-                else:
-                    api_key = parse_env_file().get("ATLAS_API_KEY") or ""
-            if not api_key or not base_url or not model:
-                raise RuntimeError("测试前先填 API 地址、模型名和 Key。")
-            from .model_validation import validate_base_url
-            from .model_network import openai_client
-            with openai_client(api_key=api_key, base_url=validate_base_url(base_url), timeout=20) as client:
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "user", "content": "ping"}],
-                    max_tokens=8,
-                )
-            text = (response.choices[0].message.content or "").strip()
-            return {"ok": True, "message": "连通正常。" + (f" 回复：{text}" if text else "")}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.assistant_settings.test_model(payload)
 
     def board_usage(self) -> dict:
         try:

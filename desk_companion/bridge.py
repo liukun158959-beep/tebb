@@ -502,13 +502,13 @@ class Bridge:
         return self._host.board_drop_memory_turn(role, text)
 
     def load_persona(self) -> dict:
-        return self._host.board_persona()
+        return self._host.assistant_settings.load_persona()
 
     def save_persona(self, payload: dict) -> dict:
-        return self._host.save_persona(payload)
+        return self._host.assistant_settings.save_persona(payload)
 
     def load_model(self) -> dict:
-        return self._host.board_model()
+        return self._host.assistant_settings.load_model()
 
     def load_model_network(self) -> dict:
         from .model_network import public
@@ -519,22 +519,22 @@ class Bridge:
         return save(payload)
 
     def load_models(self) -> dict:
-        return self._host.board_models()
+        return self._host.assistant_settings.load_models()
 
     def save_model_entry(self, payload: dict) -> dict:
-        return self._host.save_model_entry(payload)
+        return self._host.assistant_settings.save_model_entry(payload)
 
     def delete_model_entry(self, model_id: str) -> dict:
-        return self._host.delete_model_entry(model_id)
+        return self._host.assistant_settings.delete_model_entry(model_id)
 
     def use_model(self, model_id: str) -> dict:
-        return self._host.use_model(model_id)
+        return self._host.assistant_settings.use_model(model_id)
 
     def save_model(self, payload: dict) -> dict:
-        return self._host.save_model(payload)
+        return self._host.assistant_settings.save_model(payload)
 
     def test_model(self, payload: dict) -> dict:
-        return self._host.test_model(payload)
+        return self._host.assistant_settings.test_model(payload)
 
     def load_usage(self) -> dict:
         return self._host.board_usage()

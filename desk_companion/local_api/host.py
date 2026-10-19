@@ -1,6 +1,7 @@
 """P1：本地 API 的无头 host。
 
-保留 App 的数据 RPC 兼容门面；普通/知识问答委托 ConversationService。
+普通/知识问答委托 ConversationService；模型/人设 RPC 直接使用共享配置服务。
+其余数据方法仍保留 App 的继承兼容。
 这里仍有 GUI 类继承，任务 worker 直接使用共享服务，不导入此模块。
 """
 from __future__ import annotations

@@ -75,6 +75,66 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("App Secret 无效", message["result"]["result"]["error"])
         self.assertNotIn("test-only-secret", raw)
 
+    async def test_settings_rpc_calls_independent_service_and_preserves_contracts(self):
+        import httpx
+        from desk_companion import envconf, model_network
+        from contextlib import ExitStack
+
+        async def rpc(method, args=None):
+            async with connect(self.url, proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', id=method, method=method, args=args or {})))
+                message = json.loads(await asyncio.wait_for(ws.recv(), 10))
+            self.assertEqual(message['id'], method)
+            self.assertTrue(message['result']['ok'], message)
+            self.assertNotIn('PRIVATE_RPC_KEY', json.dumps(message))
+            self.assertNotIn('PRIVATE_PROXY_KEY', json.dumps(message))
+            return message['result']['result']
+
+        service = self.host.assistant_settings
+        self.assertIs(service.conversation, self.host.conversation)
+        with ExitStack() as stack:
+            # The data RPC must no longer depend on inherited App configuration methods.
+            for method in ('board_persona', 'save_persona', 'board_model', 'board_models',
+                           'save_model_entry', 'delete_model_entry', 'use_model', 'save_model', 'test_model'):
+                stack.enter_context(patch.object(self.host, method, side_effect=AssertionError('inherited GUI method')))
+            rebuild = stack.enter_context(patch.object(self.host.conversation, 'rebuild_agent'))
+            binding = stack.enter_context(patch.object(self.host.conversation, 'bind_active_llm'))
+            self.assertTrue((await rpc('load_persona'))['ok'])
+            self.assertTrue((await rpc('save_persona', {'payload': dict(persona='RPC persona', max_steps=7, nudge_enabled=False)}))['ok'])
+            self.assertEqual((await rpc('load_persona'))['persona'], 'RPC persona')
+            self.assertEqual(state.load_state(0, 0).persona, 'RPC persona')
+            first = await rpc('save_model_entry', {'payload': dict(base_url='https://example.invalid/v1', model='one', api_key='PRIVATE_RPC_KEY')})
+            one = first['active']
+            self.assertEqual((await rpc('load_model'))['model'], 'one')
+            self.assertTrue((await rpc('load_model'))['has_key'])
+            second = await rpc('save_model_entry', {'payload': dict(base_url='https://example.invalid/v1', model='two', copy_key_from=one)})
+            two = second['items'][1]['id']
+            self.assertEqual(len((await rpc('load_models'))['items']), 2)
+            self.assertEqual((await rpc('use_model', {'model_id': two}))['active'], two)
+            self.assertEqual((await rpc('delete_model_entry', {'model_id': one}))['active'], two)
+            self.assertFalse((await rpc('delete_model_entry', {'model_id': two}))['ok'])
+            self.assertTrue((await rpc('save_model', {'payload': dict(base_url='https://example.invalid/v1', model='legacy',
+                input_cny_per_mtok=1, output_cny_per_mtok=2)}))['ok'])
+            self.assertEqual((await rpc('load_model'))['output_cny_per_mtok'], 2.0)
+            self.assertEqual(envconf.parse_env_file()['ATLAS_API_KEY'], 'PRIVATE_RPC_KEY')
+            def transport(timeout):
+                return httpx.Client(timeout=timeout, transport=httpx.MockTransport(lambda _: httpx.Response(200,
+                    json=dict(choices=[dict(index=0, finish_reason='stop', message=dict(role='assistant', content='pong'))]))))
+            with patch.object(model_network, 'http_client', side_effect=transport):
+                result = await rpc('test_model', {'payload': dict(base_url='https://example.invalid/v1', model='probe', id=two)})
+            self.assertEqual(result, dict(ok=True, message='连通正常。 回复：pong'))
+            self.assertEqual(rebuild.call_count, 2)
+            self.assertEqual(binding.call_count, 4)
+            self.host.conversation.running = True
+            saved = state.state_path().read_bytes()
+            self.assertFalse((await rpc('save_persona', {'payload': dict(persona='rejected', max_steps=3, nudge_enabled=True)}))['ok'])
+            self.assertEqual(state.state_path().read_bytes(), saved)
+            self.host.conversation.running = False
+            self.assertEqual((await rpc('load_model_network'))['mode'], 'system')
+            result = await rpc('save_model_network', {'payload': dict(mode='custom', proxy_url='http://localhost:7890', password='PRIVATE_PROXY_KEY')})
+            self.assertTrue(result['has_password'])
+            self.assertEqual((await rpc('load_model_network'))['proxy_url'], 'http://localhost:7890')
+
     async def test_manual_update_check_rpc_is_available_while_chat_lock_is_held(self):
         with patch("desk_companion.release_info.check_updates", return_value={"ok": True, "latest_version": "0.3.0"}):
             with self.host.turn_lock:

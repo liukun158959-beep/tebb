@@ -6,7 +6,8 @@ Windows 上常驻的个人助手，作者本机自用。凯尔希桌宠是入口
 
 - 主入口：client/ 的 Tauri 2 + React + TypeScript 客户端，主窗和透明 Live2D 宠物窗。
 - Rust 拉起 desk_companion.local_api.server，绑定本机随机端口；前端通过带进程 token 的 WebSocket 调用白名单 RPC，并接收对话流。
-- Python 的普通及知识问答任务直接使用 ConversationService，通过 Atlas 组装模型与业务工具，无需导入窗口模块。App / HeadlessApp 复用此服务；HeadlessApp 的其他数据 RPC 暂保留 App / BoardWorkbench 继承兼容。
+- Python 的普通及知识问答任务直接使用 ConversationService，通过 Atlas 组装模型与业务工具，无需导入窗口模块。App / HeadlessApp 复用此服务；其余数据 RPC 正在按职责分批拆分。
+- 模型、人设配置集中在 AssistantSettingsService，Bridge 直接调用该服务，旧桌面通过兼容方法复用。配置服务依赖共享 ConversationService，不依赖窗口；会话、看板及笔记等 RPC 仍保留继承兼容。
 - python -m desk_companion 的 Electron / pywebview 旧入口仍保留。pet-ui/、Windows 窗口辅助模块、旧看板及资源仍有实际引用，不能当成无用文件删除。
 
 ## 已有能力与约束

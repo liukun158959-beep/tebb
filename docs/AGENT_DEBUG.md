@@ -32,7 +32,7 @@ python -m unittest discover -s tests -p test_tasks.py -v
 
 预期：离线测试全部通过；后台任务不改变桌面选中的会话或窗口配置；模型或检索失败时不写入成功回复，临时工具清理失败时仍释放忙碌状态和回调。若失败，先看 unittest 的具体断言与子进程 stderr：`GUI import forbidden` 表示新增了窗口依赖；缺少 result 或出现 failure 则检查本轮异常、采样输入、工具回执及模型记录。
 
-当前解耦范围仅为普通/知识任务及共享对话业务；本地 API 的其他数据 RPC 仍通过 HeadlessApp 兼容，不代表整个后端已无 GUI 依赖。GUI 实机、真实模型和完整发布包验收单独报告。
+已独立的范围包括普通/知识任务、共享对话业务及模型/人设配置；本地 API 的其他数据 RPC 仍通过 HeadlessApp 继承兼容，不代表整个后端已无 GUI 依赖。GUI 实机、真实模型和完整发布包验收单独报告。
 
 ## 记录范围与验证
 
@@ -43,3 +43,22 @@ python -m unittest discover -s tests -p test_tasks.py -v
 记录保存在用户数据目录的 `memory/agent_debug/`，不自动上传。索引与载荷分开保存，列表不加载全部正文；只有选择某次调用时才读取完整内容，折叠只控制显示。流式内容逐段写入，即使 worker 被终止也能查看已接收部分，并标为中断。暂停只影响后续请求，已开始的调用仍收完返回。正文、工具 Schema、函数参数和返回内容均不设置展示截断。
 
 测试使用真实 OpenAI SDK 配合本地 MockTransport，验证长上下文末尾保留、流式中文、压缩响应、工具参数增量、用量、正常结束与中断、凭证头排除和记录开关；界面测试验证第五次点击、全量载荷显示、请求差异和按需解读。浏览器样本预览不伪装成真实调用。
+
+## 无 GUI 的配置服务验收
+
+在仓库根目录执行：
+
+```powershell
+python -m unittest discover -s tests -p test_assistant_settings.py -v
+python -m unittest tests.test_local_api.LocalApiTests.test_settings_rpc_calls_independent_service_and_preserves_contracts -v
+python -m unittest discover -s tests -p test_model_network.py -v
+python -m unittest discover -s tests -p test_persona_migration.py -v
+```
+
+共享入口是 `AssistantSettingsService(conversation)`；传入已有 `ConversationService`，其 `state` 是配置的唯一内存来源。新建隔离数据时可先设置临时 `DESK_COMPANION_DATA_DIR`，调用 `state.load_state(0, 0)` 并构造对话服务；不要使用会把保存变成 no-op 的 worker `for_session` 入口来修改配置。
+
+服务提供 `load_persona`、`save_persona(payload)`、`load_model`、`load_models`、`save_model_entry(payload)`、`delete_model_entry(model_id)`、`use_model(model_id)`、`save_model(payload)` 和 `test_model(payload)`。输入与原 RPC 一致：人设包含 persona/max_steps/nudge_enabled；模型包含 base_url/model，按需传入 api_key、id 或 copy_key_from。旧模型保存可附输入/输出价格；连接测试不保存配置。返回既有 `ok`、错误或公开字段，模型 Key 只展示 has_key。
+
+测试用临时用户目录、假 Agent 与真实 OpenAI SDK 的 MockTransport，拒绝真实模型请求；覆盖参数校验、保存后重建/绑定、忙碌限制、Key 复用及隐藏、20 秒连接测试策略、失败时序与客户端回收。子进程在导入服务前拦截 App、HeadlessApp、Bridge、窗口、托盘和 WebView，实际运行配置操作；WebSocket 测试则经过真实本地认证和双层 `ok` 包装，并让旧 App 配置方法报错，确认 RPC 已直接使用服务。
+
+若出现 `GUI import forbidden`，检查配置服务是否反向依赖窗口或 Host；若保存或切换失败，区分校验、持久化与 Agent 重建/绑定错误。旧保存接口并非事务性写入，尤其价格校验失败可能已写 .env，见 [#115](https://github.com/liukun158959-beep/tebb/issues/115)。此处保留原有错误时序，不将失败误报为已回滚。整个 HeadlessApp 仍有其他 GUI 继承，真实 GUI、模型和发布包验收单独报告。
