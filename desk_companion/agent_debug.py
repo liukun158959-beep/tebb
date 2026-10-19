@@ -346,8 +346,7 @@ def execute_explanation(request, emit):
     model = require_active()
     llm = LLM(api_key=model["api_key"], base_url=model["base_url"], model=model["model"])
     from .model_catalog import bind_llm
-    bind_llm(llm, model)
-    llm.client = llm.client.with_options(timeout=request["limits"]["call_timeout"], max_retries=0)
+    bind_llm(llm, model, timeout=request["limits"]["call_timeout"])
     llm.sampling = parse_sampling(request.get("sampling"))
     llm.on_reasoning = lambda x: emit("llm_progress", True) if x else None
     emit("llm_start", {"model": llm.model})

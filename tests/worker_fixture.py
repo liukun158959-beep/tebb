@@ -1,7 +1,6 @@
 """仅离线测试启动：真实 worker/Atlas 循环，模型脚本在子进程内注入。"""
 from pathlib import Path
 import sys
-from types import SimpleNamespace
 from unittest.mock import patch
 from atlas.testing import FakeLLM
 from desk_companion import assistant, model_catalog, video
@@ -13,7 +12,6 @@ original = assistant.build_agent
 def video_llm(**kwargs):
     import json
     llm = FakeLLM([json.dumps({"notes": "00:00 Agent 决策与执行的测试字幕要点", "verify": []}, ensure_ascii=False), "视频学习笔记：Agent 决策与执行。"])
-    llm.client = SimpleNamespace(with_options=lambda **kw: SimpleNamespace())
     return llm
 
 def build(host):
@@ -38,7 +36,6 @@ def build(host):
     agent.tools.register(name="channel_write", description="离线写入测试", parameters={"type":"object","properties":{}},
                          func=write, retry_max=0)
     agent.llm = FakeLLM([query, "本地流式回归正常。"])
-    agent.llm.client = SimpleNamespace(with_options=lambda **kw: SimpleNamespace())
     return agent
 
 def create_note(title, body, **kwargs):

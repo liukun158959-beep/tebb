@@ -2,6 +2,7 @@ import json
 import unittest
 
 import httpx
+from openai import RateLimitError
 
 from desk_companion.collaboration_llm import CollaborationLLM
 
@@ -67,7 +68,7 @@ class StreamingTests(unittest.TestCase):
         def handle(request):
             calls.append(request)
             return httpx.Response(200,text='data: {"choices":[{"delta":{"content":"partial"}}]}\n\n')
-        with self.assertRaisesRegex(RuntimeError,'提前结束'):
+        with self.assertRaisesRegex(RuntimeError,'finish_reason'):
             self.llm(handle).chat([],on_delta=text.append)
         self.assertEqual(text,['partial']);self.assertEqual(len(calls),1)
 
@@ -75,7 +76,7 @@ class StreamingTests(unittest.TestCase):
         calls=[]
         def handle(request):
             calls.append(request);return httpx.Response(429,text='rate limit')
-        with self.assertRaises(httpx.HTTPStatusError):self.llm(handle).chat([])
+        with self.assertRaises(RateLimitError):self.llm(handle).chat([])
         self.assertEqual(len(calls),1)
 
 

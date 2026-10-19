@@ -59,5 +59,29 @@ class NetworkTests(unittest.TestCase):
             ssl.assert_called_once_with(cafile='configured-ca',capath='configured-ca-dir')
         self.assertFalse(seen[0]['trust_env']);self.assertIs(seen[0]['verify'],ssl.return_value)
 
+    def test_sdk_and_collaboration_keep_transport_timeouts(self):
+        import httpx
+        from desk_companion.collaboration_llm import CollaborationLLM
+        for collaboration in (False, True):
+            with self.subTest(collaboration=collaboration):
+                requests=[]
+                def handle(request):
+                    requests.append(request)
+                    if collaboration:
+                        return httpx.Response(200, text='data: {"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n')
+                    return httpx.Response(200, json=dict(choices=[dict(index=0,finish_reason='stop',message=dict(role='assistant',content='ok'))]))
+                transport=httpx.Client(timeout=httpx.Timeout(37,connect=5),transport=httpx.MockTransport(handle))
+                model=dict(api_key='fixture',base_url='https://example.invalid/v1',model='fixture')
+                with patch.object(network,'http_client',return_value=transport):
+                    if collaboration:
+                        with CollaborationLLM(model,dict(temperature=.5,top_p=1,reasoning_effort='low'),37) as llm:
+                            llm.chat([])
+                    else:
+                        with network.openai_client('fixture','https://example.invalid/v1',37) as sdk:
+                            sdk.chat.completions.create(model='fixture',messages=[])
+                self.assertEqual(requests[0].extensions['timeout']['connect'],5)
+                self.assertEqual(requests[0].extensions['timeout']['read'],37)
+                self.assertTrue(transport.is_closed)
+
 
 if __name__=='__main__':unittest.main()

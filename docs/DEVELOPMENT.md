@@ -60,6 +60,23 @@ flowchart TD
 
 ## 开发与验证
 
+### 模型调用边界
+
+传统 Agent 与 `collaboration_llm.CollaborationLLM` 共用 Atlas 的 OpenAI SDK 传输、文本/思考/工具聚合和完成校验。协作适配器仅配置网络、GLM reasoning 回传及 route 低思考；工具权限、交付规则和任务进程取消仍留在产品。决策见 [ADR 0002](adr/0002-shared-model-transport.md)，公共 API 见 Atlas `docs/LLM.md`。
+
+只有 `stop` / `tool_calls` 视为完成；仅 `[DONE]`、EOF、输出上限、过滤均抛 `IncompleteResponseError`，通过 `partial` 保留片段；不可执行片段里的工具。HTTP 状态错误统一为 SDK 异常（例如 429 为 `openai.RateLimitError`），禁用自动重试。GLM 返回的 reasoning 仅供下一轮模型回传，公开事件继续只发思考状态。协作式模型取消不能中断阻塞读取，任务进程终止和总时限继续生效。
+
+离线调试复用 `httpx.MockTransport` 与 `atlas.testing.llm_contract.StreamContract`，测试不访问真实模型或写入外部系统：
+
+```powershell
+python -m unittest discover -s tests -p test_llm_contract.py -v
+python -m unittest discover -s tests -p test_collaboration_llm.py -v
+$env:DESK_TEST_ATLAS_SOURCE = 'E:\path\to\Atlas'
+python -m unittest discover -s tests -p test_atlas_runtime.py -v
+```
+
+正常测试应包含累计工具回调、usage 尾帧和 GLM 回传；异常测试应保留已输出片段、关闭响应、只发送一次请求，并保持外部注入的 HTTP 客户端可用。发布回归使用 `git archive` 取得固定提交，验证 Atlas 和真实协作适配器共用契约。
+
 ```powershell
 # 在项目根目录执行
 python -m unittest discover -s tests -v

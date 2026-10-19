@@ -1,5 +1,4 @@
-"""显式验证固定 Atlas 源码与发布补丁组合，不构建完整 Windows 运行时。"""
-import io
+"""验证实际发布归档与产品适配器共用契约，不构建完整 Windows 运行时。"""
 import os
 from pathlib import Path
 import runpy
@@ -7,16 +6,19 @@ import subprocess
 import sys
 import tempfile
 import unittest
-import zipfile
 
 
 VERIFY = r'''
 import json
+import unittest
 from pathlib import Path
 import httpx
 from openai import OpenAI
 import atlas
 from atlas import LLM
+from atlas.llm import ChatOptions, IncompleteResponseError
+from atlas.testing.llm_contract import StreamContract
+from desk_companion.collaboration_llm import CollaborationLLM
 
 assert Path(atlas.__file__).resolve().is_relative_to(Path.cwd())
 requests = []
@@ -31,11 +33,9 @@ def chunk(delta, finish=None):
                 choices=[dict(index=0, delta=delta, finish_reason=finish)])
 
 with httpx.Client(transport=httpx.MockTransport(handle)) as transport:
-    llm = LLM(api_key='test-only', base_url='https://example.invalid/v1', model='fake')
-    llm.client.close()
     with OpenAI(api_key='test-only', base_url='https://example.invalid/v1',
                 http_client=transport, max_retries=0) as client:
-        llm.client = client
+        llm = LLM(model='fake', client=client)
         llm.sampling = dict(temperature=0.3, top_p=0.8, reasoning_effort='low')
         thoughts, pieces = [], []
         llm.on_reasoning = thoughts.append
@@ -49,39 +49,51 @@ with httpx.Client(transport=httpx.MockTransport(handle)) as transport:
         assert requests[0]['reasoning_effort'] == 'low'
         assert 'reasoning_content' not in result['message']
 
-        events[:] = [chunk(dict(content='半截回答'))]
-        try:
-            llm.chat([], on_delta=pieces.append)
-        except RuntimeError as error:
-            assert 'finish_reason' in str(error)
-        else:
-            raise AssertionError('Packaged Atlas accepted an unfinished stream')
-        assert len(requests) == 2
-print('Pinned Atlas + patch: sampling, reasoning and incomplete-stream rejection verified')
+        for finish in (None, 'length', 'content_filter'):
+            events[:] = [chunk(dict(content='半截回答'), finish)]
+            try:
+                llm.chat([], on_delta=pieces.append)
+            except IncompleteResponseError as error:
+                assert error.finish_reason == finish
+                assert error.partial['message']['content'] == '半截回答'
+            else:
+                raise AssertionError('Packaged Atlas accepted an unfinished stream')
+        assert len(requests) == 4
+
+class PackagedAtlasContract(StreamContract, unittest.TestCase):
+    def make_model(self, transport):
+        return LLM(model='fixture', client=OpenAI(api_key='fixture', http_client=transport, max_retries=0))
+    def call_model(self, model, on_delta=None, should_cancel=None):
+        return model.chat([], on_delta=on_delta, options=ChatOptions(stream=True, should_cancel=should_cancel))
+
+class PackagedCollaborationContract(StreamContract, unittest.TestCase):
+    def make_model(self, transport):
+        return CollaborationLLM(dict(model='fixture', api_key='fixture', base_url='https://example.invalid/v1'),
+                                dict(temperature=.5, top_p=1, reasoning_effort='low'), 20, transport)
+    def call_model(self, model, on_delta=None, should_cancel=None):
+        return model.chat([], on_delta=on_delta, should_cancel=should_cancel)
+
+suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls)
+                           for cls in (PackagedAtlasContract, PackagedCollaborationContract))
+assert unittest.TextTestRunner(verbosity=1).run(suite).wasSuccessful()
+print('Pinned Atlas: sampling, reasoning and both adapters verified without patches')
 '''
 
 
 @unittest.skipUnless(os.environ.get("DESK_TEST_ATLAS_SOURCE"),
-                     "Set DESK_TEST_ATLAS_SOURCE to validate the pinned source + patch")
+                     "Set DESK_TEST_ATLAS_SOURCE to validate the pinned source and adapters")
 class AtlasRuntimeTests(unittest.TestCase):
-    def test_pinned_source_and_patch_preserve_stream_contract(self):
+    def test_pinned_source_and_adapters_preserve_stream_contract(self):
         root = Path(__file__).resolve().parents[1]
         source = Path(os.environ["DESK_TEST_ATLAS_SOURCE"]).resolve()
         settings = runpy.run_path(str(root / "scripts/prepare_runtime.py"))
-        archive = subprocess.check_output([
-            "git", "-C", str(source), "archive", "--format=zip", settings["ATLAS_REF"], "atlas",
-        ])
         with tempfile.TemporaryDirectory(prefix="desk-atlas-runtime-") as folder:
             workspace = Path(folder).resolve()
             self.assertEqual(workspace.parent, Path(tempfile.gettempdir()).resolve())
-            with zipfile.ZipFile(io.BytesIO(archive)) as package:
-                package.extractall(workspace)
-            patch = subprocess.run([
-                "git", "apply", "--unidiff-zero", str(root / "scripts/atlas-sampling.patch"),
-            ], cwd=workspace, capture_output=True, text=True, timeout=30)
-            self.assertEqual(patch.returncode, 0, patch.stderr)
+            commit = settings['export_atlas'](source, workspace)
+            self.assertEqual(commit, settings['ATLAS_REF'])
             result = subprocess.run([
                 sys.executable, "-c", VERIFY,
-            ], cwd=workspace, env={**os.environ, "PYTHONPATH": str(workspace), "PYTHONUTF8": "1"},
+            ], cwd=workspace, env={**os.environ, "PYTHONPATH": os.pathsep.join((str(workspace), str(root))), "PYTHONUTF8": "1"},
                 capture_output=True, text=True, encoding="utf-8", timeout=60)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

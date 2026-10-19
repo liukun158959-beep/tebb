@@ -84,8 +84,8 @@ def main():
             if host.agent is not None:
                 return
             host.agent = build_agent(host)
-            bind_llm(host.agent.llm, require_item(model_id) if model_id else require_active())
-            host.agent.llm.client = host.agent.llm.client.with_options(timeout=request["limits"]["call_timeout"], max_retries=0)
+            bind_llm(host.agent.llm, require_item(model_id) if model_id else require_active(),
+                     timeout=request["limits"]["call_timeout"])
             original_chat = host.agent.llm.chat
             count = 0
             def chat(*args, **kwargs):

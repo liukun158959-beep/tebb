@@ -84,7 +84,7 @@ class VideoAnalysisTests(unittest.TestCase):
     def test_failed_analysis_does_not_archive_or_claim_complete_answer(self):
         video.atomic_write(video.source_path("session", "a" * 24), self.source)
         from types import SimpleNamespace
-        llm = SimpleNamespace(client=SimpleNamespace(with_options=lambda **kw: None))
+        llm = SimpleNamespace(bind_client=lambda *args, **kwargs: None)
         with patch.object(video, "read_video", return_value={"source_id": "a" * 24}), \
              patch("atlas.LLM", return_value=llm), \
              patch("desk_companion.model_catalog.require_active", return_value={"model": "fake", "api_key": "fake", "base_url": "http://fake"}), \

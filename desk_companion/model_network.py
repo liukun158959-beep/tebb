@@ -74,4 +74,5 @@ def http_client(timeout=90, policy=None):
 
 def openai_client(api_key, base_url, timeout=90):
     from openai import OpenAI
-    return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0, http_client=http_client(timeout))
+    client = http_client(timeout)
+    return OpenAI(api_key=api_key, base_url=base_url, timeout=client.timeout, max_retries=0, http_client=client)

@@ -12,12 +12,20 @@ from pathlib import Path
 
 VERSION = "3.13.16"
 SHA256 = "97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297"
-ATLAS_REF = "d2f6268988fab9db49c5331db3486b51603eb5db"
+ATLAS_REF = "20b890c20afc45cc5e593555e7b6f8ccdbcceb0b"
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def run(*args, **kwargs):
     subprocess.run(args, check=True, **kwargs)
+
+
+def export_atlas(source, destination):
+    """Export only the pinned, committed source; shared by build and offline QA."""
+    archive = subprocess.check_output(["git", "-C", str(source), "archive", "--format=zip", ATLAS_REF, "atlas"])
+    with zipfile.ZipFile(io.BytesIO(archive)) as package:
+        package.extractall(destination)
+    return subprocess.check_output(["git", "-C", str(source), "rev-parse", ATLAS_REF], text=True).strip()
 
 
 def main():
@@ -55,14 +63,8 @@ def main():
     shutil.copytree(ROOT / "desk_companion", site / "desk_companion",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.log", "*.ready"))
     shutil.copytree(ROOT / "skills", site / "skills", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    # 从固定提交取 Atlas，不发布开发机上的未提交文件。已使用的采样接口以显式补丁记录。
-    atlas_bytes = subprocess.check_output(["git", "-C", str(args.atlas), "archive", "--format=zip", ATLAS_REF, "atlas"])
-    with zipfile.ZipFile(io.BytesIO(atlas_bytes)) as package:
-        package.extractall(site)
-    run("git", "apply", "--unidiff-zero", str(ROOT / "scripts/atlas-sampling.patch"), cwd=site)
-    ref = subprocess.check_output(["git", "-C", str(args.atlas), "rev-parse", ATLAS_REF], text=True).strip()
-    provenance = {"python": VERSION, "python_sha256": SHA256, "atlas_commit": ref,
-                  "atlas_patch_sha256": hashlib.sha256((ROOT / "scripts/atlas-sampling.patch").read_bytes()).hexdigest()}
+    ref = export_atlas(args.atlas, site)
+    provenance = {"python": VERSION, "python_sha256": SHA256, "atlas_commit": ref}
     (output / "runtime-provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
     run(str(runtime / "python.exe"), "-c", "from desk_companion.local_api.host import HeadlessApp; from atlas.llm.base import LLM; print('runtime imports OK')")
     lock = subprocess.check_output([str(runtime / "python.exe"), "-m", "pip", "freeze", "--all"], text=True)
