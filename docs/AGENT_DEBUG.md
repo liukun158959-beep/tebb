@@ -75,6 +75,7 @@ python -m unittest discover -s tests -p test_persona_migration.py -v
 ```powershell
 python -m unittest discover -s tests -p test_chat_sessions.py -v
 python -m unittest tests.test_local_api.LocalApiTests.test_headless_sessions_clear_and_isolate_data_without_gui_methods tests.test_local_api.LocalApiTests.test_session_rpc_blocks_pending_and_tail_tasks_but_keeps_reads_available -v
+python -m unittest tests.test_local_api.LocalApiTests.test_first_access_initializes_tasks_for_rpc_and_chat -v
 python -m unittest discover -s tests -p test_conversation.py -v
 ```
 
@@ -83,5 +84,7 @@ python -m unittest discover -s tests -p test_conversation.py -v
 空会话重复新建复用 ID；清空保留当前 ID，仅移除该会话的历史、压缩摘要及 Agent 临时上下文，其它会话、长期事实、笔记和任务记录保留。已清空会话会从基于历史推导的列表中消失。当前会话排队、执行、取消或收尾未结束时，修改返回明确错误，不自动取消任务；其它会话任务继续，历史/记忆读取不受模型回复限制。旧桌面忙碌覆盖发送起点和回调落盘阶段；普通回复与每日纸条均验收。
 
 测试先拦截 GUI 导入再实际执行服务与队列保护；真实离线子进程会在任务终态后暂停部分回复写入，验证此时仍禁止修改，待收尾完成才能清空。另通过线程屏障验证提交无法穿入修改临界区。WebSocket 测试覆盖后台无窗口清空、5 个 RPC 绕过继承方法、任务状态与数据隔离，以及宿主执行锁被占用时仍可读取。
+
+首次访问回归不预先注入任务管理器，分别以清空会话 RPC 和发送消息作为首次入口，使用脚本 worker 完成任务、写入历史并查询任务列表，确认只初始化一次。若首次操作出现 `NoneType` 的 `submit` 或 `session_mutation_guard` 错误，先检查 HeadlessApp.tasks 的延迟初始化，而非窗口状态。修复见 [#117](https://github.com/liukun158959-beep/tebb/issues/117)。
 
 失败时检查 error 与 change_state：`not_changed` 表示校验或忙碌拒绝；`unconfirmed` 表示选择/摘要持久化失败、文件结果未确认，选择失败会恢复内存 ID；`partial` 表示摘要已清理但历史未清理完成；`committed` 表示数据已更新但模型临时上下文或 GUI 刷新失败。按提示重新读取并核对后重试，不声称跨文件事务回滚。事实编辑、删除单句、手动压缩和整个 HeadlessApp 去继承不在本批范围。

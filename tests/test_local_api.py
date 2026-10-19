@@ -49,6 +49,45 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         self.service.close()
         await self.service.wait_closed()
 
+    async def test_first_access_initializes_tasks_for_rpc_and_chat(self):
+        from desk_companion.tasks import TaskManager
+        command = [sys.executable, '-u', '-c', "exec(open('tests/worker_fixture.py', encoding='utf-8').read())"]
+
+        async def rpc(method):
+            async with connect(self.url, proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', id=method, method=method)))
+                envelope = json.loads(await asyncio.wait_for(ws.recv(), 10))['result']
+            self.assertTrue(envelope['ok'], envelope)
+            self.assertTrue(envelope['result']['ok'], envelope)
+            return envelope['result']
+
+        def create_manager(host):
+            manager = TaskManager(host, command=command)
+            self.addCleanup(manager.shutdown)
+            return manager
+
+        for first in ('clear_chat', 'chat'):
+            with self.subTest(first=first):
+                if self.host._tasks is not None:
+                    self.host._tasks.shutdown()
+                memory.clear_session(self.host.state.session_id)
+                self.host._tasks = None
+                with patch('desk_companion.tasks.TaskManager', side_effect=create_manager) as constructor:
+                    if first == 'clear_chat':
+                        await rpc('clear_chat')
+                    async with connect(self.url, proxy=None) as ws:
+                        await ws.send(json.dumps(dict(type='chat', text='first request', chips={},
+                            sampling=dict(reasoning_effort='low', temperature=.5, top_p=1))))
+                        while True:
+                            frame = json.loads(await asyncio.wait_for(ws.recv(), 30))
+                            if frame['type'] in ('done', 'error'):
+                                break
+                    self.assertEqual(frame, dict(type='done', data='本地流式回归正常。'))
+                    self.assertEqual(len(memory.list_chat(self.host.state.session_id)), 2)
+                    self.assertEqual(len((await rpc('list_agent_tasks'))['items']), 1 + (first == 'chat'))
+                    self.assertIs(self.host.tasks, self.host._tasks)
+                    constructor.assert_called_once_with(self.host)
+
     async def test_health_and_readonly_rpc(self):
         reader, writer = await asyncio.open_connection("127.0.0.1", self.port)
         writer.write(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")

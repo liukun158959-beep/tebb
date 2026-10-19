@@ -39,16 +39,16 @@ class HeadlessApp(App):
     def tasks(self):
         if self._tasks is not None:
             return self._tasks
-
-    @contextmanager
-    def _session_mutation_guard(self, session_id):
-        with self.tasks.session_mutation_guard(session_id):
-            yield
         with self.turn_lock:
             if self._tasks is None:
                 from ..tasks import TaskManager
                 self._tasks = TaskManager(self)
             return self._tasks
+
+    @contextmanager
+    def _session_mutation_guard(self, session_id):
+        with self.tasks.session_mutation_guard(session_id):
+            yield
 
     def ui(self, fn) -> None:
         # 无头：没有窗口队列，直接同步执行
