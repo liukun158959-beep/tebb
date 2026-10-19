@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .layered import SCALES
+SCALES = (1.0, 1.5, 2.0)
 
 STATE_NAME = "user_state.json"
 REQUIRED = (
@@ -92,7 +92,8 @@ class UserState:
             path.write_text(text, encoding="utf-8")
 
 
-def load_state(default_x: int, default_y: int) -> UserState:
+def load_state(default_x: int, default_y: int, *, persist: bool = True) -> UserState:
+    """Load and normalize settings; workers use persist=False for a read-only view."""
     path = state_path()
     if not path.is_file():
         state = UserState(
@@ -108,7 +109,8 @@ def load_state(default_x: int, default_y: int) -> UserState:
             model_prices={},
             session_id=new_session_id(),
         )
-        state.save()
+        if persist:
+            state.save()
         return state
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -179,10 +181,12 @@ def load_state(default_x: int, default_y: int) -> UserState:
         session_id=session_id.strip(),
     )
     if result.persona == LEGACY_PERSONA:
-        backup = path.with_name("user_state.before-tebb-persona.json")
-        if not backup.exists(): backup.write_text(path.read_text("utf-8"), encoding="utf-8")
+        if persist:
+            backup = path.with_name("user_state.before-tebb-persona.json")
+            if not backup.exists(): backup.write_text(path.read_text("utf-8"), encoding="utf-8")
         result.persona = DEFAULT_PERSONA
-        result.save()
+        if persist:
+            result.save()
     return result
 
 

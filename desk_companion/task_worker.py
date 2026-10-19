@@ -51,7 +51,7 @@ def main():
             return
         from atlas.core.plugin import BasePlugin
         from atlas.core.terminator import MaxSteps, Timeout
-        from .local_api.host import HeadlessApp
+        from .conversation import ConversationService
         from .assistant import build_agent
         from .model_catalog import bind_llm, require_active, require_item
         from .resource_lock import WRITES
@@ -76,9 +76,7 @@ def main():
         def fingerprint(name, args):
             return hashlib.sha256((name + json.dumps(args, sort_keys=True, ensure_ascii=False)).encode()).hexdigest()
 
-        host = HeadlessApp()
-        host.state.session_id = request["session_id"]
-        host.state.save = lambda: None
+        host = ConversationService.for_session(request["session_id"])
 
         def engage(model_id=""):
             if host.agent is not None:

@@ -1,5 +1,6 @@
 """仅离线测试启动：真实 worker/Atlas 循环，模型脚本在子进程内注入。"""
 from pathlib import Path
+import os
 import sys
 from unittest.mock import patch
 from atlas.testing import FakeLLM
@@ -35,7 +36,8 @@ def build(host):
         return "已完成测试写入"
     agent.tools.register(name="channel_write", description="离线写入测试", parameters={"type":"object","properties":{}},
                          func=write, retry_max=0)
-    agent.llm = FakeLLM([query, "本地流式回归正常。"])
+    agent.llm = FakeLLM(["依据资料的知识回答。"] if os.environ.get('DESK_TEST_KNOWLEDGE') == '1'
+                        else [query, "本地流式回归正常。"])
     return agent
 
 def create_note(title, body, **kwargs):

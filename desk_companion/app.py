@@ -20,20 +20,16 @@ import win32gui
 
 from .assistant import (
     TOOL_CONTRACT,
-    build_agent,
-    inject_history,
     list_providers,
     spoken_answer,
-    token_plugin,
-    with_clock,
 )
+from .conversation import ConversationService
 from .automation import AutomationScheduler
 from .board_workbench import BoardWorkbench
 from .bridge import Bridge
 from .envconf import parse_env_file, public_llm_env, write_llm_env
 from .layered import enable_dpi_aware, work_area
 from .logutil import crash, install_crash_hooks, log, mark_ready, start_os_watchdog
-from .facts import bind_turn_user
 from .memory import (
     TZ,
     append_chat,
@@ -47,7 +43,7 @@ from .pet_shell import BASE_PET_H, BASE_PET_W, CMD_QUIT, start_pet_thread
 from .skin import load_skin
 from .state import load_state
 from .tray import start_tray
-from .usage import append_usage, cost_cny, summarize_usage
+from .usage import summarize_usage
 from .winforms_host import (
     apply_app_window,
     apply_tool_window,
@@ -95,9 +91,9 @@ class App(BoardWorkbench):
         self.skin = None if headless else load_skin(skin_id)
         left, top, right, bottom = work_area()
         self.state = load_state(right - BASE_PET_W - 16, bottom - BASE_PET_H - 8)
-        self.agent = None
-        self._agent_error = ""
-        self._agent_running = False
+        self.conversation = ConversationService(self.state, dispatch=self.ui,
+            on_delta=None if headless else self.on_llm_delta,
+            on_status=None if headless else self.on_stream_status)
         self.automation = AutomationScheduler(self)
         self.bridge = Bridge(self)
         self._queue: queue.Queue = queue.Queue()
@@ -113,6 +109,38 @@ class App(BoardWorkbench):
         self._startup_ok = threading.Event()
         self._next_nudge = time.monotonic() + random.uniform(12 * 60, 18 * 60)
         self._ui_dir = Path(__file__).resolve().parent / "ui"
+
+    @property
+    def agent(self):
+        return self.conversation.agent
+
+    @agent.setter
+    def agent(self, value):
+        self.conversation.agent = value
+
+    @property
+    def _agent_error(self):
+        return self.conversation.agent_error
+
+    @_agent_error.setter
+    def _agent_error(self, value):
+        self.conversation.agent_error = value
+
+    @property
+    def _agent_running(self):
+        return self.conversation.running
+
+    @_agent_running.setter
+    def _agent_running(self, value):
+        self.conversation.running = value
+
+    @property
+    def _knowledge_usage(self):
+        return self.conversation.knowledge_usage
+
+    @_knowledge_usage.setter
+    def _knowledge_usage(self, value):
+        self.conversation.knowledge_usage = value
 
     def ui(self, fn) -> None:
         self._queue.put(fn)
@@ -242,7 +270,6 @@ class App(BoardWorkbench):
         if self.pet:
             self.pet.hide()
 
-
     def show_bubble(self, panel: str = "chat") -> None:
         if self.pet is None:
             raise RuntimeError("宠物窗口还在启动，请稍后再点。")
@@ -303,39 +330,13 @@ class App(BoardWorkbench):
         return {"ok": True}
 
     def try_build_agent(self) -> None:
-        try:
-            self.agent = build_agent(self)
-            self._agent_error = ""
-            log("build_agent 完成")
-        except Exception as exc:
-            self.agent = None
-            self._agent_error = str(exc)
-            log(f"build_agent 失败: {exc}")
+        return self.conversation.try_build_agent()
 
     def _rebuild_agent(self) -> None:
-        if self._agent_running:
-            raise RuntimeError("助手正在回复，等这句说完再保存。")
-        self.try_build_agent()
-        if self.agent is None:
-            raise RuntimeError(self._agent_error)
+        return self.conversation.rebuild_agent()
 
     def _record_usage(self, agent, run_id: str) -> dict:
-        plugin = token_plugin(agent)
-        summary = plugin.get_summary(run_id)
-        model = getattr(agent.llm, "model", "") or ""
-        inn = int(summary.get("input_tokens") or 0)
-        out = int(summary.get("output_tokens") or 0)
-        row = {
-            "ts": datetime.now(TZ).isoformat(timespec="seconds"),
-            "model": model,
-            "input_tokens": inn,
-            "output_tokens": out,
-            "total_tokens": inn + out,
-            "cost_cny": cost_cny(model, inn, out, self.state.model_prices),
-            "run_id": run_id,
-        }
-        append_usage(row)
-        return row
+        return self.conversation.record_usage(agent, run_id)
 
     def board_chat(self) -> dict:
         try:
@@ -390,38 +391,10 @@ class App(BoardWorkbench):
         exclude_user: str | None = None,
         manual: bool = False,
     ) -> list[dict]:
-        from .assistant import build_system_prompt
-        from .context_pack import prepare_injection
-
-        if self.agent is None:
-            raise RuntimeError(self._agent_error or "还没接上模型。打开设置添加一个。")
-
-        def complete(prompt: str) -> str:
-            result = self.agent.llm.chat(
-                [
-                    {
-                        "role": "system",
-                        "content": self.state.persona + "\n\n你现在只压缩对话，不要调用工具。",
-                    },
-                    {"role": "user", "content": prompt},
-                ]
-            )
-            self._record_llm_usage(result.get("usage"), str(uuid.uuid4()))
-            message = result.get("message") or {}
-            return str(message.get("content") or "")
-
-        return prepare_injection(
-            self.state.session_id,
-            build_system_prompt(self.state.persona),
-            current_text,
-            exclude_user=exclude_user,
-            complete=complete,
-            manual=manual,
-        )
+        return self.conversation.prepare_context(current_text, exclude_user=exclude_user, manual=manual)
 
     def inject_prepared(self, current_text: str, *, exclude_user: str | None = None) -> None:
-        rows = self.prepare_context(current_text, exclude_user=exclude_user)
-        inject_history(self.agent, rows, persona=self.state.persona)
+        return self.conversation.inject_prepared(current_text, exclude_user=exclude_user)
 
     def board_add_fact(self, text: str) -> dict:
         from .facts import add_user_fact
@@ -596,24 +569,10 @@ class App(BoardWorkbench):
             return {"ok": False, "error": str(exc)}
 
     def engage_model(self, model_id: str = "") -> None:
-        from .model_catalog import activate, require_active
-
-        if model_id:
-            activate(model_id)
-        else:
-            require_active()
-        if self.agent is None:
-            self.try_build_agent()
-        if self.agent is None:
-            raise RuntimeError(self._agent_error or "还没接上模型。打开设置添加一个。")
-        self._bind_active_llm()
+        return self.conversation.engage_model(model_id)
 
     def _bind_active_llm(self) -> None:
-        from .model_catalog import bind_llm, require_active
-
-        if self.agent is None:
-            return
-        bind_llm(self.agent.llm, require_active())
+        return self.conversation.bind_active_llm()
 
     def save_model(self, payload: dict) -> dict:
         if not isinstance(payload, dict):
@@ -691,7 +650,6 @@ class App(BoardWorkbench):
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-
     def board_github(self) -> dict:
         from .github import board_snapshot
 
@@ -699,7 +657,6 @@ class App(BoardWorkbench):
             return board_snapshot()
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
-
 
     def _chat_visible(self) -> bool:
         return bool(self.pet and self.pet.bubble_open)
@@ -885,26 +842,7 @@ class App(BoardWorkbench):
         return "\n".join(parts)
 
     def _record_llm_usage(self, usage, run_id: str) -> None:
-        model = ""
-        if self.agent is not None:
-            model = getattr(self.agent.llm, "model", "") or ""
-        inn = 0
-        out = 0
-        if isinstance(usage, dict):
-            inn = int(usage.get("prompt_tokens") or 0)
-            out = int(usage.get("completion_tokens") or 0)
-        self._knowledge_usage = (inn, out)
-        append_usage(
-            {
-                "ts": datetime.now(TZ).isoformat(timespec="seconds"),
-                "model": model,
-                "input_tokens": inn,
-                "output_tokens": out,
-                "total_tokens": inn + out,
-                "cost_cny": cost_cny(model, inn, out, self.state.model_prices),
-                "run_id": run_id,
-            }
-        )
+        return self.conversation.record_llm_usage(usage, run_id)
 
     def send_chat(self, text: str, *, from_board: bool = False) -> None:
         text = (text or "").strip()
@@ -944,9 +882,8 @@ class App(BoardWorkbench):
         failed = False
         try:
             self.inject_prepared(text, exclude_user=text)
-            with bind_turn_user(text):
-                answer = spoken_answer(str(self.agent.run(with_clock(text), run_id=run_id)))
-                self._record_usage(self.agent, run_id)
+            answer = spoken_answer(self.conversation.run_agent(text, run_id=run_id))
+            self._record_usage(self.agent, run_id)
         except Exception as exc:
             answer = str(exc)
             failed = True

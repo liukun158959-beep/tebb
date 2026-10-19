@@ -168,7 +168,7 @@ class LocalSourceTests(unittest.TestCase):
             seen.extend(messages); return original(messages, *args, **kwargs)
         fake.chat = chat; host.agent.llm = fake
         source = sources.stage([str(self.file(body='附件实际文字，完整结尾'))])['sources'][0]
-        with patch.object(host, 'engage_model'):
+        with patch.object(host.conversation, 'engage_model'):
             answer = host.run_chat('解释这份资料', {'attachments':[source['id']]}, lambda _: None, lambda _: None,
                                    {'reasoning_effort':'low','temperature':0.5,'top_p':1}, lambda _: None)
         self.assertIn('已根据附件', answer)

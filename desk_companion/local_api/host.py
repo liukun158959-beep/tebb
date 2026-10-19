@@ -1,21 +1,16 @@
 """P1：本地 API 的无头 host。
 
-复用 App 的全部数据方法（board_*/list_* 等），但不加载皮肤、不建窗口。
-流式回调（ui/on_llm_delta/on_stream_status）在无头下改为同步执行 + 推给 WS sink，
-不再走 pywebview 窗口队列。
+保留 App 的数据 RPC 兼容门面；普通/知识问答委托 ConversationService。
+这里仍有 GUI 类继承，任务 worker 直接使用共享服务，不导入此模块。
 """
 from __future__ import annotations
 
 import os
-import time
 import threading
 import uuid
 from typing import Callable
 
 from ..app import App
-from ..assistant import react_loop_count, spoken_answer, with_clock
-from ..facts import bind_turn_user
-from ..memory import append_chat
 
 
 class HeadlessApp(App):
@@ -26,9 +21,6 @@ class HeadlessApp(App):
         self.turn_lock = threading.RLock()
         from ..feishu_agent import FeishuAgent
         self.feishu_agent = FeishuAgent(self)
-        # 当前 WS 流式回调，send_* 期间由 server 设置；None 表示无活跃流
-        self._delta_sink: Callable[[str], None] | None = None
-        self._status_sink: Callable[[str], None] | None = None
         self._tasks = None
         self._collaboration = None
         self._collaboration_lock = threading.Lock()
@@ -56,12 +48,10 @@ class HeadlessApp(App):
         fn()
 
     def on_llm_delta(self, piece: str) -> None:
-        if self._delta_sink is not None:
-            self._delta_sink(piece)
+        self.conversation.on_llm_delta(piece)
 
     def on_stream_status(self, text: str) -> None:
-        if self._status_sink is not None:
-            self._status_sink(text)
+        self.conversation.on_stream_status(text)
 
     def run_channel_chat(self, text: str, session_id: str, chips: dict, knowledge: bool = False) -> str:
         """飞书有独立历史，桌面选中的线程在本轮结束后恢复。"""
@@ -84,179 +74,11 @@ class HeadlessApp(App):
         knowledge_sink: Callable[[dict], None] | None = None,
         resume_note: str = "",
     ) -> str:
-        """无头流式对话：复用 _compose_turn + agent.run + 流式 sink，不碰窗口。
-
-        deltas 经 BubbleStreamPlugin -> host.ui -> on_llm_delta -> delta_sink 推给 WS。
-        reasoning_content 经 llm.on_reasoning -> think_sink，并写进这句回复，不进入下一轮历史。
-        返回最终答案字符串，失败抛异常由 server 转成 error 帧。
-        """
-        if self._agent_running:
-            raise RuntimeError("助手正在回复，等这句说完再发。")
-        self.engage_model(model_id)
-        picked = chips or {}
-        if type(picked) is not dict:
-            raise RuntimeError("点选必须是对象。")
-        if knowledge:
-            return self._run_knowledge(text, picked, delta_sink, sampling, knowledge_sink)
-        message = self._compose_turn(text, picked)
-        model_message = message
-        skill_names = picked.get("skills") or []
-        if skill_names:
-            from ..skill_catalog import skill_turn_block
-
-            model_message = message + "\n\n" + skill_turn_block(skill_names)
-        doc_picks = picked.get("docs") or []
-        if doc_picks:
-            from ..feishu_docs import doc_turn_block
-
-            model_message = model_message + "\n\n" + doc_turn_block(doc_picks)
-        if picked.get("attachments"):
-            from ..local_sources import turn_block
-            model_message += "\n\n" + turn_block(picked["attachments"])
-        if resume_note:
-            model_message += resume_note
-        thoughts: list[str] = []
-        notes: list[str] = []
-
-        def remember_think(piece: str) -> None:
-            thoughts.append(piece)
-            think_sink(piece)
-
-        def remember_status(text: str) -> None:
-            if text:
-                notes.append(text)
-            status_sink(text)
-
-        self._delta_sink = delta_sink
-        self._status_sink = remember_status
-        self._agent_running = True
-        llm = self.agent.llm
-        llm.sampling = sampling
-        llm.on_reasoning = remember_think
-        run_id = str(uuid.uuid4())
-        started = time.perf_counter()
-        bound_mcp: list[str] = []
-        try:
-            mcp_picks = picked.get("mcp") or []
-            if mcp_picks:
-                from ..mcp_client import attach_mcp_tools
-
-                bound_mcp = attach_mcp_tools(self.agent.tools, mcp_picks)
-            self.inject_prepared(model_message)
-            append_chat("user", message, self.state.session_id)
-            with bind_turn_user(message):
-                raw = str(self.agent.run(with_clock(model_message), run_id=run_id))
-            loops = react_loop_count(self.agent, run_id)
-            usage = self._record_usage(self.agent, run_id)
-            answer = spoken_answer(raw)
-            append_chat(
-                "pet",
-                answer,
-                self.state.session_id,
-                detail={
-                    "elapsed_s": time.perf_counter() - started,
-                    "input_tokens": usage["input_tokens"],
-                    "output_tokens": usage["output_tokens"],
-                    "total_tokens": usage["total_tokens"],
-                    "model": usage["model"] or llm.model,
-                    "reasoning_effort": sampling["reasoning_effort"],
-                    "temperature": sampling["temperature"],
-                    "top_p": sampling["top_p"],
-                    "thinking": "".join(thoughts),
-                    "notes": notes,
-                    "react_loops": loops,
-                },
-            )
-            return answer
-        finally:
-            if bound_mcp:
-                from ..mcp_client import detach_mcp_tools
-
-                detach_mcp_tools(self.agent.tools, bound_mcp)
-            llm.sampling = None
-            llm.on_reasoning = None
-            self._agent_running = False
-            self._delta_sink = None
-            self._status_sink = None
-
-    def _run_knowledge(self, text: str, picked: dict, delta_sink, sampling: dict, knowledge_sink) -> str:
-        blocked = []
-        if picked.get("skills"):
-            blocked.append("技能")
-        if picked.get("cli"):
-            blocked.append("工具")
-        if picked.get("github"):
-            blocked.append("仓库")
-        if picked.get("docs"):
-            blocked.append("飞书文档")
-        if picked.get("mcp"):
-            blocked.append("MCP")
-        if picked.get("attachments"):
-            blocked.append("本地附件（请先入库，或关闭知识库直接阅读）")
-        if blocked:
-            raise RuntimeError(
-                "知识库打开时不要同时点选" + "、".join(blocked) + "。关掉知识库，或先去掉这些点选。"
-            )
-        question = (text or "").strip()
-        if not question:
-            raise RuntimeError("问题是空的。")
-        from ..knowledge import ask
-
-        self._agent_running = True
-        llm = self.agent.llm
-        llm.sampling = sampling
-        llm.on_reasoning = None
-        run_id = str(uuid.uuid4())
-        started = time.perf_counter()
-        try:
-            append_chat("user", question, self.state.session_id)
-
-            def complete(system: str, user: str) -> str:
-                result = llm.chat(
-                    [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                    tools=None,
-                    on_delta=delta_sink,
-                )
-                message = result.get("message") or {}
-                self._record_llm_usage(result.get("usage"), run_id)
-                return str(message.get("content") or "")
-
-            trace = ask(question, complete, on_retrieved=knowledge_sink)
-            answer = trace["answer"]
-            usage = self._last_usage_pair()
-            append_chat(
-                "pet",
-                answer,
-                self.state.session_id,
-                detail={
-                    "elapsed_s": time.perf_counter() - started,
-                    "input_tokens": usage[0],
-                    "output_tokens": usage[1],
-                    "total_tokens": usage[0] + usage[1],
-                    "model": llm.model,
-                    "reasoning_effort": sampling["reasoning_effort"],
-                    "temperature": sampling["temperature"],
-                    "top_p": sampling["top_p"],
-                    "thinking": "",
-                    "notes": [],
-                    "react_loops": 1,
-                    "knowledge": trace,
-                },
-            )
-            return answer
-        finally:
-            llm.sampling = None
-            llm.on_reasoning = None
-            self._agent_running = False
+        return self.conversation.run_chat(text, chips, delta_sink, status_sink, sampling,
+            think_sink, model_id, knowledge, knowledge_sink, resume_note)
 
     def _last_usage_pair(self) -> tuple[int, int]:
-        pair = getattr(self, "_knowledge_usage", None)
-        if pair is None:
-            raise RuntimeError("这次回答没有用量。恢复：再问一次。")
-        return pair
+        return self.conversation.last_usage_pair()
 
     def board_knowledge(self) -> dict:
         from ..knowledge import public_view

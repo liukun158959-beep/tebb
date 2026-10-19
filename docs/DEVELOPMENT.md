@@ -26,7 +26,8 @@ flowchart TD
     UI <-->|进程 Token 认证 / 流式事件| API
     API --> Queue[SQLite 任务队列]
     Queue --> Worker[独立 Python 工作进程]
-    Worker --> Agent[Atlas Agent / 工具调用循环]
+    Worker --> Conversation[ConversationService / 对话与上下文]
+    Conversation --> Agent[Atlas Agent / 工具调用循环]
     Agent <-->|OpenAI 兼容接口| LLM[模型服务]
     Agent --> Tools[飞书 / GitHub / 搜索 / Skill / MCP]
     API --> RAG[本地向量召回 + 重排 / 来源引用]
@@ -41,7 +42,7 @@ flowchart TD
 | --- | --- | --- |
 | 客户端与侧栏 | `client/src/client/` | 会话、菜单、引用、文件、网页、终端与调试界面 |
 | 本机 API | `desk_companion/local_api/` | Token 认证、RPC 白名单、任务及流式事件 |
-| Agent 组装 | `assistant.py`、`local_api/host.py` | 工具注册、上下文拼接、MCP 生命周期与 Atlas 调用 |
+| 对话执行与 Agent 组装 | `conversation.py`、`conversation_input.py`、`assistant.py` | 对话生命周期、点选校验、上下文拼接、MCP 回收、历史用量与 Atlas 调用 |
 | 任务可靠性 | `tasks.py`、`task_worker.py`、`task_process.py` | 排队、独立执行、超时、进程回收与恢复 |
 | 知识与记忆 | `knowledge.py`、`context_pack.py`、`facts.py` | 文档切分、检索重排、上下文压缩与可追溯事实 |
 | 视频分析 | `video.py`、`video_analysis.py`、`video_archive.py` | 字幕、分段检查点、学习笔记及归档回执 |
@@ -61,6 +62,12 @@ flowchart TD
 ## 开发与验证
 
 ### 模型调用边界
+
+普通与知识问答任务由 `task_worker` 直接使用 `ConversationService.for_session(session_id)` 执行，无需构造 `HeadlessApp`、窗口或 Bridge。服务拥有 Agent、忙碌状态及本轮回调；桌面保留窗口展示和队列派发，任务层保留权限、超时、取消与进度事件。`App` / `HeadlessApp` 通过显式门面复用服务，其他 RPC 的继承暂留。见 [ADR 0003](adr/0003-conversation-service.md)。
+
+后台服务只读取用户配置并使用本任务会话，不保存或覆盖桌面当前选择；空白目录中也不为任务创建窗口位置配置。旧桌面仍在发送和显示完成时保存历史；后台 `run_chat` 自己保存历史与回复元数据，两条路径都只保存一次。点选规则在 `conversation_input.py` 集中维护。
+
+对话服务的离线入口及禁止 GUI 导入的子进程验证见 [AI 对话调试](AGENT_DEBUG.md#无-gui-的对话服务验收)。
 
 传统 Agent 与 `collaboration_llm.CollaborationLLM` 共用 Atlas 的 OpenAI SDK 传输、文本/思考/工具聚合和完成校验。协作适配器仅配置网络、GLM reasoning 回传及 route 低思考；工具权限、交付规则和任务进程取消仍留在产品。决策见 [ADR 0002](adr/0002-shared-model-transport.md)，公共 API 见 Atlas `docs/LLM.md`。
 

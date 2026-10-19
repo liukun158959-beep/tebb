@@ -4,13 +4,13 @@ from __future__ import annotations
 import ctypes
 from ctypes import byref, c_void_p, sizeof
 from ctypes.wintypes import DWORD, LONG, POINT
+from .state import SCALES
 
 user32 = ctypes.windll.user32
 
 SPI_GETWORKAREA = 48
 DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = c_void_p(-4)
 MONITOR_DEFAULTTONEAREST = 2
-SCALES = (1.0, 1.5, 2.0)
 
 
 class RECT(ctypes.Structure):
