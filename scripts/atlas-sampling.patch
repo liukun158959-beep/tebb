@@ -1,5 +1,5 @@
 diff --git a/atlas/llm/base.py b/atlas/llm/base.py
-index 2ad8f5f..893af9c 100644
+index 3b84f01..2e16e3e 100644
 --- a/atlas/llm/base.py
 +++ b/atlas/llm/base.py
 @@ -46,0 +47,3 @@ class LLM:
@@ -10,15 +10,15 @@ index 2ad8f5f..893af9c 100644
 +                ``sampling`` 含 temperature、top_p、reasoning_effort 时，
 +                另把 thinking.type=enabled 放进 extra_body。
 +                reasoning_content 只回调 ``on_reasoning``，不写入 message。
-@@ -71,0 +78 @@ class LLM:
+@@ -74,0 +81 @@ class LLM:
 +        kwargs.update(self._sampling_kwargs())
-@@ -112 +119,4 @@ class LLM:
--            piece = getattr(delta, "content", None)
-+            reasoning = _delta_text(delta, "reasoning_content")
-+            if reasoning and self.on_reasoning is not None:
-+                self.on_reasoning(reasoning)
-+            piece = _delta_text(delta, "content")
-@@ -141,0 +152,26 @@ class LLM:
+@@ -120 +127,4 @@ class LLM:
+-                piece = getattr(delta, "content", None)
++                reasoning = _delta_text(delta, "reasoning_content")
++                if reasoning and self.on_reasoning is not None:
++                    self.on_reasoning(reasoning)
++                piece = _delta_text(delta, "content")
+@@ -153,0 +164,26 @@ class LLM:
 +
 +    def _sampling_kwargs(self) -> dict[str, Any]:
 +        raw = self.sampling
