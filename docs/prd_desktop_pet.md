@@ -99,7 +99,7 @@ MAA：8 项勾选（气泡已能改）+ 开 PC 客户端 + 计划任务拉起。
 
 ### 已交付：不再代开启动器 / 游戏 exe（V45）
 
-规格：`docs/v45_no_launch_exe_plan.md`。Issue [#8](https://github.com/liukun158959-beep/ZhiXing/issues/8)。
+规格：`docs/v45_no_launch_exe_plan.md`。Issue [#8](https://github.com/liukun158959-beep/tebb/issues/8)。
 
 - 已有「明日方舟」窗口 → 零次新 UAC，直接让 MAA 干活
 - 启动器在、游戏窗不在 → 不拉 `Arknights.exe`，立刻失败：在启动器里点开始游戏后再清日常
@@ -182,11 +182,11 @@ MAA：8 项勾选（气泡已能改）+ 开 PC 客户端 + 计划任务拉起。
 
 ### 已交付：看板改为对话工作台（V43）
 
-规格：`docs/v43_board_chat_sidebar_plan.md`。Issue [#18](https://github.com/liukun158959-beep/ZhiXing/issues/18) 已关。复盘入口被 V44 迁出对话。
+规格：`docs/v43_board_chat_sidebar_plan.md`。Issue [#18](https://github.com/liukun158959-beep/tebb/issues/18) 已关。复盘入口被 V44 迁出对话。
 
 ### 已交付：自动化任务（V44）
 
-规格：`docs/v44_automation_jobs_plan.md`。Issue [#19](https://github.com/liukun158959-beep/ZhiXing/issues/19) 已关。
+规格：`docs/v44_automation_jobs_plan.md`。Issue [#19](https://github.com/liukun158959-beep/tebb/issues/19) 已关。
 
 ### 下一刀：未排期
 
@@ -195,7 +195,7 @@ MAA：8 项勾选（气泡已能改）+ 开 PC 客户端 + 计划任务拉起。
 **so I can** 不问关卡也能对上本周该刷的
 
 - 开 V25 余下（规格 `v25_arknights_farm_plan.md`），先 grill-me。
-- 会前打断 / 勾待办 / 练谁抽卡：[#9](https://github.com/liukun158959-beep/ZhiXing/issues/9) [#10](https://github.com/liukun158959-beep/ZhiXing/issues/10)，更后。
+- 会前打断 / 勾待办 / 练谁抽卡：[#9](https://github.com/liukun158959-beep/tebb/issues/9) [#10](https://github.com/liukun158959-beep/tebb/issues/10)，更后。
 
 ### Won't（到 V25 落地前都不做）
 

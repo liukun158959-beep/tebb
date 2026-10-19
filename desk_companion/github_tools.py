@@ -51,7 +51,7 @@ ROADMAP_SPEC = {
         "properties": {
             "repo": {
                 "type": "string",
-                "description": "仓库短名或 owner/name，必须是当前 GitHub 账号下的未归档仓库。例如 Atlas 或 liukun158959-beep/ZhiXing。",
+                "description": "仓库短名或 owner/name，必须是当前 GitHub 账号下的未归档仓库。例如 Atlas 或 liukun158959-beep/tebb。",
             }
         },
         "required": ["repo"],

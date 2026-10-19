@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 import tomllib
+import uuid
 from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
@@ -19,6 +20,39 @@ class UpdateTests(unittest.TestCase):
         result.__exit__ = Mock(return_value=False)
         result.read.return_value = json.dumps(value).encode()
         return result
+
+    def test_renamed_repository_and_legacy_urls_keep_exact_release_boundary(self):
+        self.assertEqual(info.REPOSITORY, "liukun158959-beep/tebb")
+        for repository in ("liukun158959-beep/tebb", "liukun158959-beep/ZhiXing"):
+            url = f"https://github.com/{repository}/releases/tag/v0.3.0"
+            self.assertTrue(info.safe_release_url(url, tag="v0.3.0"))
+            self.assertFalse(info.safe_release_url(url, tag="v0.3.1"))
+            release = {"tag_name": "v0.3.0", "html_url": url}
+            with patch.object(info.urllib.request, "urlopen", return_value=self.response(release)) as request:
+                self.assertTrue(info.check_updates()["ok"])
+            self.assertEqual(request.call_args.args[0].full_url,
+                             "https://api.github.com/repos/liukun158959-beep/tebb/releases/latest")
+        for url in ("https://github.com/liukun158959-beep/tebb-other/releases/tag/v0.3.0",
+                    "https://github.com/other/tebb/releases/tag/v0.3.0",
+                    "https://github.com.evil.invalid/liukun158959-beep/tebb/releases/tag/v0.3.0",
+                    "https://user@github.com/liukun158959-beep/tebb/releases/tag/v0.3.0",
+                    "http://github.com/liukun158959-beep/tebb/releases/tag/v0.3.0",
+                    info.RELEASES_URL + "/tag/v0.3.0?download=1",
+                    info.RELEASES_URL + "/tag/v0.3.0#fragment",
+                    info.RELEASES_URL + "/other/tag/v0.3.0",
+                    info.RELEASES_URL + "/tag/v0.3.0/extra"):
+            with self.subTest(url=url):
+                self.assertFalse(info.safe_release_url(url, tag="v0.3.0"))
+
+    def test_legacy_latest_redirect_is_accepted_only_for_exact_version_path(self):
+        response = self.response({})
+        opener = Mock()
+        opener.open.return_value = response
+        for path, valid in (("tag/v0.3.0", True), ("other/tag/v0.3.0", False)):
+            response.geturl.return_value = "https://github.com/liukun158959-beep/ZhiXing/releases/" + path
+            with patch.object(info.urllib.request, "urlopen", side_effect=TimeoutError), \
+                 patch.object(info.urllib.request, "build_opener", return_value=opener):
+                self.assertEqual(info.check_updates()["ok"], valid)
 
     def test_stable_release_comparison_and_untrusted_links(self):
         current = info.load_manifest()["version"].split(".")
@@ -107,10 +141,23 @@ class NotificationTests(unittest.TestCase):
         with self.assertRaises(notices.RemoteError): self.notify.send(self.release,self.manifest,self.image)
         self.assertEqual(notices.receipt(self.release["body"],"test-chat")["state"],"pending")
         first=self.calls[-1][1]["data"]["uuid"]
+        self.assertEqual(first, str(uuid.uuid5(uuid.NAMESPACE_URL,
+            f"liukun158959-beep/ZhiXing:{self.release['tag_name']}:test-chat")))
         self.notify.request=original
         self.notify.send(self.release,self.manifest,self.image)
         sent=[kw["data"]["uuid"] for url,kw in self.calls if "receive_id_type" in url]
         self.assertEqual(sent,[first,first])
+
+    def test_legacy_release_url_keeps_receipt_and_new_api_repository(self):
+        self.release["html_url"] = "https://github.com/liukun158959-beep/ZhiXing/releases/tag/" + self.manifest["tag"]
+        self.assertEqual(self.notify.send(self.release, self.manifest, self.image)["state"], "sent")
+        github_urls = [url for url, _ in self.calls if "api.github.com" in url]
+        self.assertTrue(github_urls)
+        self.assertTrue(all(url.startswith("https://api.github.com/repos/liukun158959-beep/tebb/") for url in github_urls))
+        self.calls.clear()
+        self.release["html_url"] = info.RELEASES_URL + "/tag/" + self.manifest["tag"]
+        self.assertEqual(self.notify.send(self.release, self.manifest, self.image)["state"], "already_sent")
+        self.assertFalse(self.calls)
 
     def test_old_pending_is_verified_before_resend(self):
         self.notify.record(self.release,"pending",int(time.time())-7200)
@@ -132,7 +179,9 @@ class NotificationTests(unittest.TestCase):
             self.assertEqual(self.notify.send(self.release, self.manifest, self.image, reconcile="confirmed_absent")["state"], "sent")
 
     def test_draft_prerelease_and_wrong_manifest_never_send(self):
-        for change in ({"draft":True},{"prerelease":True},{"tag_name":"v0.0.1"},{"published_at":""}):
+        for change in ({"draft":True},{"prerelease":True},{"tag_name":"v0.0.1"},{"published_at":""},
+                       {"html_url": info.RELEASES_URL + "/tag/v0.0.1"},
+                       {"html_url": "https://github.com/other/tebb/releases/tag/" + self.manifest["tag"]}):
             with self.assertRaises(ValueError): self.notify.send({**self.release,**change},self.manifest,self.image)
         self.assertFalse(self.calls)
 

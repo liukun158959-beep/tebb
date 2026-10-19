@@ -14,6 +14,9 @@ from urllib.error import HTTPError
 
 from .release_info import REPOSITORY, safe_release_url, version_tuple
 
+# Keep the original identity across repository renames so pending retries use the same UUID.
+NOTIFICATION_NAMESPACE = "liukun158959-beep/ZhiXing"
+
 
 class RemoteError(RuntimeError):
     def __init__(self, message, confirmed=False):
@@ -158,7 +161,7 @@ class Notifier:
             raise ValueError("仅正式发布成功的版本可以发送通知。")
         if release["tag_name"] != manifest["tag"]:
             raise ValueError("版本说明与 GitHub Release 不一致。")
-        if release.get("html_url") != f"https://github.com/{REPOSITORY}/releases/tag/{release['tag_name']}":
+        if not safe_release_url(release.get("html_url") or "", tag=release["tag_name"]):
             raise ValueError("版本通知链接与正式 tag 不一致。")
         previous = receipt(release.get("body") or "", self.chat_id)
         if previous and previous.get("tag") != release["tag_name"]:
@@ -184,7 +187,7 @@ class Notifier:
             started = int(time.time())
         key = self.upload_image(image)
         self.record(release, "pending", started)
-        message_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{REPOSITORY}:{release['tag_name']}:{self.chat_id}"))
+        message_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{NOTIFICATION_NAMESPACE}:{release['tag_name']}:{self.chat_id}"))
         for legacy in (False, True):
             card = release_card(manifest, key, release["html_url"], legacy=legacy)
             try:

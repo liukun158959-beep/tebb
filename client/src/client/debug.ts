@@ -25,7 +25,7 @@ export const COMPOSER_FIXTURE = {
   ],
   github: {
     ok: true,
-    items: [{ id: "liukun158959-beep/ZhiXing", label: "liukun158959-beep/ZhiXing" }],
+    items: [{ id: "liukun158959-beep/tebb", label: "liukun158959-beep/tebb" }],
   },
 };
 

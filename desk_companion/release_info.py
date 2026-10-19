@@ -7,7 +7,8 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-REPOSITORY = "liukun158959-beep/ZhiXing"
+REPOSITORY = "liukun158959-beep/tebb"
+RELEASE_REPOSITORIES = (REPOSITORY, "liukun158959-beep/ZhiXing")
 RELEASES_URL = f"https://github.com/{REPOSITORY}/releases"
 MANIFEST = Path(__file__).parent / "ui/release.json"
 
@@ -28,11 +29,14 @@ def load_manifest():
     return value
 
 
-def safe_release_url(url):
+def safe_release_url(url, *, tag=None):
     parts = urlsplit(url)
+    paths = (f"/{repository}/releases/" for repository in RELEASE_REPOSITORIES)
+    valid_path = any(parts.path == path + "tag/" + tag if tag is not None else parts.path.startswith(path)
+                     for path in paths)
     return (parts.scheme == "https" and parts.hostname == "github.com" and not parts.username
             and not parts.password and parts.port in (None, 443)
-            and parts.path.startswith("/" + REPOSITORY + "/releases/") and not parts.query and not parts.fragment)
+            and valid_path and not parts.query and not parts.fragment)
 
 
 class ReleaseRedirect(urllib.request.HTTPRedirectHandler):
@@ -53,7 +57,7 @@ def check_updates():
             if release.get("draft") or release.get("prerelease"):
                 raise ValueError("更新信息不是正式发布版本。")
             latest, url = release["tag_name"], release["html_url"]
-            if not safe_release_url(url) or urlsplit(url).path != f"/{REPOSITORY}/releases/tag/{latest}":
+            if not safe_release_url(url, tag=latest):
                 raise ValueError("更新地址与版本号不一致。")
             notes = re.sub(r"<!--.*?-->", "", str(release.get("body") or ""), flags=re.S)[:12000]
             title, published = release.get("name") or latest, release.get("published_at") or ""
@@ -62,9 +66,9 @@ def check_updates():
             opener = urllib.request.build_opener(ReleaseRedirect())
             with opener.open(urllib.request.Request(RELEASES_URL + "/latest", headers=headers), timeout=10) as response:
                 url = response.geturl()
-            if not safe_release_url(url) or "/releases/tag/" not in url:
+            latest = urlsplit(url).path.rsplit("/", 1)[-1]
+            if not safe_release_url(url, tag=latest):
                 raise ValueError("尚未取得可核实的正式版本。")
-            latest = url.rsplit("/", 1)[-1]
             title, published = "正式版本 " + latest, ""
             notes = "已从正式发布页核实版本，完整更新说明请打开下载页面查看。"
         remote, local = version_tuple(latest), version_tuple(current)

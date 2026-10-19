@@ -6,7 +6,7 @@ import { MdLink, Markdown } from "./Markdown";
 import { localDay, readReleasePreferences, saveReleasePreferences, shouldShowRelease, type ReleasePreferences } from "./release-preferences";
 
 export const CURRENT_RELEASE = manifest;
-const releases = "https://github.com/liukun158959-beep/ZhiXing/releases";
+const releases = "https://github.com/liukun158959-beep/tebb/releases";
 export const CURRENT_RELEASE_URL = `${releases}/tag/${manifest.tag}`;
 
 export function useReleaseIntro(ready: boolean) {

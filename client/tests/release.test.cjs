@@ -72,7 +72,7 @@ test('settings make no startup request, surface failure, allow retry, and render
     calls.push(method);
     if (calls.length === 1) throw Error('offline');
     return { ok: true, latest_version: '0.3.0', status: 'available', notes: '正式说明',
-      release_url: 'https://github.com/liukun158959-beep/ZhiXing/releases/tag/v0.3.0' };
+      release_url: 'https://github.com/liukun158959-beep/tebb/releases/tag/v0.3.0' };
   });
   let renderer;
   act(() => { renderer = create(React.createElement(ReleaseSettings, { info: { port: 1, token: 'test' }, onShowIntro() {} })); });
@@ -80,10 +80,12 @@ test('settings make no startup request, surface failure, allow retry, and render
   const button = () => renderer.root.findAllByType('button').find(n => n.children.join('') === '检查更新');
   await act(async () => button().props.onClick());
   assert.match(JSON.stringify(renderer.toJSON()), /暂时无法检查更新/);
+  assert.equal(renderer.root.findByType('a').props.href, 'https://github.com/liukun158959-beep/tebb/releases/latest');
   await act(async () => button().props.onClick());
   assert.deepEqual(calls, ['check_updates', 'check_updates']);
   assert.match(JSON.stringify(renderer.toJSON()), /发现新版本 v0.3.0/);
   assert.match(JSON.stringify(renderer.toJSON()), /正式说明/);
+  assert.equal(renderer.root.findByType('a').props.href, 'https://github.com/liukun158959-beep/tebb/releases/tag/v0.3.0');
   act(() => renderer.unmount());
 });
 

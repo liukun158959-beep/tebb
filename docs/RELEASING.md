@@ -58,6 +58,8 @@ python -m unittest discover -s tests -p test_atlas_runtime.py -v
 
 通知回执以非敏感隐藏注释写入相应 Release 正文，按版本和目标群去重，跨 Actions runner 保留。状态 sent 直接跳过；状态 pending 在飞书幂等窗口内使用相同 UUID 重试，窗口到期后先完整查询群消息。查询失败或分页不完整时不重复发送。检查更新时隐藏这些内部注释。
 
+仓库已更名为 `liukun158959-beep/tebb`。通知 API 使用新地址，UUID 继续使用原仓库命名空间，避免更名改变 pending 重试标识；不要随仓库名称修改此常量。Release 正文中的已有回执继续有效。工作流检出对应发布 tag，因此历史 tag 内的旧脚本可能拒绝更名后的 Release URL；不要改写历史 tag 或直接反复补跑，需先核实回执与群消息，再使用经验证的兼容脚本处理相应历史版本资料。
+
 通知失败不回滚已发布版本，Actions 明确报失败。在 Actions → Release to Feishu → Run workflow，填写相同正式 tag，默认 reconcile=auto。若 pending 回执因权限不足无法自动核实，先人工检查群：确认存在卡片选择 confirmed_sent（只登记回执）；确认不存在才选择 confirmed_absent（补发）。其他状态不接受人工核实选项，避免把未经核实的失败当成成功。
 
 本地无副作用预览：`python scripts/notify_release.py --dry-run`。手动执行发送或核实时需要相同 Secrets 对应环境变量、`GH_TOKEN`（该仓库 contents:write），以及 `--tag vX.Y.Z`。不要把密钥放入命令参数或提交记录。

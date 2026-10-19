@@ -7,8 +7,8 @@
 需要 Python 3.11+、Node / pnpm、Rust、Tauri 的 Windows 构建依赖和 Atlas 源码。Atlas 仓库目前非公开，需要已有源码或访问权限；普通体验可使用 Windows 便携版。
 
 ```powershell
-git clone https://github.com/liukun158959-beep/ZhiXing.git
-cd ZhiXing
+git clone https://github.com/liukun158959-beep/tebb.git
+cd tebb
 $atlasSource = 'E:\path\to\Atlas'
 python -m pip install -e $atlasSource
 python -m pip install -e .

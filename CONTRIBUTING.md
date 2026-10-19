@@ -4,7 +4,7 @@
 
 ## 反馈问题
 
-在 [Issues](https://github.com/liukun158959-beep/ZhiXing/issues) 描述：
+在 [Issues](https://github.com/liukun158959-beep/tebb/issues) 描述：
 
 - tebb 版本、Windows 版本和启动方式。
 - 复现步骤、预期行为和实际结果。

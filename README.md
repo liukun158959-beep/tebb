@@ -6,11 +6,11 @@
 
 面向极客的 Agent 伙伴工作区
 
-[![Release](https://img.shields.io/github/v/release/liukun158959-beep/ZhiXing?style=flat-square)](https://github.com/liukun158959-beep/ZhiXing/releases)
-[![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=flat-square)](https://github.com/liukun158959-beep/ZhiXing/releases)
+[![Release](https://img.shields.io/github/v/release/liukun158959-beep/tebb?style=flat-square)](https://github.com/liukun158959-beep/tebb/releases)
+[![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=flat-square)](https://github.com/liukun158959-beep/tebb/releases)
 [![Status](https://img.shields.io/badge/status-early%20preview-8D9B82?style=flat-square)](#项目状态)
 
-[下载体验](https://github.com/liukun158959-beep/ZhiXing/releases) · [快速开始](#快速开始) · [使用文档](docs/GETTING_STARTED.md) · [反馈与建议](https://github.com/liukun158959-beep/ZhiXing/issues)
+[下载体验](https://github.com/liukun158959-beep/tebb/releases) · [快速开始](#快速开始) · [使用文档](docs/GETTING_STARTED.md) · [反馈与建议](https://github.com/liukun158959-beep/tebb/issues)
 
 </div>
 
@@ -81,7 +81,7 @@ tebb 把有个性的 AI 伙伴、你的项目文件和正在做的事放进同�
 
 ### 下载 Windows 便携版
 
-1. 打开 [Releases](https://github.com/liukun158959-beep/ZhiXing/releases)，下载 Windows x64 ZIP 并完整解压。
+1. 打开 [Releases](https://github.com/liukun158959-beep/tebb/releases)，下载 Windows x64 ZIP 并完整解压。
 2. 运行包内入口程序，保留旁边的 `runtime` 文件夹。
 3. 按首次引导填写模型 **API 地址、模型 ID、API Key**，保存并测试连接，然后开始聊天。
 4. 想操作本地项目时，点击顶部 **打开文件夹**，按需设置编辑与命令权限。
@@ -101,7 +101,7 @@ tebb 正在快速迭代，当前以 **Windows 本机运行**为主。会话和�
 - 文件与命令执行需配置目录和权限；终端依赖 WSL 与 bubblewrap。
 - 模型服务与网络仍可能超时，已完成的工具操作不会因超时自动撤销或重做。
 
-云端常驻、远程连接与更多运行环境属于后续探索。当前进展与已知问题见 [Issues](https://github.com/liukun158959-beep/ZhiXing/issues)，实测边界见 [性能记录](docs/PERFORMANCE.md)。
+云端常驻、远程连接与更多运行环境属于后续探索。当前进展与已知问题见 [Issues](https://github.com/liukun158959-beep/tebb/issues)，实测边界见 [性能记录](docs/PERFORMANCE.md)。
 
 ## 文档与参与
 
@@ -115,7 +115,7 @@ tebb 正在快速迭代，当前以 **Windows 本机运行**为主。会话和�
 
 欢迎提交使用反馈、复现步骤、功能建议，以及文档和代码改进。提交问题前请隐藏 API Key、登录信息和私人对话。
 
-tebb 原名知行 · ZhiXing；保留仓库地址与历史下载链接，更新时沿用原有用户数据。[品牌与兼容说明](docs/BRAND.md)
+tebb 原名知行 · ZhiXing；仓库已更名为 `tebb`，旧仓库链接由 GitHub 重定向，更新时沿用原有用户数据。旧版检查更新失败时，请从 Releases 手动下载。[品牌与兼容说明](docs/BRAND.md)
 
 ## 许可证与致谢
 

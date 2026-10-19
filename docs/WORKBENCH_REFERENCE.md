@@ -10,7 +10,7 @@ Windows 上常驻的个人 Agent 工作台：对话、记忆、任务执行、�
 
 ## 下载与首次使用
 
-到 [GitHub Releases](https://github.com/liukun158959-beep/ZhiXing/releases) 下载 Windows x64 便携 ZIP，完整解压后运行入口程序。v0.2.2 起使用 `ZhiXing.exe`，此前版本使用 `DeskCompanion.exe`。无需自行安装 Python、Atlas、Node 或 Rust；需要 Windows 10/11 x64 和 WebView2 Runtime。首次使用按引导填写模型信息。完整步骤、可选功能、备份与升级见 [使用说明](GETTING_STARTED.md)。
+到 [GitHub Releases](https://github.com/liukun158959-beep/tebb/releases) 下载 Windows x64 便携 ZIP，完整解压后运行入口程序。v0.3.0 使用 `tebb.exe`；历史 v0.2.2、v0.2.3 使用 `ZhiXing.exe`，此前版本使用 `DeskCompanion.exe`。无需自行安装 Python、Atlas、Node 或 Rust；需要 Windows 10/11 x64 和 WebView2 Runtime。首次使用按引导填写模型信息。完整步骤、可选功能、备份与升级见 [使用说明](GETTING_STARTED.md)。
 
 项目原名 DeskCompanion。更名后仍沿用 `%LOCALAPPDATA%/DeskCompanion` 用户数据目录和原客户端标识，已有配置、聊天、记忆、素材及版本介绍偏好继续使用。源码目录和内部 Python 模块名保持兼容。
 
