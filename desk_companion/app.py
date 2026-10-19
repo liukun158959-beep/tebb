@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
+from contextlib import contextmanager
 from pathlib import Path
 
 import webview
@@ -21,6 +22,7 @@ import win32gui
 from .assistant import spoken_answer
 from .assistant_settings import AssistantSettingsService
 from .conversation import ConversationService
+from .chat_sessions import ChatSessionService
 from .automation import AutomationScheduler
 from .board_workbench import BoardWorkbench
 from .bridge import Bridge
@@ -29,9 +31,6 @@ from .logutil import crash, install_crash_hooks, log, mark_ready, start_os_watch
 from .memory import (
     TZ,
     append_chat,
-    clear_session,
-    list_chat,
-    list_sessions,
     recent_chat,
     stamp_missing_session,
 )
@@ -92,7 +91,8 @@ class App(BoardWorkbench):
             on_status=None if headless else self.on_stream_status)
         self.assistant_settings = AssistantSettingsService(self.conversation)
         self.automation = AutomationScheduler(self)
-        self.bridge = Bridge(self)
+        self.chat_sessions = ChatSessionService(self.conversation, mutation_guard=self._session_mutation_guard)
+        self.bridge = Bridge(self, session_changed=None if headless else self._on_session_changed)
         self._queue: queue.Queue = queue.Queue()
         self.pet = None
         self.board = None
@@ -309,22 +309,30 @@ class App(BoardWorkbench):
         self._eval_bubble("load_history", rows=rows)
         self._history_loaded = True
 
-    def clear_chat_history(self) -> dict:
-        if self._agent_running:
-            return {"ok": False, "error": "助手正在回复，等这句说完再清空。"}
-        if self.pet is None:
-            raise RuntimeError("宠物窗口还在启动，无法清空。")
-        clear_session(self.state.session_id)
-        from .context_pack import drop_pack
+    @contextmanager
+    def _session_mutation_guard(self, session_id):
+        if self.pet is not None and self.pet.busy:
+            raise RuntimeError('助手正在回复或仍在收尾，等待完成或停止后再修改会话。')
+        yield
 
-        drop_pack(self.state.session_id)
-        if self.agent is not None:
-            self.agent.memory.clear()
-        rows = []
-        self._eval_bubble("load_history", rows=rows)
-        self._eval_bubble("show_panel", panel="chat")
-        self._eval_board("load_thread", items=rows, session_id=self.state.session_id)
-        return {"ok": True}
+    def _on_session_changed(self, operation):
+        snapshot = self.chat_sessions.load_chat_log()
+        if not snapshot['ok']:
+            raise RuntimeError(snapshot['error'])
+        self._eval_bubble('load_history', rows=snapshot['items'])
+        if operation == 'clear_chat':
+            self._eval_bubble('show_panel', panel='chat')
+        self._eval_board('load_thread', items=snapshot['items'], session_id=snapshot['session_id'],
+                         sessions=snapshot['sessions'])
+
+    def new_chat_session(self) -> dict:
+        return self.bridge.new_chat_session()
+
+    def switch_chat_session(self, session_id: str) -> dict:
+        return self.bridge.switch_chat_session(session_id)
+
+    def clear_chat_history(self) -> dict:
+        return self.bridge.clear_chat()
 
     def try_build_agent(self) -> None:
         return self.conversation.try_build_agent()
@@ -333,40 +341,10 @@ class App(BoardWorkbench):
         return self.conversation.record_usage(agent, run_id)
 
     def board_chat(self) -> dict:
-        try:
-            sid = self.state.session_id
-            from .assistant import build_system_prompt
-            from .context_pack import context_view
-
-            return {
-                "ok": True,
-                "session_id": sid,
-                "items": list_chat(sid),
-                "sessions": list_sessions(),
-                "context": context_view(sid, build_system_prompt(self.state.persona)),
-            }
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.chat_sessions.load_chat_log()
 
     def board_memory(self) -> dict:
-        from .facts import FACT_LIMIT, read_facts
-
-        try:
-            sid = self.state.session_id
-            items = list_chat(sid)
-            from .assistant import build_system_prompt
-            from .context_pack import context_view, raw_tail
-
-            return {
-                "ok": True,
-                "total": len(items),
-                "fact_limit": FACT_LIMIT,
-                "facts": read_facts(),
-                "context": context_view(sid, build_system_prompt(self.state.persona)),
-                "items": raw_tail(sid),
-            }
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.chat_sessions.load_memory()
 
     def board_compress_context(self) -> dict:
         if self._agent_running:
@@ -694,37 +672,44 @@ class App(BoardWorkbench):
         return self.conversation.record_llm_usage(usage, run_id)
 
     def send_chat(self, text: str, *, from_board: bool = False) -> None:
-        text = (text or "").strip()
-        if not text or not self.pet:
-            return
-        if self.agent is None:
-            msg = self._agent_error or "还没接上模型。打开看板侧边栏「模型」填写 API 地址、模型名和 Key。"
+        with self.chat_sessions.selected_session() as session_id:
+            text = (text or "").strip()
+            if not text or not self.pet:
+                return
+            if self.agent is None:
+                msg = self._agent_error or "还没接上模型。打开看板侧边栏「模型」填写 API 地址、模型名和 Key。"
+                if not from_board:
+                    self.show_bubble("chat")
+                self._eval_bubble("append_message", role="user", text=text)
+                self._eval_bubble("append_message", role="err", text=msg)
+                self._eval_bubble("set_busy", busy=False)
+                self._eval_board("append_message", role="user", text=text)
+                self._eval_board("append_message", role="err", text=msg)
+                self._eval_board("set_busy", busy=False)
+                return
+            if self.pet.busy or self._agent_running:
+                return
             if not from_board:
                 self.show_bubble("chat")
             self._eval_bubble("append_message", role="user", text=text)
-            self._eval_bubble("append_message", role="err", text=msg)
-            self._eval_bubble("set_busy", busy=False)
+            self._eval_bubble("begin_stream")
             self._eval_board("append_message", role="user", text=text)
-            self._eval_board("append_message", role="err", text=msg)
-            self._eval_board("set_busy", busy=False)
-            return
-        if self.pet.busy:
-            return
-        if not from_board:
-            self.show_bubble("chat")
-        self._eval_bubble("append_message", role="user", text=text)
-        self._eval_bubble("begin_stream")
-        self._eval_board("append_message", role="user", text=text)
-        self._eval_board("begin_stream")
-        self.pet.set_busy(True)
-        append_chat("user", text, self.state.session_id)
-        threading.Thread(target=self._run_agent, args=(text,), daemon=True).start()
+            self._eval_board("begin_stream")
+            self.pet.set_busy(True)
+            self._agent_running = True
+            try:
+                append_chat("user", text, session_id)
+                threading.Thread(target=self._run_agent, args=(text,), daemon=True).start()
+            except Exception:
+                self._agent_running = False
+                self.pet.set_busy(False)
+                raise
 
     def _run_agent(self, text: str) -> None:
         try:
             self.engage_model()
         except Exception as exc:
-            self.ui(lambda: self._on_agent_done(str(exc), True))
+            self.ui(lambda message=str(exc): self._on_agent_done(message, True))
             return
         self._agent_running = True
         run_id = str(uuid.uuid4())
@@ -741,25 +726,26 @@ class App(BoardWorkbench):
                     self._record_usage(self.agent, run_id)
                 except Exception as usage_exc:
                     log(f"用量记录失败: {usage_exc}")
-        finally:
-            self._agent_running = False
         self.ui(lambda: self._on_agent_done(answer, failed))
 
     def _on_agent_done(self, answer: str, failed: bool) -> None:
-        if not self.pet:
-            return
-        role = "err" if failed else "pet"
-        if not failed:
-            self.pet.review()
-            append_chat("pet", answer, self.state.session_id)
-        else:
-            self.pet.fail()
-        self._eval_bubble("end_stream", text=answer, role=role)
-        self._eval_bubble("set_busy", busy=False)
-        self._eval_board("end_stream", text=answer, role=role)
-        self._eval_board("set_busy", busy=False)
-        if self._card_mode == "chat" or (self.pet and self.pet.bubble_open):
-            self.show_bubble("chat")
+        try:
+            if not self.pet:
+                return
+            role = "err" if failed else "pet"
+            if not failed:
+                self.pet.review()
+                append_chat("pet", answer, self.state.session_id)
+            else:
+                self.pet.fail()
+            self._eval_bubble("end_stream", text=answer, role=role)
+            self._eval_bubble("set_busy", busy=False)
+            self._eval_board("end_stream", text=answer, role=role)
+            self._eval_board("set_busy", busy=False)
+            if self._card_mode == "chat" or (self.pet and self.pet.bubble_open):
+                self.show_bubble("chat")
+        finally:
+            self._agent_running = False
 
     def _run_daily(self) -> None:
         if not self.state.nudge_enabled:
@@ -768,12 +754,16 @@ class App(BoardWorkbench):
         if self.state.last_daily_date == today:
             log("今日纸条已写过，跳过")
             return
+        with self.chat_sessions.selected_session():
+            if self._agent_running or (self.pet is not None and self.pet.busy):
+                return
+            self._agent_running = True
         try:
             self.engage_model()
         except Exception as exc:
-            self.ui(lambda: self.show_notice(str(exc)))
+            self._agent_running = False
+            self.ui(lambda message=str(exc): self.show_notice(message))
             return
-        self._agent_running = True
         ready = threading.Event()
         self.ui(lambda: self._begin_daily_stream(ready))
         if not ready.wait(8):
@@ -794,8 +784,6 @@ class App(BoardWorkbench):
                     self._record_usage(self.agent, run_id)
                 except Exception as usage_exc:
                     log(f"用量记录失败: {usage_exc}")
-        finally:
-            self._agent_running = False
         self.ui(lambda: self._on_daily_done(answer, failed, today))
 
     def _begin_daily_stream(self, ready: threading.Event) -> None:
@@ -812,19 +800,22 @@ class App(BoardWorkbench):
             ready.set()
 
     def _on_daily_done(self, answer: str, failed: bool, today: str) -> None:
-        if not self.pet or not self.state.nudge_enabled:
-            return
-        self._card_mode = "chat"
-        role = "err" if failed else "pet"
-        self._eval_bubble("end_stream", text=answer, role=role)
-        self._eval_bubble("show_panel", panel="chat")
-        self._eval_board("end_stream", text=answer, role=role)
-        if failed:
-            return
-        self.pet.wave()
-        append_chat("pet", answer, self.state.session_id)
-        self.state.last_daily_date = today
-        self.state.save()
+        try:
+            if not self.pet or not self.state.nudge_enabled:
+                return
+            self._card_mode = "chat"
+            role = "err" if failed else "pet"
+            self._eval_bubble("end_stream", text=answer, role=role)
+            self._eval_bubble("show_panel", panel="chat")
+            self._eval_board("end_stream", text=answer, role=role)
+            if failed:
+                return
+            self.pet.wave()
+            append_chat("pet", answer, self.state.session_id)
+            self.state.last_daily_date = today
+            self.state.save()
+        finally:
+            self._agent_running = False
 
     def _run_template_nudge(self) -> None:
         text = None

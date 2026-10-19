@@ -51,6 +51,13 @@ class ConversationService:
         if callback is not None:
             callback(text)
 
+    def clear_agent_memory(self):
+        """Discard temporary model history after a protected session mutation."""
+        if self.running:
+            raise RuntimeError('助手正在回复，等待完成或停止后再清理上下文。')
+        if self.agent is not None:
+            self.agent.memory.clear()
+
     def run_agent(self, model_message, *, run_id, user_message=None):
         """Return raw output; each entry point retains its accounting/history order."""
         with bind_turn_user(model_message if user_message is None else user_message):

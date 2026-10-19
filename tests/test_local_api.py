@@ -63,6 +63,79 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(message["result"]["ok"])
         self.assertTrue(message["result"]["result"]["ok"])
 
+    async def test_headless_sessions_clear_and_isolate_data_without_gui_methods(self):
+        from contextlib import ExitStack
+        memory.append_chat('user', 'selected question', self.host.state.session_id)
+        memory.append_chat('user', 'other question', 'other-session')
+        original = self.host.state.session_id
+
+        async def rpc(method, args=None):
+            async with connect(self.url, proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', id=method, method=method, args=args or {})))
+                message = json.loads(await asyncio.wait_for(ws.recv(), 10))
+            self.assertTrue(message['result']['ok'], message)
+            return message['result']['result']
+
+        # Headless clear must work even though pet is None.
+        self.assertIsNone(self.host.pet)
+        self.assertTrue((await rpc('clear_chat'))['ok'])
+        self.assertEqual(memory.list_chat(original), [])
+        self.assertEqual(len(memory.list_chat('other-session')), 1)
+        with ExitStack() as stack:
+            for method in ('clear_chat_history', 'new_chat_session', 'switch_chat_session', 'board_chat', 'board_memory'):
+                stack.enter_context(patch.object(self.host, method, side_effect=AssertionError('inherited GUI method')))
+            self.assertEqual((await rpc('new_chat_session'))['session_id'], original)
+            self.assertEqual((await rpc('switch_chat_session', {'session_id': 'other-session'}))['session_id'], 'other-session')
+            loaded = await rpc('load_chat_log')
+            self.assertEqual(loaded['items'][0]['text'], 'other question')
+            self.assertEqual((await rpc('load_memory'))['total'], 1)
+            self.host.conversation.running = True
+            for method in ('clear_chat', 'new_chat_session', 'switch_chat_session'):
+                result = await rpc(method, {'session_id': original} if method == 'switch_chat_session' else None)
+                self.assertFalse(result['ok'])
+            self.assertTrue((await rpc('load_chat_log'))['ok'])
+            self.host.conversation.running = False
+            self.assertTrue((await rpc('clear_chat'))['ok'])
+            self.assertEqual(self.host.state.session_id, 'other-session')
+
+    async def test_session_rpc_blocks_pending_and_tail_tasks_but_keeps_reads_available(self):
+        import threading
+        from desk_companion.tasks import TaskManager
+        previous = self.host.tasks
+        previous.shutdown()
+        with patch.object(TaskManager, '_schedule', return_value=None):
+            manager = TaskManager(self.host, path=previous.path)
+        self.host._tasks = manager
+        self.addCleanup(manager.shutdown)
+        sid = self.host.state.session_id
+        memory.append_chat('user', 'keep current history', sid)
+        memory.append_chat('user', 'other history', 'other-session')
+        task = manager.submit('pending request', sid)
+        async def rpc(method, args=None):
+            async with connect(self.url, proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', id=method, method=method, args=args or {})))
+                value = json.loads(await asyncio.wait_for(ws.recv(), 5))
+            self.assertTrue(value['result']['ok'], value)
+            return value['result']['result']
+        for method in ('new_chat_session', 'switch_chat_session', 'clear_chat'):
+            value = await rpc(method, {'session_id': 'other-session'} if method == 'switch_chat_session' else None)
+            self.assertFalse(value['ok'], value)
+        self.assertEqual(manager.get(task)['state'], 'queued')
+        with self.host.turn_lock:
+            self.assertTrue((await rpc('load_chat_log'))['ok'])
+            self.assertTrue((await rpc('load_memory'))['ok'])
+        manager.update(task, state='cancelled')
+        manager.active[task] = dict(session=sid, cancel=threading.Event())
+        try:
+            self.assertFalse((await rpc('clear_chat'))['ok'])
+        finally:
+            manager.active.pop(task)
+        other = manager.submit('other pending request', 'other-session')
+        self.assertTrue((await rpc('clear_chat'))['ok'])
+        self.assertEqual(self.host.state.session_id, sid)
+        self.assertEqual(manager.get(other)['state'], 'queued')
+        self.assertEqual(manager.get(task)['state'], 'cancelled')
+
     async def test_feishu_settings_rpc_reports_invalid_secret_without_echoing_it(self):
         with patch("desk_companion.feishu_agent._run_lark", side_effect=RuntimeError("invalid_client test-only-secret")):
             async with connect(self.url, proxy=None) as ws:

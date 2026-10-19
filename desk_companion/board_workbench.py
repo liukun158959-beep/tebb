@@ -1,11 +1,9 @@
-"""看板对话工作台：session、输入点选、复盘写入飞书。"""
+"""旧看板工作台：输入点选、自动化与复盘写入飞书。"""
 from __future__ import annotations
 
 import json
 import os
 
-from .memory import list_chat, list_sessions
-from .state import new_session_id
 
 from .conversation_input import CLI_CHIPS, compose_turn
 
@@ -40,48 +38,6 @@ class BoardWorkbench:
             "cli": [{"id": key, "label": label} for key, label in CLI_CHIPS],
             "github": github,
         }
-
-    def new_chat_session(self) -> dict:
-        try:
-            if self._agent_running:
-                raise RuntimeError("助手正在回复，等这句说完再开新对话。")
-            current = list_chat(self.state.session_id)
-            if current:
-                self.state.session_id = new_session_id()
-                self.state.save()
-            self._reload_session_views()
-            return {"ok": True, "session_id": self.state.session_id}
-        except Exception as extra:
-            return {"ok": False, "error": str(extra)}
-
-    def switch_chat_session(self, session_id: str) -> dict:
-        try:
-            if type(session_id) is not str or not session_id.strip():
-                raise RuntimeError("切换对话需要 session_id。")
-            sid = session_id.strip()
-            known = {row["id"] for row in list_sessions()}
-            if sid != self.state.session_id and sid not in known:
-                raise RuntimeError("没有这条对话线程。")
-            if self._agent_running:
-                raise RuntimeError("助手正在回复，等这句说完再切换对话。")
-            self.state.session_id = sid
-            self.state.save()
-            self._reload_session_views()
-            return {"ok": True, "session_id": sid, "items": list_chat(sid)}
-        except Exception as extra:
-            return {"ok": False, "error": str(extra)}
-
-    def _reload_session_views(self) -> None:
-        rows = list_chat(self.state.session_id)
-        if self.agent is not None:
-            self.agent.memory.clear()
-        self._eval_bubble("load_history", rows=rows)
-        self._eval_board(
-            "load_thread",
-            items=rows,
-            session_id=self.state.session_id,
-            sessions=list_sessions(),
-        )
 
     def list_mcp_tools(self) -> dict:
         from .mcp_client import list_mcp_menu

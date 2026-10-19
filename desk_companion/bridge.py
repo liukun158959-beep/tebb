@@ -5,8 +5,19 @@ import os
 
 
 class Bridge:
-    def __init__(self, host) -> None:
+    def __init__(self, host, *, session_changed=None) -> None:
         self._host = host
+        self._session_changed = session_changed
+
+    def _change_session(self, method, **args):
+        result = getattr(self._host.chat_sessions, method)(**args)
+        if result.get('ok') and self._session_changed is not None:
+            try:
+                self._session_changed(method)
+            except Exception as exc:
+                return {**result, 'ok': False, 'change_state': 'committed',
+                        'error': f'会话操作已完成，但界面刷新失败：{exc}。请重新打开会话。'}
+        return result
 
     def load_onboarding(self) -> dict:
         from .onboarding import status
@@ -305,17 +316,17 @@ class Bridge:
     def send_chat(self, text: str) -> None:
         self._host.ui(lambda: self._host.send_chat(text))
 
-    def clear_chat(self) -> None:
-        return self._host.clear_chat_history()
+    def clear_chat(self) -> dict:
+        return self._change_session('clear_chat')
 
     def send_board_chat(self, text: str, chips: dict | None = None) -> dict:
         return self._host.send_board_chat(text, chips)
 
     def new_chat_session(self) -> dict:
-        return self._host.new_chat_session()
+        return self._change_session('new_chat_session')
 
     def switch_chat_session(self, session_id: str) -> dict:
-        return self._host.switch_chat_session(session_id)
+        return self._change_session('switch_chat_session', session_id=session_id)
 
     def load_composer_options(self) -> dict:
         return self._host.board_composer_options()
@@ -481,10 +492,10 @@ class Bridge:
         os.startfile(url)
 
     def load_chat_log(self) -> dict:
-        return self._host.board_chat()
+        return self._host.chat_sessions.load_chat_log()
 
     def load_memory(self) -> dict:
-        return self._host.board_memory()
+        return self._host.chat_sessions.load_memory()
 
     def compress_context(self) -> dict:
         return self._host.board_compress_context()

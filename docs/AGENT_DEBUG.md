@@ -32,7 +32,7 @@ python -m unittest discover -s tests -p test_tasks.py -v
 
 预期：离线测试全部通过；后台任务不改变桌面选中的会话或窗口配置；模型或检索失败时不写入成功回复，临时工具清理失败时仍释放忙碌状态和回调。若失败，先看 unittest 的具体断言与子进程 stderr：`GUI import forbidden` 表示新增了窗口依赖；缺少 result 或出现 failure 则检查本轮异常、采样输入、工具回执及模型记录。
 
-已独立的范围包括普通/知识任务、共享对话业务及模型/人设配置；本地 API 的其他数据 RPC 仍通过 HeadlessApp 继承兼容，不代表整个后端已无 GUI 依赖。GUI 实机、真实模型和完整发布包验收单独报告。
+已独立的范围包括普通/知识任务、共享对话业务、模型/人设配置及普通会话/只读记忆；本地 API 的其它数据 RPC 仍通过 HeadlessApp 继承兼容，不代表整个后端已无 GUI 依赖。GUI 实机、真实模型和完整发布包验收单独报告。
 
 ## 记录范围与验证
 
@@ -67,3 +67,21 @@ python -m unittest discover -s tests -p test_persona_migration.py -v
 保存结果通过 `ok`、`error` / `message` 及 `save_state` 判断：`not_saved` 表示校验拒绝、未开始写入；`unconfirmed` 表示连接配置写入失败、文件结果未确认；`partial` 表示连接已写入但价格持久化未完成，内存价格恢复为原值；`saved` 表示两份配置均保存成功，即使之后助手初始化失败也不声称未保存。初始化失败仍返回 `ok: false`，错误明确提示“配置已保存，但助手初始化失败”，检查配置后重试即可。旧桌面沿用原错误展示，无需新增界面流程。此修复见 [#115](https://github.com/liukun158959-beep/tebb/issues/115)。
 
 若出现 `GUI import forbidden`，检查配置服务是否反向依赖窗口或 Host。若为 `unconfirmed` / `partial`，重新打开设置核对配置后重试；这里不提供跨文件事务，也不声称写入中断已自动回滚。回归使用临时数据和模拟文件写入故障，覆盖无 GUI 服务和真实本地 WebSocket。整个 HeadlessApp 仍有其他 GUI 继承，真实 GUI、模型和发布包验收单独报告。
+
+## 无 GUI 的普通会话服务验收
+
+在仓库根目录执行，全部使用临时用户目录、脚本 worker 和模拟故障，不请求真实模型或发送外部消息：
+
+```powershell
+python -m unittest discover -s tests -p test_chat_sessions.py -v
+python -m unittest tests.test_local_api.LocalApiTests.test_headless_sessions_clear_and_isolate_data_without_gui_methods tests.test_local_api.LocalApiTests.test_session_rpc_blocks_pending_and_tail_tasks_but_keeps_reads_available -v
+python -m unittest discover -s tests -p test_conversation.py -v
+```
+
+入口为 `ChatSessionService(conversation, mutation_guard=...)`，共享 ConversationService 的 UserState、Agent 和忙碌状态。独立调试可在临时 `DESK_COMPANION_DATA_DIR` 中用 `state.load_state(0, 0)` 创建持久配置，再构造 ConversationService；不使用保存为 no-op 的 worker `for_session` 来管理当前选择。后台注入 `TaskManager.session_mutation_guard`，桌面注入 GUI 忙碌检查；不要绕过生产入口的保护。服务提供新建、切换、清空、历史和只读记忆 5 个同名 RPC 方法；切换输入为已有普通会话 ID，返回保持原有 ok/session_id/items/sessions/context 等字段。
+
+空会话重复新建复用 ID；清空保留当前 ID，仅移除该会话的历史、压缩摘要及 Agent 临时上下文，其它会话、长期事实、笔记和任务记录保留。已清空会话会从基于历史推导的列表中消失。当前会话排队、执行、取消或收尾未结束时，修改返回明确错误，不自动取消任务；其它会话任务继续，历史/记忆读取不受模型回复限制。旧桌面忙碌覆盖发送起点和回调落盘阶段；普通回复与每日纸条均验收。
+
+测试先拦截 GUI 导入再实际执行服务与队列保护；真实离线子进程会在任务终态后暂停部分回复写入，验证此时仍禁止修改，待收尾完成才能清空。另通过线程屏障验证提交无法穿入修改临界区。WebSocket 测试覆盖后台无窗口清空、5 个 RPC 绕过继承方法、任务状态与数据隔离，以及宿主执行锁被占用时仍可读取。
+
+失败时检查 error 与 change_state：`not_changed` 表示校验或忙碌拒绝；`unconfirmed` 表示选择/摘要持久化失败、文件结果未确认，选择失败会恢复内存 ID；`partial` 表示摘要已清理但历史未清理完成；`committed` 表示数据已更新但模型临时上下文或 GUI 刷新失败。按提示重新读取并核对后重试，不声称跨文件事务回滚。事实编辑、删除单句、手动压缩和整个 HeadlessApp 去继承不在本批范围。

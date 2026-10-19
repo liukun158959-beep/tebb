@@ -1,7 +1,7 @@
 """P1：本地 API 的无头 host。
 
 普通/知识问答委托 ConversationService；模型/人设 RPC 直接使用共享配置服务。
-其余数据方法仍保留 App 的继承兼容。
+普通会话与只读记忆 RPC 使用 ChatSessionService；其余数据方法仍保留 App 的继承兼容。
 这里仍有 GUI 类继承，任务 worker 直接使用共享服务，不导入此模块。
 """
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import threading
 import uuid
+from contextlib import contextmanager
 from typing import Callable
 
 from ..app import App
@@ -38,6 +39,11 @@ class HeadlessApp(App):
     def tasks(self):
         if self._tasks is not None:
             return self._tasks
+
+    @contextmanager
+    def _session_mutation_guard(self, session_id):
+        with self.tasks.session_mutation_guard(session_id):
+            yield
         with self.turn_lock:
             if self._tasks is None:
                 from ..tasks import TaskManager

@@ -44,6 +44,7 @@ flowchart TD
 | 本机 API | `desk_companion/local_api/` | Token 认证、RPC 白名单、任务及流式事件 |
 | 对话执行与 Agent 组装 | `conversation.py`、`conversation_input.py`、`assistant.py` | 对话生命周期、点选校验、上下文拼接、MCP 回收、历史用量与 Atlas 调用 |
 | 模型与人设配置 | `assistant_settings.py` | 参数校验、配置兼容、模型清单及连接测试，复用对话服务的状态和模型生命周期 |
+| 普通会话管理 | `chat_sessions.py` | 选择、新建、清空、历史和只读记忆快照，复用任务收尾保护与既有存储 |
 | 任务可靠性 | `tasks.py`、`task_worker.py`、`task_process.py` | 排队、独立执行、超时、进程回收与恢复 |
 | 知识与记忆 | `knowledge.py`、`context_pack.py`、`facts.py` | 文档切分、检索重排、上下文压缩与可追溯事实 |
 | 视频分析 | `video.py`、`video_analysis.py`、`video_archive.py` | 字幕、分段检查点、学习笔记及归档回执 |
@@ -71,6 +72,8 @@ flowchart TD
 对话服务的离线入口及禁止 GUI 导入的子进程验证见 [AI 对话调试](AGENT_DEBUG.md#无-gui-的对话服务验收)。
 
 模型与人设的 9 个配置 RPC 由 Bridge 直接调用 `AssistantSettingsService`，旧 App 保留兼容方法；服务显式依赖同一个 `ConversationService`，从中读取 UserState、Agent 和忙碌状态，通过公开接口重建或绑定模型。模型网络配置继续复用 `model_network`，不另建状态或存储。服务可以独立于 GUI 调试，但整个 HeadlessApp 仍有 GUI 继承；决策见 [ADR 0004](adr/0004-assistant-settings-service.md)，测试入口见 [配置服务验收](AGENT_DEBUG.md#无-gui-的配置服务验收)。
+
+普通会话的 5 个入口由 `ChatSessionService` 处理：`new_chat_session`、`switch_chat_session`、`clear_chat`、`load_chat_log`、`load_memory`。后台通过 `TaskManager.session_mutation_guard` 原子保护当前会话修改，覆盖任务终态之后的收尾写回；只读快照不等待宿主模型执行锁。旧桌面在发送前固定选择并预留忙碌状态，直到 GUI 回调完成历史写入后释放；界面刷新留在 App 回调，服务不导入 Bridge 或窗口。决策见 [ADR 0005](adr/0005-chat-session-service.md)，验收见 [普通会话调试](AGENT_DEBUG.md#无-gui-的普通会话服务验收)。
 
 传统 Agent 与 `collaboration_llm.CollaborationLLM` 共用 Atlas 的 OpenAI SDK 传输、文本/思考/工具聚合和完成校验。协作适配器仅配置网络、GLM reasoning 回传及 route 低思考；工具权限、交付规则和任务进程取消仍留在产品。决策见 [ADR 0002](adr/0002-shared-model-transport.md)，公共 API 见 Atlas `docs/LLM.md`。
 

@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 import uuid
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 from .paths import data_root
 from .task_process import ProcessTree
@@ -125,6 +125,19 @@ class TaskManager:
                     "SELECT seq,kind,data,ts FROM events WHERE task=? ORDER BY seq", (task_id,))]
         value["elapsed"] = round((value["ended"] or time.time()) - value["started"], 1) if value["started"] else 0
         return value
+
+    @contextmanager
+    def session_mutation_guard(self, session):
+        """Protect selection/clearing through the final worker write and against new submissions."""
+        with self.cv:
+            if self.stopped:
+                raise RuntimeError('桌宠正在退出，暂时不能修改会话。')
+            with self.db() as db:
+                pending = db.execute("SELECT 1 FROM tasks WHERE session=? AND state IN ('queued','running','cancelling') LIMIT 1",
+                                     (session,)).fetchone()
+            if pending or any(control['session'] == session for control in self.active.values()):
+                raise RuntimeError('当前会话任务尚未结束或仍在收尾，等待完成或停止后再修改会话。')
+            yield
 
     def list(self, channel="", session=""):
         with self.db() as db:
