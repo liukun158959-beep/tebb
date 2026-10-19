@@ -501,16 +501,16 @@ class Bridge:
         return self._host.board_compress_context()
 
     def add_fact(self, text: str) -> dict:
-        return self._host.board_add_fact(text)
+        return self._host.memory_editing.add_fact(text)
 
     def update_fact(self, fact_id: str, text: str) -> dict:
-        return self._host.board_update_fact(fact_id, text)
+        return self._host.memory_editing.update_fact(fact_id, text)
 
     def delete_fact(self, fact_id: str) -> dict:
-        return self._host.board_delete_fact(fact_id)
+        return self._host.memory_editing.delete_fact(fact_id)
 
     def delete_memory_turn(self, role: str, text: str) -> dict:
-        return self._host.board_drop_memory_turn(role, text)
+        return self._host.memory_editing.delete_memory_turn(role, text)
 
     def load_persona(self) -> dict:
         return self._host.assistant_settings.load_persona()

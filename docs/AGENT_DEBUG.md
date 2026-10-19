@@ -32,7 +32,7 @@ python -m unittest discover -s tests -p test_tasks.py -v
 
 预期：离线测试全部通过；后台任务不改变桌面选中的会话或窗口配置；模型或检索失败时不写入成功回复，临时工具清理失败时仍释放忙碌状态和回调。若失败，先看 unittest 的具体断言与子进程 stderr：`GUI import forbidden` 表示新增了窗口依赖；缺少 result 或出现 failure 则检查本轮异常、采样输入、工具回执及模型记录。
 
-已独立的范围包括普通/知识任务、共享对话业务、模型/人设配置及普通会话/只读记忆；本地 API 的其它数据 RPC 仍通过 HeadlessApp 继承兼容，不代表整个后端已无 GUI 依赖。GUI 实机、真实模型和完整发布包验收单独报告。
+已独立的范围包括普通/知识任务、共享对话业务、模型/人设配置、普通会话/只读记忆及长期事实/单句历史编辑；本地 API 的其它数据 RPC 仍通过 HeadlessApp 继承兼容，不代表整个后端已无 GUI 依赖。GUI 实机、真实模型和完整发布包验收单独报告。
 
 ## 记录范围与验证
 
@@ -87,4 +87,23 @@ python -m unittest discover -s tests -p test_conversation.py -v
 
 首次访问回归不预先注入任务管理器，分别以清空会话 RPC 和发送消息作为首次入口，使用脚本 worker 完成任务、写入历史并查询任务列表，确认只初始化一次。若首次操作出现 `NoneType` 的 `submit` 或 `session_mutation_guard` 错误，先检查 HeadlessApp.tasks 的延迟初始化，而非窗口状态。修复见 [#117](https://github.com/liukun158959-beep/tebb/issues/117)。
 
-失败时检查 error 与 change_state：`not_changed` 表示校验或忙碌拒绝；`unconfirmed` 表示选择/摘要持久化失败、文件结果未确认，选择失败会恢复内存 ID；`partial` 表示摘要已清理但历史未清理完成；`committed` 表示数据已更新但模型临时上下文或 GUI 刷新失败。按提示重新读取并核对后重试，不声称跨文件事务回滚。事实编辑、删除单句、手动压缩和整个 HeadlessApp 去继承不在本批范围。
+失败时检查 error 与 change_state：`not_changed` 表示校验或忙碌拒绝；`unconfirmed` 表示选择/摘要持久化失败、文件结果未确认，选择失败会恢复内存 ID；`partial` 表示摘要已清理但历史未清理完成；`committed` 表示数据已更新但模型临时上下文或 GUI 刷新失败。按提示重新读取并核对后重试，不声称跨文件事务回滚。记忆编辑的后续拆分见下一节；手动压缩和整个 HeadlessApp 去继承仍待后续处理。
+
+## 无 GUI 的记忆编辑服务验收
+
+在仓库根目录执行，使用临时用户目录、真实存储、脚本 worker 和故障注入，不请求真实模型或发送外部消息：
+
+```powershell
+python -m unittest tests.test_memory_editing -v
+python -m unittest tests.test_local_api.LocalApiTests.test_memory_editing_rpc_uses_service_and_preserves_task_boundaries tests.test_local_api.LocalApiTests.test_memory_delete_preserves_history_when_summary_invalidation_fails -v
+```
+
+入口是 `MemoryEditingService(chat_sessions)`，组合生产使用的 `ChatSessionService`，不要绕过其任务保护或创建另一份当前会话状态。在临时 `DESK_COMPANION_DATA_DIR` 中创建 `state.load_state(0, 0)`、`ConversationService(state)` 和带 `mutation_guard` 的会话服务，再创建编辑器；后台注入 `TaskManager.session_mutation_guard`，旧桌面复用自己的忙碌检查。
+
+4 个方法与 RPC 参数一致：`add_fact(text)`、`update_fact(fact_id, text)`、`delete_fact(fact_id)`、`delete_memory_turn(role, text)`。成功返回原记忆页快照的 `ok/total/fact_limit/facts/context/items`。事实全局共享，沿用 30 条、80 字、去重和来源规则；同正文更新保留原来源，实际改写变为用户来源并清空原话。共享助手回复期间拒绝编辑，独立任务运行期间允许；已有任务可能继续使用旧提示，之后的新一轮读取新值，后台工具仍可能随后更新事实。
+
+删除历史仅针对当前普通会话，去空白后同角色、同正文的重复记录一起删除；不存在时不改动。先使覆盖该句的摘要失效，再删除原文、清理助手临时上下文；未覆盖该句的摘要、其他会话、长期事实、笔记和任务记录保留。排队、执行、取消和终态后的收尾写回期间均拒绝删除，不自动取消，其他会话可继续。直接服务调用也按 WRITES、会话选择锁、任务条件锁的顺序保护，不能只依赖 RPC 层互斥。
+
+失败查看 `error/change_state`：`not_changed` 表示校验或忙碌拒绝；`unconfirmed` 表示事实写入或摘要失效等文件操作结果未确认，摘要失败尚未删除历史；`partial` 表示包含该句的摘要已失效，但历史删除未完成；`committed` 表示编辑已完成但记忆页读取或临时上下文清理失败。后两者不能当作“未修改”重复提交；先用 `load_memory/load_chat_log` 核对，需要时检查文件并恢复后重试。原存储没有跨文件事务，此处不承诺中断回滚。
+
+服务测试的子进程拒绝 GUI 导入并实际执行编辑；真实失败 worker 在终态后暂停最终写回，验证历史删除仍被阻止，事实编辑允许。认证 WebSocket 回归令旧 App 编辑方法报错，确保 RPC 直接调用独立服务，覆盖成功快照、忙碌/隔离、摘要故障和已保存但读取失败。该服务独立不代表整个 HeadlessApp 已去除 GUI 继承；实机、真实模型及发布包验证单独报告。对应 [#118](https://github.com/liukun158959-beep/tebb/issues/118)。

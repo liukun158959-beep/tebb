@@ -1,7 +1,8 @@
 """P1：本地 API 的无头 host。
 
 普通/知识问答委托 ConversationService；模型/人设 RPC 直接使用共享配置服务。
-普通会话与只读记忆 RPC 使用 ChatSessionService；其余数据方法仍保留 App 的继承兼容。
+普通会话与只读记忆 RPC 使用 ChatSessionService，记忆编辑使用 MemoryEditingService。
+手动压缩及其余数据方法仍保留 App 的继承兼容。
 这里仍有 GUI 类继承，任务 worker 直接使用共享服务，不导入此模块。
 """
 from __future__ import annotations

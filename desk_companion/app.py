@@ -23,6 +23,7 @@ from .assistant import spoken_answer
 from .assistant_settings import AssistantSettingsService
 from .conversation import ConversationService
 from .chat_sessions import ChatSessionService
+from .memory_editing import MemoryEditingService
 from .automation import AutomationScheduler
 from .board_workbench import BoardWorkbench
 from .bridge import Bridge
@@ -92,6 +93,7 @@ class App(BoardWorkbench):
         self.assistant_settings = AssistantSettingsService(self.conversation)
         self.automation = AutomationScheduler(self)
         self.chat_sessions = ChatSessionService(self.conversation, mutation_guard=self._session_mutation_guard)
+        self.memory_editing = MemoryEditingService(self.chat_sessions)
         self.bridge = Bridge(self, session_changed=None if headless else self._on_session_changed)
         self._queue: queue.Queue = queue.Queue()
         self.pet = None
@@ -369,51 +371,16 @@ class App(BoardWorkbench):
         return self.conversation.inject_prepared(current_text, exclude_user=exclude_user)
 
     def board_add_fact(self, text: str) -> dict:
-        from .facts import add_user_fact
-
-        if self._agent_running:
-            return {"ok": False, "error": "助手正在回复，等这句说完再改事实。"}
-        try:
-            add_user_fact(text)
-            return self.board_memory()
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.memory_editing.add_fact(text)
 
     def board_update_fact(self, fact_id: str, text: str) -> dict:
-        from .facts import update_user_fact
-
-        if self._agent_running:
-            return {"ok": False, "error": "助手正在回复，等这句说完再改事实。"}
-        try:
-            update_user_fact(fact_id, text)
-            return self.board_memory()
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.memory_editing.update_fact(fact_id, text)
 
     def board_drop_memory_turn(self, role: str, text: str) -> dict:
-        from .memory import drop_session_turn
-
-        if self._agent_running:
-            return {"ok": False, "error": "助手正在回复，等这句说完再改记忆。"}
-        try:
-            drop_session_turn(self.state.session_id, role, text)
-            from .context_pack import drop_pack_if_covered
-
-            drop_pack_if_covered(self.state.session_id, role, text)
-            return self.board_memory()
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.memory_editing.delete_memory_turn(role, text)
 
     def board_delete_fact(self, fact_id: str) -> dict:
-        from .facts import delete_user_fact
-
-        if self._agent_running:
-            return {"ok": False, "error": "助手正在回复，等这句说完再改事实。"}
-        try:
-            delete_user_fact(fact_id)
-            return self.board_memory()
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.memory_editing.delete_fact(fact_id)
 
     def load_today_board(self, refresh: bool = False) -> dict:
         from .board_data import load_today_snapshot

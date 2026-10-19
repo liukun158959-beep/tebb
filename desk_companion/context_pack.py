@@ -116,14 +116,16 @@ def drop_pack(session_id: str) -> None:
     _write_session(session_id, None)
 
 
-def drop_pack_if_covered(session_id: str, role: str, text: str) -> None:
+def drop_pack_if_covered(session_id: str, role: str, text: str) -> bool:
     """删掉的句子已经在摘要里时，整段摘要作废，避免模型还记得被删的话。"""
     pack = _read_session(session_id)
     if not pack:
-        return
+        return False
     body = text.strip()
     if any(item["role"] == role and item["text"] == body for item in pack["covered"]):
         _write_session(session_id, None)
+        return True
+    return False
 
 
 def _compress_manual(session_id: str, rows: list[dict], pack: dict | None, complete) -> list[dict]:

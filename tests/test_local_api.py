@@ -49,6 +49,90 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         self.service.close()
         await self.service.wait_closed()
 
+    async def test_memory_editing_rpc_uses_service_and_preserves_task_boundaries(self):
+        from contextlib import ExitStack
+        import threading
+        from desk_companion import context_pack, facts
+        from desk_companion.tasks import TaskManager
+        self.host.tasks.shutdown()
+        with patch.object(TaskManager, '_schedule', return_value=None):
+            manager = TaskManager(self.host)
+        self.host._tasks = manager
+        self.addCleanup(manager.shutdown)
+        sid = self.host.state.session_id
+        for role, text in (('user', 'remove me'), ('pet', 'old answer'),
+                           ('user', 'keep me'), ('pet', 'latest answer')):
+            memory.append_chat(role, text, sid)
+        memory.append_chat('user', 'remove me', 'other')
+        context_pack.prepare_injection(sid, 'system', '', exclude_user=None, manual=True,
+                                       complete=lambda _: 'summary contains remove me')
+
+        async def rpc(method, **args):
+            async with connect(self.url, proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', id=method, method=method, args=args)))
+                envelope = json.loads(await asyncio.wait_for(ws.recv(), 10))['result']
+            self.assertTrue(envelope['ok'], envelope)
+            return envelope['result']
+
+        with ExitStack() as stack:
+            for method in ('board_add_fact', 'board_update_fact', 'board_delete_fact',
+                           'board_drop_memory_turn', 'board_memory'):
+                stack.enter_context(patch.object(self.host, method, side_effect=AssertionError('inherited method')))
+            result = await rpc('add_fact', text='global fact')
+            self.assertTrue(result['ok'], result)
+            self.assertEqual(set(result), {'ok', 'total', 'fact_limit', 'facts', 'context', 'items'})
+            fact_id = result['facts'][0]['id']
+            task = manager.submit('pending', sid)
+            for status in ('queued', 'running', 'cancelling'):
+                manager.update(task, state=status)
+                rejected = await rpc('delete_memory_turn', role='user', text='remove me')
+                self.assertEqual(rejected['change_state'], 'not_changed')
+                self.assertTrue((await rpc('update_fact', fact_id=fact_id, text=status))['ok'])
+                self.assertEqual(manager.get(task)['state'], status)
+            manager.update(task, state='failed')
+            manager.active[task] = dict(session=sid, cancel=threading.Event())
+            try:
+                self.assertFalse((await rpc('delete_memory_turn', role='user', text='remove me'))['ok'])
+                self.assertTrue((await rpc('delete_fact', fact_id=fact_id))['ok'])
+            finally:
+                manager.active.pop(task)
+            other = manager.submit('unrelated', 'other')
+            self.host.conversation.running = True
+            for method, args in (('add_fact', dict(text='busy')), ('update_fact', dict(fact_id=fact_id, text='busy')),
+                                 ('delete_fact', dict(fact_id=fact_id)),
+                                 ('delete_memory_turn', dict(role='user', text='remove me'))):
+                self.assertFalse((await rpc(method, **args))['ok'])
+            self.host.conversation.running = False
+            result = await rpc('delete_memory_turn', role='user', text='remove me')
+            self.assertTrue(result['ok'], result)
+            self.assertEqual(result['total'], 3)
+            self.assertEqual(result['context']['summary'], '')
+            self.assertEqual(memory.list_chat('other')[0]['text'], 'remove me')
+            self.assertEqual(manager.get(other)['state'], 'queued')
+            self.assertEqual(len(manager.list()['items']), 2)
+            with patch.object(self.host.chat_sessions, 'load_memory', return_value=dict(ok=False, error='snapshot failed')):
+                result = await rpc('add_fact', text='saved despite snapshot failure')
+            self.assertEqual(result['change_state'], 'committed')
+            self.assertEqual(facts.read_facts()[0]['text'], 'saved despite snapshot failure')
+
+    async def test_memory_delete_preserves_history_when_summary_invalidation_fails(self):
+        from desk_companion import context_pack
+        sid = self.host.state.session_id
+        for role, text in (('user', 'remove me'), ('pet', 'old answer'),
+                           ('user', 'latest question'), ('pet', 'latest answer')):
+            memory.append_chat(role, text, sid)
+        context_pack.prepare_injection(sid, 'system', '', exclude_user=None, manual=True,
+                                       complete=lambda _: 'summary contains remove me')
+        before = memory.list_chat(sid)
+        with patch.object(context_pack, 'drop_pack_if_covered', side_effect=OSError('summary write failed')):
+            async with connect(self.url, proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', id='delete', method='delete_memory_turn',
+                                              args=dict(role='user', text='remove me'))))
+                result = json.loads(await asyncio.wait_for(ws.recv(), 10))['result']['result']
+        self.assertFalse(result['ok'])
+        self.assertEqual(memory.list_chat(sid), before)
+        self.assertEqual(result['change_state'], 'unconfirmed')
+
     async def test_first_access_initializes_tasks_for_rpc_and_chat(self):
         from desk_companion.tasks import TaskManager
         command = [sys.executable, '-u', '-c', "exec(open('tests/worker_fixture.py', encoding='utf-8').read())"]

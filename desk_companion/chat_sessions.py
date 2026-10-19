@@ -27,13 +27,22 @@ class ChatSessionService:
         with self._lock:
             yield self.state.session_id
 
+    @contextmanager
+    def mutable_session(self):
+        """Pin an idle session through its mutation, including worker tail protection.
+
+        Shared storage writers must acquire WRITES before entering this guard.
+        """
+        with self._lock, self._mutation_guard(self.state.session_id):
+            if self.conversation.running:
+                raise RuntimeError('助手正在回复，等待完成或停止后再修改会话。')
+            yield self.state.session_id
+
     def _change(self, operation, action):
         # Shared writers also read snapshots: always take WRITES before our lock.
-        with (WRITES if operation == 'clear' else nullcontext()), self._lock:
+        with (WRITES if operation == 'clear' else nullcontext()):
             try:
-                with self._mutation_guard(self.state.session_id):
-                    if self.conversation.running:
-                        raise RuntimeError('助手正在回复，等待完成或停止后再修改会话。')
+                with self.mutable_session():
                     return action()
             except Exception as exc:
                 return dict(ok=False, change_state='not_changed', error=str(exc))
