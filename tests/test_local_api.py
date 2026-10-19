@@ -135,6 +135,39 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result['has_password'])
             self.assertEqual((await rpc('load_model_network'))['proxy_url'], 'http://localhost:7890')
 
+    async def test_legacy_save_rpc_preserves_invalid_config_and_reports_saved_initialization_failure(self):
+        from desk_companion import envconf
+        envconf.write_llm_env(api_key='PRIVATE_RPC_KEY', base_url='https://example.invalid/v1', model='before')
+        before_env = envconf.env_path().read_bytes()
+        before_state = state.state_path().read_bytes()
+
+        async def save(payload):
+            async with connect(self.url, proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', id='save', method='save_model', args={'payload': payload})))
+                message = json.loads(await asyncio.wait_for(ws.recv(), 10))
+            self.assertTrue(message['result']['ok'], message)
+            self.assertNotIn('PRIVATE_RPC_KEY', json.dumps(message))
+            return message['result']['result']
+
+        payload = dict(base_url='https://example.invalid/v1', model='after',
+                       input_cny_per_mtok=1, output_cny_per_mtok=2)
+        with patch.object(self.host.conversation, 'rebuild_agent', side_effect=RuntimeError('fixture init error')) as rebuild:
+            for change in ({'output_cny_per_mtok': None}, {'input_cny_per_mtok': float('nan')}):
+                result = await save({**payload, **change})
+                self.assertFalse(result['ok'])
+                self.assertEqual(result['save_state'], 'not_saved')
+                self.assertEqual(envconf.env_path().read_bytes(), before_env)
+                self.assertEqual(state.state_path().read_bytes(), before_state)
+                self.assertEqual(self.host.state.model_prices, {})
+            rebuild.assert_not_called()
+            result = await save(payload)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['save_state'], 'saved')
+        self.assertIn('已保存', result['error'])
+        self.assertIn('初始化失败', result['error'])
+        self.assertEqual(envconf.public_llm_env()['model'], 'after')
+        self.assertEqual(state.load_state(0, 0).model_prices['after']['output_cny_per_mtok'], 2.0)
+
     async def test_manual_update_check_rpc_is_available_while_chat_lock_is_held(self):
         with patch("desk_companion.release_info.check_updates", return_value={"ok": True, "latest_version": "0.3.0"}):
             with self.host.turn_lock:

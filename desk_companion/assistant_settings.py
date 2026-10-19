@@ -1,10 +1,11 @@
 """Model and persona settings shared by desktop and RPC; no window dependencies."""
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 from .assistant import TOOL_CONTRACT, list_providers
-from .envconf import parse_env_file, public_llm_env, write_llm_env
+from .envconf import parse_env_file, public_llm_env, validate_llm_env, write_llm_env
 
 if TYPE_CHECKING:
     from .conversation import ConversationService
@@ -123,7 +124,7 @@ class AssistantSettingsService:
 
     def save_model(self, payload: dict) -> dict:
         if not isinstance(payload, dict):
-            return {"ok": False, "error": "模型保存参数必须是对象。"}
+            return {"ok": False, "save_state": "not_saved", "error": "模型保存参数必须是对象。"}
         try:
             if self.conversation.running:
                 raise RuntimeError("助手正在回复，等这句说完再保存。")
@@ -132,7 +133,7 @@ class AssistantSettingsService:
             api_key = str(payload.get("api_key") or "").strip()
             if not api_key:
                 api_key = parse_env_file().get("ATLAS_API_KEY") or ""
-            write_llm_env(api_key=api_key, base_url=base_url, model=model)
+            connection = validate_llm_env(api_key=api_key, base_url=base_url, model=model)
             prices = dict(self.state.model_prices)
             inn_raw = payload.get("input_cny_per_mtok")
             out_raw = payload.get("output_cny_per_mtok")
@@ -142,20 +143,42 @@ class AssistantSettingsService:
             else:
                 if inn_raw in (None, "") or out_raw in (None, ""):
                     raise RuntimeError("输入、输出单价要一起填，或都留空。")
-                inn = float(inn_raw)
-                outv = float(out_raw)
-                if inn < 0 or outv < 0:
-                    raise RuntimeError("单价不能为负。")
+                try:
+                    if isinstance(inn_raw, bool) or isinstance(out_raw, bool):
+                        raise ValueError
+                    inn, outv = float(inn_raw), float(out_raw)
+                except (TypeError, ValueError, OverflowError):
+                    raise RuntimeError("单价必须是有限的非负数字。") from None
+                if not all(math.isfinite(value) and value >= 0 for value in (inn, outv)):
+                    raise RuntimeError("单价必须是有限的非负数字。")
                 prices[model] = {
                     "input_cny_per_mtok": inn,
                     "output_cny_per_mtok": outv,
                 }
-            self.state.model_prices = prices
-            self.state.save()
-            self.conversation.rebuild_agent()
-            return {"ok": True, "message": "模型配置已保存。"}
         except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+            return {"ok": False, "save_state": "not_saved", "error": str(exc)}
+
+        try:
+            write_llm_env(**connection)
+        except Exception as exc:
+            return {"ok": False, "save_state": "unconfirmed",
+                    "error": f"模型连接配置写入失败，保存结果未确认：{exc}。请重新打开设置核对后重试。"}
+
+        previous_prices = self.state.model_prices
+        self.state.model_prices = prices
+        try:
+            self.state.save()
+        except Exception as exc:
+            self.state.model_prices = previous_prices
+            return {"ok": False, "save_state": "partial",
+                    "error": f"模型连接配置已写入，但价格配置保存未完成：{exc}。请重新打开设置核对后重试。"}
+
+        try:
+            self.conversation.rebuild_agent()
+        except Exception as exc:
+            return {"ok": False, "save_state": "saved",
+                    "error": f"模型配置已保存，但助手初始化失败：{exc}。请检查配置后重试。"}
+        return {"ok": True, "save_state": "saved", "message": "模型配置已保存。"}
 
     def test_model(self, payload: dict) -> dict:
         if not isinstance(payload, dict):

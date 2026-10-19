@@ -51,6 +51,7 @@ python -m unittest discover -s tests -p test_tasks.py -v
 ```powershell
 python -m unittest discover -s tests -p test_assistant_settings.py -v
 python -m unittest tests.test_local_api.LocalApiTests.test_settings_rpc_calls_independent_service_and_preserves_contracts -v
+python -m unittest tests.test_local_api.LocalApiTests.test_legacy_save_rpc_preserves_invalid_config_and_reports_saved_initialization_failure -v
 python -m unittest discover -s tests -p test_model_network.py -v
 python -m unittest discover -s tests -p test_persona_migration.py -v
 ```
@@ -61,4 +62,8 @@ python -m unittest discover -s tests -p test_persona_migration.py -v
 
 测试用临时用户目录、假 Agent 与真实 OpenAI SDK 的 MockTransport，拒绝真实模型请求；覆盖参数校验、保存后重建/绑定、忙碌限制、Key 复用及隐藏、20 秒连接测试策略、失败时序与客户端回收。子进程在导入服务前拦截 App、HeadlessApp、Bridge、窗口、托盘和 WebView，实际运行配置操作；WebSocket 测试则经过真实本地认证和双层 `ok` 包装，并让旧 App 配置方法报错，确认 RPC 已直接使用服务。
 
-若出现 `GUI import forbidden`，检查配置服务是否反向依赖窗口或 Host；若保存或切换失败，区分校验、持久化与 Agent 重建/绑定错误。旧保存接口并非事务性写入，尤其价格校验失败可能已写 .env，见 [#115](https://github.com/liukun158959-beep/tebb/issues/115)。此处保留原有错误时序，不将失败误报为已回滚。整个 HeadlessApp 仍有其他 GUI 继承，真实 GUI、模型和发布包验收单独报告。
+`save_model` 在写入前完成连接参数和价格校验；价格必须成对填写或都留空，填写时须为有限的非负数字，拒绝布尔值、NaN 和无穷大。输入无效时，配置文件、内存价格和 Agent 均不改变。原有注释、其它环境变量和空 Key 复用规则保持兼容。
+
+保存结果通过 `ok`、`error` / `message` 及 `save_state` 判断：`not_saved` 表示校验拒绝、未开始写入；`unconfirmed` 表示连接配置写入失败、文件结果未确认；`partial` 表示连接已写入但价格持久化未完成，内存价格恢复为原值；`saved` 表示两份配置均保存成功，即使之后助手初始化失败也不声称未保存。初始化失败仍返回 `ok: false`，错误明确提示“配置已保存，但助手初始化失败”，检查配置后重试即可。旧桌面沿用原错误展示，无需新增界面流程。此修复见 [#115](https://github.com/liukun158959-beep/tebb/issues/115)。
+
+若出现 `GUI import forbidden`，检查配置服务是否反向依赖窗口或 Host。若为 `unconfirmed` / `partial`，重新打开设置核对配置后重试；这里不提供跨文件事务，也不声称写入中断已自动回滚。回归使用临时数据和模拟文件写入故障，覆盖无 GUI 服务和真实本地 WebSocket。整个 HeadlessApp 仍有其他 GUI 继承，真实 GUI、模型和发布包验收单独报告。

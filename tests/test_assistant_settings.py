@@ -142,6 +142,80 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(self.service.save_model(dict(base_url='https://example.invalid/v1', model='legacy'))['ok'])
         self.assertNotIn('legacy', state.load_state(0, 0).model_prices)
 
+    def test_invalid_legacy_model_save_never_changes_files_state_or_agent(self):
+        self.first_model()
+        self.conversation.bind_active_llm.reset_mock()
+        self.state.model_prices = {'one': dict(input_cny_per_mtok=1, output_cny_per_mtok=2)}
+        self.state.save()
+        prices = self.state.model_prices
+        agent = Mock()
+        self.conversation.agent = agent
+        before = self.snapshot()
+        base = dict(base_url='https://new.invalid/v1', model='changed', api_key='PRIVATE_REPLACEMENT_KEY',
+                    input_cny_per_mtok=3, output_cny_per_mtok=4)
+        invalid = [None, [], {'input_cny_per_mtok': None}, {'output_cny_per_mtok': ''},
+                   {'input_cny_per_mtok': -1}, {'input_cny_per_mtok': 'bad'},
+                   {'input_cny_per_mtok': True}, {'output_cny_per_mtok': {}},
+                   {'input_cny_per_mtok': float('nan')}, {'output_cny_per_mtok': float('inf')},
+                   {'input_cny_per_mtok': '1e309'}, {'base_url': 'not-a-url'},
+                   {'base_url': 'https://new.invalid/v1?key=private'}, {'model': ''},
+                   {'api_key': 'PRIVATE_REPLACEMENT_KEY\nNEW_SETTING=changed'}]
+        for change in invalid:
+            payload = {**base, **change} if isinstance(change, dict) else change
+            with self.subTest(change=change):
+                result = self.service.save_model(payload)
+                self.assertFalse(result['ok'], result)
+                self.assertNotIn('PRIVATE_REPLACEMENT_KEY', json.dumps(result))
+                self.assertEqual(self.snapshot(), before)
+                self.assertIs(self.state.model_prices, prices)
+                self.assertIs(self.conversation.agent, agent)
+                self.assertEqual(result['save_state'], 'not_saved')
+        self.conversation.rebuild_agent.assert_not_called()
+        self.conversation.bind_active_llm.assert_not_called()
+
+    def test_legacy_save_reports_saved_when_real_agent_initialization_fails(self):
+        self.first_model()
+        self.conversation.rebuild_agent.side_effect = lambda: ConversationService.rebuild_agent(self.conversation)
+        payload = dict(base_url='https://example.invalid/v1', model='changed',
+                       input_cny_per_mtok=3, output_cny_per_mtok=4)
+        with patch('desk_companion.assistant.build_agent', side_effect=RuntimeError('fixture initialization failure')):
+            result = self.service.save_model(payload)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['save_state'], 'saved')
+        self.assertIn('模型配置已保存', result['error'])
+        self.assertIn('初始化失败', result['error'])
+        self.assertEqual(envconf.public_llm_env()['model'], 'changed')
+        self.assertEqual(state.load_state(0, 0).model_prices['changed']['input_cny_per_mtok'], 3.0)
+        self.assertIsNone(self.conversation.agent)
+        self.assertEqual(self.conversation.agent_error, 'fixture initialization failure')
+        with patch('desk_companion.assistant.build_agent', return_value=Mock()) as build:
+            self.assertTrue(self.service.save_model(payload)['ok'])
+            build.assert_called_once()
+        self.assertEqual(self.conversation.agent_error, '')
+
+    def test_legacy_save_reports_write_uncertainty_and_partial_price_save(self):
+        self.first_model()
+        before = self.snapshot()
+        prices = self.state.model_prices
+        payload = dict(base_url='https://example.invalid/v1', model='changed',
+                       input_cny_per_mtok=3, output_cny_per_mtok=4)
+        with patch('desk_companion.assistant_settings.write_llm_env', side_effect=OSError('fixture write failure')):
+            result = self.service.save_model(payload)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['save_state'], 'unconfirmed')
+        self.assertIn('保存结果未确认', result['error'])
+        self.assertEqual(self.snapshot(), before)
+        with patch.object(self.state, 'save', side_effect=OSError('fixture state failure')):
+            result = self.service.save_model(payload)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['save_state'], 'partial')
+        self.assertIn('连接配置已写入', result['error'])
+        self.assertIn('价格配置保存未完成', result['error'])
+        self.assertEqual(envconf.public_llm_env()['model'], 'changed')
+        self.assertEqual(state.state_path().read_bytes(), before[state.state_path().name])
+        self.assertIs(self.state.model_prices, prices)
+        self.conversation.rebuild_agent.assert_not_called()
+
     def test_model_test_uses_saved_keys_and_closes_offline_clients_without_saving(self):
         one = self.first_model()
         before = self.snapshot()

@@ -52,7 +52,8 @@ def require_llm_env() -> dict[str, str]:
     return {key: data[key] for key in LLM_KEYS}
 
 
-def write_llm_env(*, api_key: str, base_url: str, model: str) -> None:
+def validate_llm_env(*, api_key: str, base_url: str, model: str) -> dict[str, str]:
+    """Normalize and validate connection fields without writing configuration."""
     from .model_validation import validate_base_url
     api_key = (api_key or "").strip()
     base_url = (base_url or "").strip()
@@ -68,10 +69,15 @@ def write_llm_env(*, api_key: str, base_url: str, model: str) -> None:
     ):
         raise RuntimeError("配置不能包含换行。")
     base_url = validate_base_url(base_url)
+    return {"api_key": api_key, "base_url": base_url, "model": model}
+
+
+def write_llm_env(*, api_key: str, base_url: str, model: str) -> None:
+    values = validate_llm_env(api_key=api_key, base_url=base_url, model=model)
     lines = [
-        f"ATLAS_API_KEY={api_key}",
-        f"ATLAS_BASE_URL={base_url}",
-        f"ATLAS_MODEL={model}",
+        f"ATLAS_API_KEY={values['api_key']}",
+        f"ATLAS_BASE_URL={values['base_url']}",
+        f"ATLAS_MODEL={values['model']}",
     ]
     path = env_path()
     preserved = []
