@@ -297,6 +297,15 @@ class NotebookDesktopCompatibilityTests(NotebookFixture):
         self.assertTrue(bridge.load_notebook()['ok'])
         app.pet.busy = False
         self.assertTrue(app.board_delete_notebook_note(sid, saved['note_id'])['ok'])
+        from unittest.mock import Mock
+        app.notebooks.platform = Mock()
+        app.notebooks._create_document = Mock(return_value=dict(ok=True, url='https://example.invalid/doc'))
+        nid = self.save(sid)
+        path = Path(app.board_export_notebook_markdown(sid, nid)['path'])
+        self.assertTrue(app.board_open_notebook_file(sid, nid, path.name)['ok'])
+        self.assertTrue(app.board_reveal_notebook_file(sid, nid, path.name)['ok'])
+        self.assertTrue(app.board_export_notebook_feishu(sid, nid)['ok'])
+        self.assertTrue(app.board_delete_notebook_file(sid, nid, path.name)['ok'])
 
 
 if __name__ == '__main__':

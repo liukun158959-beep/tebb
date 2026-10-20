@@ -387,22 +387,22 @@ class Bridge:
         return self._host.notebooks.delete_notebook_note(session_id, note_id)
 
     def export_notebook_markdown(self, session_id: str, note_id: str) -> dict:
-        return self._host.board_export_notebook_markdown(session_id, note_id)
+        return self._host.notebooks.export_notebook_markdown(session_id, note_id)
 
     def export_notebook_feishu(self, session_id: str, note_id: str) -> dict:
-        return self._host.board_export_notebook_feishu(session_id, note_id)
+        return self._host.notebooks.export_notebook_feishu(session_id, note_id)
 
     def summarize_notebook(self, session_id: str, note_ids: list, sampling: dict) -> dict:
         return self._host.board_summarize_notebook(session_id, note_ids, sampling)
 
     def open_notebook_file(self, session_id: str, note_id: str, name: str) -> dict:
-        return self._host.board_open_notebook_file(session_id, note_id, name)
+        return self._host.notebooks.open_notebook_file(session_id, note_id, name)
 
     def reveal_notebook_file(self, session_id: str, note_id: str, name: str) -> dict:
-        return self._host.board_reveal_notebook_file(session_id, note_id, name)
+        return self._host.notebooks.reveal_notebook_file(session_id, note_id, name)
 
     def delete_notebook_file(self, session_id: str, note_id: str, name: str) -> dict:
-        return self._host.board_delete_notebook_file(session_id, note_id, name)
+        return self._host.notebooks.delete_notebook_file(session_id, note_id, name)
 
     def list_mcp_tools(self) -> dict:
         return self._host.list_mcp_tools()

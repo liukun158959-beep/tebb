@@ -47,7 +47,7 @@ flowchart TD
 | 普通会话管理 | `chat_sessions.py` | 选择、新建、清空、历史和只读记忆快照，复用任务收尾保护与既有存储 |
 | 记忆编辑 | `memory_editing.py` | 长期事实增删改、单会话历史删除与摘要失效，区分两者的并发范围 |
 | 手动上下文压缩 | `context_compression.py` | 同步压缩生命周期、会话预留与分阶段保存，模型等待不持有全局锁 |
-| 笔记基础服务 | `notebook_service.py`、`notebook.py` | 读取、新建、保存、删除；忙碌准入、跨进程存储及分阶段失败回执 |
+| 笔记与生成文件服务 | `notebook_service.py`、`notebook.py`、`notebook_platform.py` | 基础读写、导出、生成文件打开/定位/删除；忙碌准入、跨进程存储及分阶段失败回执，外部操作通过适配器注入 |
 | 任务可靠性 | `tasks.py`、`task_worker.py`、`task_process.py` | 排队、独立执行、超时、进程回收与恢复 |
 | 知识与记忆 | `knowledge.py`、`context_pack.py`、`facts.py` | 文档切分、检索重排、上下文压缩与可追溯事实 |
 | 视频分析 | `video.py`、`video_analysis.py`、`video_archive.py` | 字幕、分段检查点、学习笔记及归档回执 |

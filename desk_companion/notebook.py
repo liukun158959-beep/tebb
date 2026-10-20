@@ -204,26 +204,41 @@ def note_document(session_id: str, note_id: str) -> dict:
 
 
 def write_note_markdown(session_id: str, note_id: str) -> dict:
+    steps = dict(cleanup='not_started', generation='not_started', registration='not_started', refresh='not_started')
+    removed = []
     with _LOCK:
         book = _read()
         session = _find(book, session_id)
         note = _find_note(session, note_id)
         title, body = _markdown(note)
         folder = _notes_dir()
-        folder.mkdir(parents=True, exist_ok=True)
         name = _filename(title, note["id"])
         path = folder / name
-        for old in note["files"]:
-            old_path = Path(old["path"])
-            if old_path.is_file() and old_path.resolve() != path.resolve():
-                old_path.unlink()
-        path.write_text(body + "\n", encoding="utf-8")
-        note["files"] = [{"name": path.name, "path": str(path.resolve()), "saved": _now()}]
-        session["updated"] = _now()
-        _write(book)
+        stage = 'cleanup'
+        try:
+            removed = _unlink_files([old for old in note['files'] if Path(old['path']).resolve() != path.resolve()])
+            steps[stage] = 'confirmed'
+            stage = 'generation'
+            folder.mkdir(parents=True, exist_ok=True)
+            path.write_text(body + "\n", encoding="utf-8")
+            steps[stage] = 'confirmed'
+            stage = 'registration'
+            note["files"] = [{"name": path.name, "path": str(path.resolve()), "saved": _now()}]
+            session["updated"] = _now()
+            _write(book)
+            steps[stage] = 'confirmed'
+        except Exception as exc:
+            if isinstance(exc, NotebookChangeError):
+                removed = exc.details.get('removed_files', removed)
+            raise _file_change_failure(exc, stage, steps, path, session_id, note_id, removed) from exc
         written = str(path.resolve())
-    page = load_notebook()
+    try:
+        page = load_notebook()
+    except Exception as exc:
+        raise _file_change_failure(exc, 'refresh', steps, path, session_id, note_id, removed) from exc
+    steps['refresh'] = 'confirmed'
     page["path"] = written
+    page['steps'] = steps
     page["message"] = "已生成 Markdown，记在这条笔记下面。"
     return page
 
@@ -240,21 +255,53 @@ def notebook_file(session_id: str, note_id: str, name: str) -> dict:
 
 
 def delete_note_file(session_id: str, note_id: str, name: str) -> dict:
+    steps = dict(deletion='not_started', registration='not_started', refresh='not_started')
+    removed = []
     with _LOCK:
         book = _read()
         session = _find(book, session_id)
         note = _find_note(session, note_id)
         found = _file_named(note, name)
         path = Path(found["path"])
-        gone = not path.is_file()
-        if not gone:
-            path.unlink()
-        note["files"] = [item for item in note["files"] if item["name"] != found["name"]]
-        session["updated"] = _now()
-        _write(book)
-    page = load_notebook()
+        stage = 'deletion'
+        try:
+            gone = not path.is_file()
+            if not gone:
+                path.unlink()
+                removed.append(found['name'])
+            steps[stage] = 'already_missing' if gone else 'confirmed'
+            stage = 'registration'
+            note["files"] = [item for item in note["files"] if item["name"] != found["name"]]
+            session["updated"] = _now()
+            _write(book)
+            steps[stage] = 'confirmed'
+        except Exception as exc:
+            raise _file_change_failure(exc, stage, steps, path, session_id, note_id, removed) from exc
+    try:
+        page = load_notebook()
+    except Exception as exc:
+        raise _file_change_failure(exc, 'refresh', steps, path, session_id, note_id, removed) from exc
+    steps['refresh'] = 'confirmed'
+    page.update(path=str(path), steps=steps)
     page["message"] = "文件已经不在，已从列表去掉。" if gone else "已删除 Markdown 文件。"
     return page
+
+
+def _file_change_failure(exc, stage, steps, path, session_id, note_id, removed):
+    state = 'committed' if stage == 'refresh' else 'partial' if stage == 'cleanup' else 'unconfirmed'
+    failed = dict(steps, **{stage: 'failed' if stage == 'refresh' else 'unconfirmed'})
+    status = {
+        'cleanup': '旧生成文件清理未完成，笔记登记仍保留，可能已有部分文件删除',
+        'generation': 'Markdown 生成结果未确认，笔记登记仍保留',
+        'deletion': '文件删除结果未确认，笔记登记仍保留',
+        'registration': '文件处理已完成，但笔记文件登记保存结果未确认',
+        'refresh': '文件及登记操作已完成，但读取笔记页失败',
+    }[stage]
+    return NotebookChangeError(
+        f'{status}：{exc}。路径：{path}。请重新读取并核对文件，不要直接重复操作；已删除文件不会恢复。',
+        change_state=state, stage=stage, steps=failed, path=str(path),
+        session_id=session_id, note_id=note_id, removed_files=list(removed),
+    )
 
 
 def _read() -> dict:
@@ -459,9 +506,11 @@ def _file_named(note: dict, name: str) -> dict:
     target = (name or "").strip()
     if not target:
         raise RuntimeError("文件名是空的。")
-    for item in note["files"]:
-        if item["name"] == target:
-            return item
+    matches = [item for item in note['files'] if item['name'] == target]
+    if len(matches) > 1:
+        raise RuntimeError('这条笔记的生成文件名重复，无法确定目标。请先核对笔记记录。')
+    if matches:
+        return matches[0]
     raise RuntimeError("这条笔记下面没有这个文件。恢复：重新生成。")
 
 

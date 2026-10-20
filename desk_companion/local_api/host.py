@@ -2,8 +2,8 @@
 
 普通/知识问答委托 ConversationService；模型/人设 RPC 直接使用共享配置服务。
 普通会话与只读记忆 RPC 使用 ChatSessionService，记忆编辑使用 MemoryEditingService。
-手动压缩使用 ContextCompressionService；笔记基础 RPC 使用 NotebookService。
-看板、笔记问答及导出等方法仍保留宿主兼容。
+手动压缩使用 ContextCompressionService；笔记基础、导出及文件 RPC 使用 NotebookService。
+看板、笔记问答及汇总等方法仍保留宿主兼容。
 这里仍有 GUI 类继承，任务 worker 直接使用共享服务，不导入此模块。
 """
 from __future__ import annotations
@@ -209,36 +209,6 @@ class HeadlessApp(App):
             llm.on_reasoning = None
             self._agent_running = False
 
-    def board_export_notebook_markdown(self, session_id: str, note_id: str) -> dict:
-        def run() -> dict:
-            from ..notebook import write_note_markdown
-
-            saved = write_note_markdown(session_id, note_id)
-            try:
-                os.startfile(saved["path"])
-            except OSError:
-                saved["ok"] = False
-                saved["error"] = f"文件已记在这条笔记下：{saved['path']}，但没有打开。恢复：点「打开」。"
-                return saved
-            return saved
-
-        return self._knowledge_call(run)
-
-    def board_export_notebook_feishu(self, session_id: str, note_id: str) -> dict:
-        def run() -> dict:
-            from ..feishu_auth import create_markdown_doc
-            from ..notebook import note_document
-
-            doc = note_document(session_id, note_id)
-            created = create_markdown_doc(doc["title"], doc["markdown"])
-            try:
-                os.startfile(created["url"])
-            except OSError as exc:
-                raise RuntimeError(f"飞书文档已创建：{created['url']}，但没有打开。恢复：复制链接到浏览器。") from exc
-            return {"ok": True, "url": created["url"], "message": "已生成飞书文档，并打开了链接。"}
-
-        return self._knowledge_call(run)
-
     def board_summarize_notebook(self, session_id: str, note_ids: list, sampling: dict) -> dict:
         def run() -> dict:
             import re
@@ -312,33 +282,6 @@ class HeadlessApp(App):
             return saved
 
         return self._knowledge_call(run)
-
-    def board_open_notebook_file(self, session_id: str, note_id: str, name: str) -> dict:
-        def run() -> dict:
-            from ..notebook import notebook_file
-
-            found = notebook_file(session_id, note_id, name)
-            os.startfile(found["path"])
-            return {"ok": True, "message": "已打开 Markdown 文件。"}
-
-        return self._knowledge_call(run)
-
-    def board_reveal_notebook_file(self, session_id: str, note_id: str, name: str) -> dict:
-        def run() -> dict:
-            import subprocess
-
-            from ..notebook import notebook_file
-
-            found = notebook_file(session_id, note_id, name)
-            subprocess.Popen(["explorer", f"/select,{found['path']}"])
-            return {"ok": True, "message": "已在文件夹中定位这个文件。"}
-
-        return self._knowledge_call(run)
-
-    def board_delete_notebook_file(self, session_id: str, note_id: str, name: str) -> dict:
-        from ..notebook import delete_note_file
-
-        return self._knowledge_call(lambda: delete_note_file(session_id, note_id, name))
 
     def _knowledge_call(self, fn):
         if self._agent_running:

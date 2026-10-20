@@ -174,6 +174,8 @@ def _dispatch(method: str, args: dict, preview=False) -> dict:
                 return target(**kwargs)
         if method.startswith("terminal_") or method in {"compress_context", "load_chat_log", "load_memory",
                       "load_notebook", "new_notebook", "save_notebook_note", "delete_notebook_note",
+                      "export_notebook_markdown", "export_notebook_feishu", "open_notebook_file",
+                      "reveal_notebook_file", "delete_notebook_file",
                       "load_collaboration", "collaboration_action", "project_workspace", "check_updates", "list_agent_tasks", "get_agent_task", "cancel_agent_task", "continue_agent_task", "save_agent_task_settings", "load_task_progress",
                       "list_debug_calls", "get_debug_call", "set_debug_recording", "explain_debug_call",
                       "load_model_network", "save_model_network",
@@ -189,7 +191,7 @@ def _dispatch(method: str, args: dict, preview=False) -> dict:
             # 桌面数据操作仍串行；Agent 的共享写入也与界面修改互斥。
             with HOST.turn_lock:
                 mutating = {"add_fact", "update_fact", "delete_fact", "delete_memory_turn", "clear_chat",
-                            "write_today_summary_doc", "write_week_review_doc", "export_notebook_feishu"}
+                            "write_today_summary_doc", "write_week_review_doc"}
                 if method in mutating:
                     from ..resource_lock import WRITES
                     with WRITES:

@@ -380,6 +380,21 @@ class App(BoardWorkbench):
     def board_delete_notebook_note(self, session_id: str, note_id: str) -> dict:
         return self.notebooks.delete_notebook_note(session_id, note_id)
 
+    def board_export_notebook_markdown(self, session_id: str, note_id: str) -> dict:
+        return self.notebooks.export_notebook_markdown(session_id, note_id)
+
+    def board_export_notebook_feishu(self, session_id: str, note_id: str) -> dict:
+        return self.notebooks.export_notebook_feishu(session_id, note_id)
+
+    def board_open_notebook_file(self, session_id: str, note_id: str, name: str) -> dict:
+        return self.notebooks.open_notebook_file(session_id, note_id, name)
+
+    def board_reveal_notebook_file(self, session_id: str, note_id: str, name: str) -> dict:
+        return self.notebooks.reveal_notebook_file(session_id, note_id, name)
+
+    def board_delete_notebook_file(self, session_id: str, note_id: str, name: str) -> dict:
+        return self.notebooks.delete_notebook_file(session_id, note_id, name)
+
     def prepare_context(
         self,
         current_text: str,

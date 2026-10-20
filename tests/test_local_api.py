@@ -49,10 +49,10 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         self.service.close()
         await self.service.wait_closed()
 
-    async def notebook_rpc(self, method, **args):
+    async def notebook_rpc(self, method, _timeout=5, **args):
         async with connect(self.url, proxy=None) as ws:
             await ws.send(json.dumps(dict(type='rpc', id=method, method=method, args=args)))
-            frame = json.loads(await asyncio.wait_for(ws.recv(), 5))
+            frame = json.loads(await asyncio.wait_for(ws.recv(), _timeout))
         self.assertEqual(frame['id'], method)
         self.assertTrue(frame['result']['ok'], frame)
         return frame['result']['result']
@@ -123,7 +123,12 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
                             self.assertTrue((await self.notebook_rpc('load_notebook'))['ok'])
                             for method, args in [('new_notebook', {}),
                                     ('save_notebook_note', dict(session_id=sid, question='no', answer='no', cites=cites)),
-                                    ('delete_notebook_note', dict(session_id=sid, note_id=nid))]:
+                                    ('delete_notebook_note', dict(session_id=sid, note_id=nid)),
+                                    ('export_notebook_markdown', dict(session_id=sid, note_id=nid)),
+                                    ('export_notebook_feishu', dict(session_id=sid, note_id=nid)),
+                                    ('open_notebook_file', dict(session_id=sid, note_id=nid, name='unused.md')),
+                                    ('reveal_notebook_file', dict(session_id=sid, note_id=nid, name='unused.md')),
+                                    ('delete_notebook_file', dict(session_id=sid, note_id=nid, name='unused.md'))]:
                                 result = await self.notebook_rpc(method, **args)
                                 self.assertFalse(result['ok'], result)
                                 self.assertEqual(result['change_state'], 'not_changed')
@@ -150,6 +155,105 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(book['sessions'][0]['notes']), 2)  # Saved note and summary only.
             self.assertEqual(len(book['sessions'][0]['turns']), 2)
             self.assertEqual(self.host.state.session_id, original_session)
+
+    async def test_notebook_output_rpc_success_partial_failure_and_authentication(self):
+        from contextlib import ExitStack
+        from desk_companion import knowledge, notebook
+        from websockets.exceptions import ConnectionClosed
+        cites = [dict(n=1, doc='source', title='section', text='original', doc_id='doc-1')]
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(knowledge, 'public_view', return_value=dict(docs=[])))
+            launch = stack.enter_context(patch('os.startfile'))
+            reveal = stack.enter_context(patch('subprocess.Popen'))
+            create = stack.enter_context(patch('desk_companion.feishu_auth.create_markdown_doc',
+                return_value=dict(ok=True, url='https://example.invalid/doc', document_id='cloud-1')))
+            sid = (await self.notebook_rpc('new_notebook'))['session_id']
+            nid = (await self.notebook_rpc('save_notebook_note', session_id=sid,
+                question='question', answer='answer', cites=cites))['note_id']
+            args = dict(session_id=sid, note_id=nid)
+            # Bridge resolves services directly; inherited facades remain compatibility only.
+            for method in ('export_notebook_markdown', 'export_notebook_feishu', 'open_notebook_file',
+                           'reveal_notebook_file', 'delete_notebook_file'):
+                stack.enter_context(patch.object(self.host, 'board_' + method, side_effect=AssertionError('legacy call')))
+            saved = await self.notebook_rpc('export_notebook_markdown', **args)
+            path = Path(saved['path'])
+            self.assertTrue(saved['ok'], saved)
+            self.assertIn('original', path.read_text(encoding='utf-8'))
+            for method in ('open_notebook_file', 'reveal_notebook_file'):
+                result = await self.notebook_rpc(method, **args, name=path.name)
+                self.assertTrue(result['ok'], result)
+            reveal.assert_called_once_with(['explorer', f'/select,{path}'])
+            launch.side_effect = OSError('no handler')
+            result = await self.notebook_rpc('export_notebook_feishu', **args)
+            self.assertEqual(result['stage'], 'open')
+            self.assertEqual(result['document_id'], 'cloud-1')
+            self.assertIn(result['url'], result['error'])
+            create.side_effect = TimeoutError('cloud timeout')
+            result = await self.notebook_rpc('export_notebook_feishu', **args)
+            self.assertEqual(result['change_state'], 'unconfirmed')
+            self.assertEqual(create.call_count, 2)
+            with self.host.turn_lock:
+                for method in ('export_notebook_markdown', 'export_notebook_feishu', 'open_notebook_file',
+                               'reveal_notebook_file', 'delete_notebook_file'):
+                    kw = dict(args, name=path.name) if method.endswith('_file') else args
+                    result = await self.notebook_rpc(method, **kw)
+                    self.assertEqual(result['change_state'], 'not_changed', result)
+            with patch.object(notebook, '_write', side_effect=OSError('registry failed')):
+                result = await self.notebook_rpc('delete_notebook_file', **args, name=path.name)
+            self.assertEqual(result['stage'], 'registration')
+            self.assertFalse(path.exists())
+            with patch.object(knowledge, 'public_view', side_effect=RuntimeError('refresh failed')):
+                result = await self.notebook_rpc('delete_notebook_file', **args, name=path.name)
+            self.assertEqual(result['change_state'], 'committed', result)
+            self.assertEqual(result['steps']['deletion'], 'already_missing')
+            self.assertEqual(notebook._find(notebook._read(), sid)['notes'][0]['files'], [])
+            self.assertFalse(self.host.conversation.running)
+            before = notebook._path().read_bytes()
+            with self.assertRaises(ConnectionClosed):
+                async with connect(f'ws://127.0.0.1:{self.port}/ws?token=invalid', proxy=None) as ws:
+                    await ws.send(json.dumps(dict(type='rpc', method='export_notebook_feishu', args=args)))
+                    await ws.recv()
+            self.assertEqual(create.call_count, 2)
+            self.assertEqual(notebook._path().read_bytes(), before)
+
+    async def test_notebook_external_wait_does_not_hold_host_storage_or_global_write_lock(self):
+        import threading
+        from desk_companion import knowledge, notebook
+        cites = [dict(n=1, doc='source', title='section', text='original', doc_id='doc-1')]
+        with patch.object(knowledge, 'public_view', return_value=dict(docs=[])), patch('os.startfile'):
+            sid = (await self.notebook_rpc('new_notebook'))['session_id']
+            nid = (await self.notebook_rpc('save_notebook_note', session_id=sid,
+                question='question', answer='answer', cites=cites))['note_id']
+            entered, release = threading.Event(), threading.Event()
+            self.addCleanup(release.set)
+            def create(*args):
+                entered.set()
+                if not release.wait(45):
+                    raise RuntimeError('fixture not released')
+                return dict(ok=True, url='https://example.invalid/doc')
+            with patch('desk_companion.feishu_auth.create_markdown_doc', side_effect=create):
+                pending = asyncio.create_task(self.notebook_rpc('export_notebook_feishu',
+                    _timeout=45, session_id=sid, note_id=nid))
+                try:
+                    self.assertTrue(await asyncio.to_thread(entered.wait, 5))
+                    self.assertTrue((await self.notebook_rpc('load_notebook'))['ok'])
+                    self.assertEqual((await self.notebook_rpc('new_notebook'))['change_state'], 'not_changed')
+                    acquired = self.host.turn_lock.acquire(blocking=False)
+                    self.assertTrue(acquired)
+                    if acquired:
+                        self.host.turn_lock.release()
+                    # Separate real worker needs WRITES for its tool, while notebook writer needs its own lock.
+                    task = await asyncio.to_thread(self.host.tasks.submit, '写入测试', 'other')
+                    done = await asyncio.wait_for(asyncio.to_thread(self.host.tasks.wait, task), 20)
+                    self.assertEqual(done['state'], 'succeeded', done)
+                    self.assertEqual(Path(self.temp.name, 'write_count').read_text(), '1')
+                    await asyncio.wait_for(asyncio.to_thread(notebook.begin_notebook_turn, sid, 'concurrent turn'), 5)
+                    self.assertTrue(self.host.conversation.running)
+                finally:
+                    release.set()
+                result = await pending
+            self.assertTrue(result['ok'], result)
+            self.assertFalse(self.host.conversation.running)
 
     async def test_notebook_rpc_failure_phases_host_admission_and_authentication(self):
         from desk_companion import knowledge, notebook
