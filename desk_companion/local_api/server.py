@@ -178,6 +178,8 @@ def _dispatch(method: str, args: dict, preview=False) -> dict:
                       "export_notebook_markdown", "export_notebook_feishu", "open_notebook_file",
                       "reveal_notebook_file", "delete_notebook_file",
                       "summarize_notebook",
+                      "load_knowledge", "save_knowledge", "download_knowledge", "delete_model",
+                      "add_knowledge", "delete_knowledge", "rebuild_knowledge", "ask_knowledge",
                       "load_collaboration", "collaboration_action", "project_workspace", "check_updates", "list_agent_tasks", "get_agent_task", "cancel_agent_task", "continue_agent_task", "save_agent_task_settings", "load_task_progress",
                       "list_debug_calls", "get_debug_call", "set_debug_recording", "explain_debug_call",
                       "load_model_network", "save_model_network",

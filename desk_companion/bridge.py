@@ -335,19 +335,19 @@ class Bridge:
         return self._host.list_feishu_docs()
 
     def load_knowledge(self) -> dict:
-        return self._host.board_knowledge()
+        return self._host.knowledge_service.load_knowledge()
 
     def save_knowledge(self, payload: dict) -> dict:
-        return self._host.board_save_knowledge(payload)
+        return self._host.knowledge_service.save_knowledge(payload)
 
     def download_knowledge(self, repo: str) -> dict:
-        return self._host.board_download_knowledge(repo)
+        return self._host.knowledge_service.download_knowledge(repo)
 
     def delete_model(self, repo: str) -> dict:
-        return self._host.board_delete_model(repo)
+        return self._host.knowledge_service.delete_model(repo)
 
     def add_knowledge(self, doc_id: str, label: str, source: dict | None = None) -> dict:
-        return self._host.board_add_knowledge(doc_id, label, source)
+        return self._host.knowledge_service.add_knowledge(doc_id, label, source)
 
     def pick_local_sources(self, kind: str = "file", request_id: str = "") -> dict:
         from .local_sources import pick
@@ -366,13 +366,13 @@ class Bridge:
         return {"ok": True, "source": read_page(source_id, offset, limit)}
 
     def delete_knowledge(self, doc_id: str) -> dict:
-        return self._host.board_delete_knowledge(doc_id)
+        return self._host.knowledge_service.delete_knowledge(doc_id)
 
     def rebuild_knowledge(self) -> dict:
-        return self._host.board_rebuild_knowledge()
+        return self._host.knowledge_service.rebuild_knowledge()
 
     def ask_knowledge(self, text: str) -> dict:
-        return self._host.board_ask_knowledge(text)
+        return self._host.knowledge_service.ask_knowledge(text)
 
     def load_notebook(self) -> dict:
         return self._host.notebooks.load_notebook()

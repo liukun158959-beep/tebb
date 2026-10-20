@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -72,3 +73,34 @@ class ResourceLockTests(unittest.TestCase):
         out, err = process.communicate(timeout=15)
         self.assertEqual(process.returncode, 0, out + err)
         self.assertEqual(self.root.joinpath('count').read_text(), '4')
+
+    def test_shared_readers_exclude_writers_across_handles_and_processes(self):
+        code = "from desk_companion.resource_lock import ResourceLock; import sys; l=ResourceLock('leases',shared=sys.argv[1]=='read'); ok=l.acquire(blocking=False); print(ok); l.__exit__() if ok else None"
+        def probe(role):
+            p = subprocess.run([sys.executable, '-c', code, role], capture_output=True,
+                text=True, timeout=15)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            return p.stdout.strip()
+        with ResourceLock('leases', shared=True):
+            with ResourceLock('leases', shared=True):
+                self.assertEqual(probe('read'), 'True')
+                self.assertEqual(probe('write'), 'False')
+                self.assertFalse(ResourceLock('leases').acquire(blocking=False))
+        with ResourceLock('leases'):
+            self.assertEqual(probe('read'), 'False')
+            self.assertEqual(probe('write'), 'False')
+        self.assertEqual(probe('write'), 'True')
+
+    def test_nonblocking_same_instance_thread_and_exception_release(self):
+        lock = ResourceLock('thread')
+        result = []
+        with lock:
+            t = threading.Thread(target=lambda: result.append(lock.acquire(blocking=False)))
+            t.start(); t.join(5)
+            self.assertFalse(t.is_alive())
+            self.assertEqual(result, [False])
+        with self.assertRaisesRegex(RuntimeError, 'failed'):
+            with lock.hold(blocking=False):
+                raise RuntimeError('failed')
+        with ResourceLock('thread').hold(blocking=False):
+            pass

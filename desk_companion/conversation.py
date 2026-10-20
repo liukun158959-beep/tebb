@@ -329,9 +329,9 @@ class ConversationService:
                     tools=None,
                     on_delta=delta_sink,
                 )
-                message = result.get("message") or {}
                 self.record_llm_usage(result.get("usage"), run_id)
-                return str(message.get("content") or "")
+                from .model_text import require_text
+                return require_text(result)
 
             trace = ask(question, complete, on_retrieved=knowledge_sink)
             answer = trace["answer"]

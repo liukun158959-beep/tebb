@@ -48,6 +48,7 @@ flowchart TD
 | 记忆编辑 | `memory_editing.py` | 长期事实增删改、单会话历史删除与摘要失效，区分两者的并发范围 |
 | 手动上下文压缩 | `context_compression.py` | 同步压缩生命周期、会话预留与分阶段保存，模型等待不持有全局锁 |
 | 笔记与生成文件服务 | `notebook_service.py`、`notebook.py`、`notebook_platform.py` | 基础读写、来源问答、勾选总结、导出及生成文件操作；共享忙碌准入、模型完成校验、跨进程存储和分阶段失败回执，外部操作通过适配器注入 |
+| 知识库管理服务 | `knowledge_service.py`、`knowledge.py` | 八个同步管理/试问入口、后台下载准入；设置和索引快照、计算后复验提交，以及模型跨进程使用/修改保护 |
 | 任务可靠性 | `tasks.py`、`task_worker.py`、`task_process.py` | 排队、独立执行、超时、进程回收与恢复 |
 | 知识与记忆 | `knowledge.py`、`context_pack.py`、`facts.py` | 文档切分、检索重排、上下文压缩与可追溯事实 |
 | 视频分析 | `video.py`、`video_analysis.py`、`video_archive.py` | 字幕、分段检查点、学习笔记及归档回执 |
@@ -66,7 +67,9 @@ flowchart TD
 
 ## 开发与验证
 
-笔记四个基础 RPC 由 `NotebookService(chat_sessions, start_guard=...)` 提供，Bridge 直接调用，旧 App 有薄兼容方法但不新增笔记页面。读取不取得宿主执行锁、不占共享助手；三项写入在短准入阶段固定共享忙碌状态，宿主被占用时立即拒绝，独立后台任务继续。所有 notebook.json 写入者共用独立 ResourceLock 与原子替换，模型等待不持笔记存储锁。删除失败按 partial、unconfirmed、committed 报告，不自动重试；协议和验收见 [ADR 0008](adr/0008-notebook-service.md)、[笔记服务调试](AGENT_DEBUG.md#无-gui-的笔记基础服务验收)。问答、汇总、导出生命周期和 HeadlessApp 的剩余继承留待后续。
+笔记 RPC 与流式问答由 `NotebookService(chat_sessions, start_guard=...)` 提供，Bridge/传输层直接调用，旧 App 有薄兼容方法。读取不取得宿主执行锁、不占共享助手；写入、问答、总结、导出和文件操作在短准入阶段固定共享忙碌状态，宿主被占用时立即拒绝，独立后台任务继续。所有 notebook.json 写入者共用独立 ResourceLock 与原子替换，模型等待不持笔记存储锁。失败按 partial、unconfirmed、committed 报告，不自动重试；协议和验收见 [ADR 0008](adr/0008-notebook-service.md)、[笔记服务调试](AGENT_DEBUG.md#无-gui-的笔记基础服务验收)。
+
+知识库八入口由 `KnowledgeService(chat_sessions, start_guard=...)` 提供。同步修改/试问立即准入或拒绝，页面/进度读取不等模型；计算阶段使用设置与索引快照，提交前复验，修改设置不自动重建。模型加载/推理取得共享资源使用权，下载/删除取得排他修改权，跨进程冲突立即拒绝；后台下载仅启动阶段占共享助手。来源原文与笔记引用独立保留，失败按实际阶段回执。见 [ADR 0011](adr/0011-knowledge-service.md) 和 [知识库调试](AGENT_DEBUG.md#无-gui-的知识库服务验收)。看板及 HeadlessApp 整体继承仍待后续拆分。
 
 记忆页的 `add_fact`、`update_fact`、`delete_fact`、`delete_memory_turn` 由 `MemoryEditingService(chat_sessions)` 处理，旧 App 兼容方法和 Bridge 共用同一实例。事实编辑复用原有校验、来源记录及跨进程写锁；共享助手回复期间拒绝编辑，独立后台任务不阻止全局事实编辑，已运行回复可能保留旧快照。历史删除固定当前会话并使用同一任务保护，先验证存在，再失效覆盖该句的摘要、删除同角色同正文的全部重复记录。失败按阶段报告，不自动取消任务或回滚文件。见 [ADR 0006](adr/0006-memory-editing-service.md) 和 [记忆编辑验收](AGENT_DEBUG.md#无-gui-的记忆编辑服务验收)。
 

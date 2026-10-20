@@ -12,6 +12,10 @@ import os
 import shutil
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
+from functools import wraps
+from .resource_lock import ResourceLock
 
 # 权重在 Xet 上。hf_xet 会去 cas-server.xethub.hf.co 重建文件并返回 401。
 # 关掉之后走镜像给出的普通下载地址。必须在 huggingface_hub 读环境变量之前写上。
@@ -21,6 +25,91 @@ from pathlib import Path
 
 TZ = timezone(timedelta(hours=8))
 _LOCK = threading.Lock()
+_STORE = ResourceLock('knowledge-store')
+_SETTINGS = ContextVar('knowledge-settings', default=None)
+_CACHE_LOCK = threading.RLock()
+_MODELS = {}
+_MODEL_LOAD_LOCKS = {}
+
+
+class KnowledgeChangeError(RuntimeError):
+    def __init__(self, message, *, change_state, stage, **details):
+        super().__init__(message)
+        self.details = dict(change_state=change_state, stage=stage, **details)
+
+
+def _stored(fn):
+    @wraps(fn)
+    def run(*args, **kwargs):
+        with _STORE:
+            return fn(*args, **kwargs)
+    return run
+
+
+def _snapshot():
+    with _STORE:
+        return load_settings(), _read_index()
+
+
+@contextmanager
+def _using_settings(settings):
+    token = _SETTINGS.set(settings)
+    try:
+        yield
+    finally:
+        _SETTINGS.reset(token)
+
+
+def _current_settings():
+    return _SETTINGS.get() or load_settings()
+
+
+def _model_stamp(repo):
+    folder = _repo_dir(repo)
+    return tuple((str(p.relative_to(folder)), p.stat().st_size, p.stat().st_mtime_ns)
+                 for p in sorted(folder.rglob('*')) if p.is_file() and not p.name.endswith('.part'))
+
+
+def _invalidate_model(repo):
+    with _CACHE_LOCK:
+        for role, (cached_repo, _stamp, _model) in list(_MODELS.items()):
+            if cached_repo == repo:
+                del _MODELS[role]
+
+
+@contextmanager
+def _model_access(repo, *, write=False):
+    lock = ResourceLock('knowledge-model:' + repo, shared=not write)
+    if not lock.acquire(blocking=False):
+        raise RuntimeError(f'{repo} 正在下载、删除或使用；请等该模型操作结束后再试。')
+    try:
+        yield
+    finally:
+        lock.__exit__()
+
+
+def _commit_index(index, settings, before):
+    with _STORE:
+        if load_settings() != settings or _read_index() != before:
+            raise RuntimeError('计算期间知识库配置或索引已变化，未覆盖现有索引。请核对后手动重试。')
+        _write_index(index)
+
+
+def _changed_page(**details):
+    try:
+        return public_view()
+    except Exception as exc:
+        raise KnowledgeChangeError(f'知识库操作已完成，但页面读取失败：{exc}。请重新读取核对，不要直接重复操作。',
+            change_state='committed', stage='refresh', **details) from exc
+
+
+def _save_json(path, value, stage, **details):
+    from .video import atomic_write
+    try:
+        atomic_write(path, value)
+    except Exception as exc:
+        raise KnowledgeChangeError(f'知识库写入结果未确认：{exc}。请重新读取核对，不要直接重复操作。',
+            change_state='unconfirmed', stage=stage, **details) from exc
 
 SUBAGENT = "知识库检索"
 # 直连 huggingface 的文件会转到 us.aws.cdn.hf.co，本机大约每秒几百 KB。
@@ -56,11 +145,6 @@ OVERLAP = 200
 SEMANTIC_SIM = 0.5
 _JOBS: dict[str, dict] = {}
 _SEQ = 0
-
-_EMBED = None
-_EMBED_REPO = ""
-_RERANK = None
-_RERANK_REPO = ""
 
 _ASK = (
     "你是知识库检索子代理。只根据下面的片段回答。"
@@ -103,6 +187,7 @@ def default_settings() -> dict:
     }
 
 
+@_stored
 def load_settings() -> dict:
     path = _settings_path()
     if not path.is_file():
@@ -131,9 +216,9 @@ def save_settings(payload: dict) -> dict:
         _settings_path(),
     )
     path = _settings_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(clean, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return public_view()
+    with _STORE:
+        _save_json(path, clean, 'settings_save')
+    return _changed_page()
 
 
 def _checked_settings(raw: object, path: Path) -> dict:
@@ -194,8 +279,7 @@ def _ready(repo: str) -> bool:
 
 
 def public_view() -> dict:
-    settings = load_settings()
-    index = _read_index()
+    settings, index = _snapshot()
     docs = []
     chunks = []
     for doc in index["docs"]:
@@ -391,10 +475,16 @@ def _ms_get(repo: str, rel: str, target: Path, size: int, on_bytes, on_restart) 
     partial.replace(target)
 
 
-def _download_worker(repo: str, dest: Path) -> None:
-    global _EMBED, _EMBED_REPO, _RERANK, _RERANK_REPO
+def _download_contents(repo: str, dest: Path) -> None:
     try:
         files = _ms_files(repo)
+        root = model_root().resolve()
+        if dest.is_symlink() or root not in dest.resolve().parents:
+            raise RuntimeError('模型目录不在指定缓存目录内，拒绝下载。')
+        for item in files:
+            path = dest / item['path']
+            if not item['path'] or dest.resolve() not in path.resolve().parents:
+                raise RuntimeError('模型文件路径超出指定目录，拒绝下载。')
         total = sum(item["size"] for item in files)
         done = 0
         _touch_progress(repo, phase="downloading", bytes=0, total=total, percent=0, error="")
@@ -420,15 +510,23 @@ def _download_worker(repo: str, dest: Path) -> None:
             done += item["size"]
         if not _ready(repo):
             raise RuntimeError(f"下载 {repo} 之后没有完整权重。恢复：删掉 {dest} 后再下一次。")
-        if _EMBED_REPO == repo:
-            _EMBED = None
-            _EMBED_REPO = ""
-        if _RERANK_REPO == repo:
-            _RERANK = None
-            _RERANK_REPO = ""
+        _invalidate_model(repo)
         _touch_progress(repo, active=False, phase="done", percent=100, error="")
     except Exception as exc:
         _touch_progress(repo, active=False, phase="error", error=_download_error(repo, exc))
+
+
+def _download_worker(repo, dest, admission):
+    try:
+        with _model_access(repo, write=True):
+            admission['accepted'] = True
+            admission['ready'].set()
+            _download_contents(repo, dest)
+    except Exception as exc:
+        admission['error'] = str(exc)
+        _touch_progress(repo, active=False, phase='error', error=str(exc))
+    finally:
+        admission['ready'].set()
 
 
 def _known_repo(repo: str) -> str:
@@ -461,37 +559,42 @@ def download_model(repo: str) -> dict:
             "seq": _SEQ,
             "_at": time.monotonic(),
         }
-    threading.Thread(
-        target=_download_worker,
-        args=(target, dest),
-        daemon=True,
-    ).start()
-    return public_view()
+    admission = dict(ready=threading.Event(), accepted=False, error='')
+    try:
+        threading.Thread(target=_download_worker, args=(target, dest, admission), daemon=True).start()
+    except Exception as exc:
+        _touch_progress(target, active=False, phase='error', error=str(exc))
+        raise KnowledgeChangeError(f'下载线程未能启动：{exc}。', change_state='not_changed',
+            stage='download_start', repo=target, started=False) from exc
+    admission['ready'].wait()  # Only admission; network begins after the worker signals.
+    if not admission['accepted']:
+        raise KnowledgeChangeError(admission['error'], change_state='not_changed',
+            stage='download_start', repo=target, started=False)
+    try:
+        return public_view()
+    except Exception as exc:
+        raise KnowledgeChangeError(f'下载已经启动，但返回页面失败：{exc}。请先读取进度核对，不要直接重发。',
+            change_state='committed', stage='refresh', repo=target, started=True) from exc
 
 
 def delete_model(repo: str) -> dict:
-    global _EMBED, _EMBED_REPO, _RERANK, _RERANK_REPO
     target = _known_repo(repo)
-    with _LOCK:
-        job = _JOBS.get(target)
-        if job is not None and job.get("active"):
-            raise RuntimeError(f"{target} 正在下载。恢复：等这条进度结束再删。")
-    folder = _repo_dir(target)
-    if not folder.is_dir():
-        raise RuntimeError(f"本机没有 {target}。")
-    if _EMBED_REPO == target:
-        _EMBED = None
-        _EMBED_REPO = ""
-    if _RERANK_REPO == target:
-        _RERANK = None
-        _RERANK_REPO = ""
-    try:
-        shutil.rmtree(folder)
-    except OSError as exc:
-        raise RuntimeError(f"删不掉 {target}：{exc}。恢复：重启客户端后再删。") from exc
-    with _LOCK:
-        _JOBS.pop(target, None)
-    return public_view()
+    with _model_access(target, write=True):
+        folder = _repo_dir(target)
+        root = model_root().resolve()
+        if folder.is_symlink() or root not in folder.resolve().parents:
+            raise RuntimeError('模型目录不在指定缓存目录内，拒绝删除。')
+        if not folder.is_dir():
+            raise RuntimeError(f'本机没有 {target}。')
+        _invalidate_model(target)
+        try:
+            shutil.rmtree(folder)
+        except Exception as exc:
+            raise KnowledgeChangeError(f'模型清理未完成，可能已有部分文件删除：{exc}。已删除文件不会恢复，请核对目录。',
+                change_state='partial', stage='model_delete', repo=target, path=str(folder)) from exc
+        with _LOCK:
+            _JOBS.pop(target, None)
+    return _changed_page(repo=target)
 
 
 def _source_metadata(doc):
@@ -515,42 +618,30 @@ def add_doc(doc_id: str, label: str, source: dict | None = None) -> dict:
         if local['kind'] != 'file': raise ValueError('请选择文件夹内的文件加入知识库。')
         metadata = {'source': 'local', 'space_name': local.get('folder_name') or '本地文件',
                     'folder_name': local.get('folder_name', ''), 'local_path': local['path']}
-    _require_models()
-    settings = load_settings()
-    with _LOCK:
-        index = _read_index()
-        _require_same_index(index, settings)
-        if any(doc["id"] == target for doc in index["docs"]):
-            raise RuntimeError(f"《{title}》已经在库里。")
-        if metadata.get('local_path') and any(doc.get('local_path') == metadata['local_path'] for doc in index['docs']):
-            raise RuntimeError(f'《{title}》已经在库里，可重建索引更新内容。')
-    body = _fetch(target, title)
-    made = _chunks_for(target, title, body, settings)
-    _attach_vectors(made)
-    with _LOCK:
-        index = _read_index()
-        _require_same_index(index, settings)
-        if any(doc["id"] == target for doc in index["docs"]):
-            raise RuntimeError(f"《{title}》已经在库里。")
-        index["docs"].append({
-            "id": target,
-            "title": title,
-            "url": target if target.startswith("http") else "",
-            "chars": len(body),
-            "updated": _now(),
-            **metadata,
-        })
-        index["chunks"].extend(made)
-        _stamp(index, settings)
-        _write_index(index)
-    return public_view()
+    settings, before = _snapshot()
+    _require_same_index(before, settings)
+    if any(doc["id"] == target for doc in before["docs"]):
+        raise RuntimeError(f"《{title}》已经在库里。")
+    if metadata.get('local_path') and any(doc.get('local_path') == metadata['local_path'] for doc in before['docs']):
+        raise RuntimeError(f'《{title}》已经在库里，可重建索引更新内容。')
+    with _using_settings(settings):
+        _require_models()
+        body = _fetch(target, title)
+        made = _chunks_for(target, title, body, settings)
+        _attach_vectors(made)
+    doc = dict(id=target, title=title, url=target if target.startswith("http") else "",
+               chars=len(body), updated=_now(), **metadata)
+    index = dict(before, docs=[*before['docs'], doc], chunks=before['chunks'] + made)
+    _stamp(index, settings)
+    _commit_index(index, settings, before)
+    return _changed_page(doc_id=target)
 
 
 def delete_doc(doc_id: str) -> dict:
     target = (doc_id or "").strip()
     if not target:
         raise RuntimeError("删除文档需要文档 id。")
-    with _LOCK:
+    with _STORE:
         index = _read_index()
         kept = [doc for doc in index["docs"] if doc["id"] != target]
         if len(kept) == len(index["docs"]):
@@ -564,36 +655,30 @@ def delete_doc(doc_id: str) -> dict:
             index["chunk_unit"] = ""
             index["overlap"] = 0
         _write_index(index)
-    return public_view()
+    return _changed_page(doc_id=target)
 
 
 def rebuild() -> dict:
-    _require_models()
-    settings = load_settings()
-    with _LOCK:
-        index = _read_index()
-        docs = [dict(doc) for doc in index["docs"]]
-        if not docs:
-            raise RuntimeError("库是空的，没有可以重建的文档。")
-    chunks = []
-    refreshed = []
-    for doc in docs:
-        body = _fetch(doc["id"], doc["title"])
-        made = _chunks_for(doc["id"], doc["title"], body, settings)
-        _attach_vectors(made)
-        doc["chars"] = len(body)
-        doc["updated"] = _now()
-        refreshed.append(doc)
-        chunks.extend(made)
-    with _LOCK:
-        index = _read_index()
-        if [item["id"] for item in index["docs"]] != [item["id"] for item in docs]:
-            raise RuntimeError("重建过程中文档变了。恢复：再点一次重建索引。")
-        index["docs"] = refreshed
-        index["chunks"] = chunks
-        _stamp(index, settings)
-        _write_index(index)
-    return public_view()
+    settings, before = _snapshot()
+    docs = [dict(doc) for doc in before["docs"]]
+    if not docs:
+        raise RuntimeError("库是空的，没有可以重建的文档。")
+    with _using_settings(settings):
+        _require_models()
+        chunks = []
+        refreshed = []
+        for doc in docs:
+            body = _fetch(doc["id"], doc["title"])
+            made = _chunks_for(doc["id"], doc["title"], body, settings)
+            _attach_vectors(made)
+            doc["chars"] = len(body)
+            doc["updated"] = _now()
+            refreshed.append(doc)
+            chunks.extend(made)
+    index = dict(before, docs=refreshed, chunks=chunks)
+    _stamp(index, settings)
+    _commit_index(index, settings, before)
+    return _changed_page()
 
 
 def ask(question: str, complete, on_retrieved=None) -> dict:
@@ -644,9 +729,13 @@ def _retrieve(question: str, only_ids: set[str] | None) -> dict:
     text = (question or "").strip()
     if not text:
         raise RuntimeError("问题是空的。")
+    settings, index = _snapshot()
+    with _using_settings(settings):
+        return _retrieve_snapshot(text, only_ids, settings, index)
+
+
+def _retrieve_snapshot(text, only_ids, settings, index):
     _require_models()
-    settings = load_settings()
-    index = _read_index()
     if not index["docs"] or not index["chunks"]:
         raise RuntimeError("知识库是空的。恢复：在知识库页添加飞书文档。")
     _require_same_index(index, settings)
@@ -775,7 +864,7 @@ def _checked_hits(raw: object, label: str) -> list[dict]:
 
 
 def _require_models() -> None:
-    settings = load_settings()
+    settings = _current_settings()
     missing = []
     if not _ready(settings["embed_repo"]):
         missing.append(settings["embed_repo"])
@@ -1131,6 +1220,12 @@ def _parent_child(body: str, size: int) -> list[dict]:
 
 
 def _embed(texts: list[str]) -> list[list[float]]:
+    settings = _current_settings()
+    with _using_settings(settings), _model_access(settings["embed_repo"]):
+        return _embed_leased(texts)
+
+
+def _embed_leased(texts: list[str]) -> list[list[float]]:
     model = _embed_model()
     try:
         raw = model.encode(texts, normalize_embeddings=True)
@@ -1149,25 +1244,42 @@ def _embed(texts: list[str]) -> list[list[float]]:
 
 
 def _embed_model():
-    global _EMBED, _EMBED_REPO
-    repo = load_settings()["embed_repo"]
-    if _EMBED is not None and _EMBED_REPO == repo:
-        return _EMBED
-    try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError as exc:
-        raise RuntimeError(
-            f"还没有 sentence-transformers。恢复：{PIP_HINT}"
-        ) from exc
-    try:
-        _EMBED = SentenceTransformer(str(_repo_dir(repo)), device="cpu")
-    except Exception as exc:
-        raise RuntimeError(f"加载 {repo} 失败：{exc}。恢复：删掉模型目录后重新下载。") from exc
-    _EMBED_REPO = repo
-    return _EMBED
+    return _local_model('embed')
+
+
+def _local_model(role):
+    repo = _current_settings()[role + '_repo']
+    with _CACHE_LOCK:
+        load_lock = _MODEL_LOAD_LOCKS.setdefault(repo, threading.Lock())
+    # Only duplicate loads of this repository wait. Other models and cached inference continue.
+    with load_lock:
+        stamp = _model_stamp(repo)
+        with _CACHE_LOCK:
+            cached = _MODELS.get(role)
+            if cached is not None and cached[0] == repo and cached[1] == stamp:
+                return cached[2]
+        try:
+            import sentence_transformers
+        except ImportError as exc:
+            raise RuntimeError(f"还没有 sentence-transformers。恢复：{PIP_HINT}") from exc
+        factory = (sentence_transformers.SentenceTransformer if role == 'embed'
+                   else sentence_transformers.CrossEncoder)
+        try:
+            model = factory(str(_repo_dir(repo)), device="cpu")
+        except Exception as exc:
+            raise RuntimeError(f"加载 {repo} 失败：{exc}。恢复：删掉模型目录后重新下载。") from exc
+        with _CACHE_LOCK:
+            _MODELS[role] = (repo, stamp, model)
+        return model
 
 
 def _rerank(question: str, candidates: list[dict]) -> list[dict]:
+    settings = _current_settings()
+    with _using_settings(settings), _model_access(settings["rerank_repo"]):
+        return _rerank_leased(question, candidates)
+
+
+def _rerank_leased(question: str, candidates: list[dict]) -> list[dict]:
     model = _rerank_model()
     pairs = [(question, item["text"]) for item in candidates]
     try:
@@ -1187,22 +1299,7 @@ def _rerank(question: str, candidates: list[dict]) -> list[dict]:
 
 
 def _rerank_model():
-    global _RERANK, _RERANK_REPO
-    repo = load_settings()["rerank_repo"]
-    if _RERANK is not None and _RERANK_REPO == repo:
-        return _RERANK
-    try:
-        from sentence_transformers import CrossEncoder
-    except ImportError as exc:
-        raise RuntimeError(
-            f"还没有 sentence-transformers。恢复：{PIP_HINT}"
-        ) from exc
-    try:
-        _RERANK = CrossEncoder(str(_repo_dir(repo)), device="cpu")
-    except Exception as exc:
-        raise RuntimeError(f"加载 {repo} 失败：{exc}。恢复：删掉模型目录后重新下载。") from exc
-    _RERANK_REPO = repo
-    return _RERANK
+    return _local_model('rerank')
 
 
 def _hit(score: float, row: dict, index: dict) -> dict:
@@ -1248,6 +1345,7 @@ def _empty_index() -> dict:
     }
 
 
+@_stored
 def _read_index() -> dict:
     path = _index_path()
     if not path.is_file():
@@ -1274,6 +1372,5 @@ def _read_index() -> dict:
 
 
 def _write_index(index: dict) -> None:
-    path = _index_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(index, ensure_ascii=False) + "\n", encoding="utf-8")
+    with _STORE:
+        _save_json(_index_path(), index, 'index_save')

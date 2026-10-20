@@ -172,6 +172,29 @@ pnpm build
 
 笔记流加入一次性终态处理：提前关闭、网络错误、非法 JSON/事件或非法完成结果均解除前端等待并提示先核对，不把断线视为完成。正常 done 后主动关闭不再误报失败，忽略重复或迟到帧。只调整笔记流，普通聊天流不在本批。同步总结保留现有 RPC 断连提示；没有新增任务 ID、取消、自动重试或持久化恢复接口。断连后台可能继续保存/打开，重连后 load_notebook 核对；未落盘片段无法从后端恢复。真实模型、GUI 实机、系统应用显示及完整发布包需另外验收。见 [ADR 0010](adr/0010-notebook-generation.md) 与 [#130](https://github.com/liukun158959-beep/tebb/issues/130)。
 
+## 无 GUI 的知识库服务验收
+
+仓库根目录运行，所有数据在临时目录中，下载使用本地响应替身，不下载真实权重或请求飞书：
+
+```powershell
+$env:PYTHONUTF8='1'
+python -m unittest tests.test_knowledge_service tests.test_resource_lock -v
+python -m unittest tests.test_local_api.LocalApiTests.test_knowledge_eight_service_routes_and_authenticated_failure_receipts tests.test_local_api.LocalApiTests.test_knowledge_compute_disconnect_keeps_reads_workers_and_busy_guards tests.test_local_api.LocalApiTests.test_knowledge_host_lock_and_pet_busy_immediately_refuse_admission -v
+# 完整后端回归；Atlas 源码路径按本机调整
+$env:DESK_TEST_ATLAS_SOURCE='E:\Learn_Project\Atlas'
+python -m unittest discover -s tests -v
+```
+
+无 GUI 入口 `KnowledgeService(chat_sessions, start_guard=...)` 提供 `load_knowledge()`、`save_knowledge(payload)`、`download_knowledge(repo)`、`delete_model(repo)`、`add_knowledge(doc_id,label,source=None)`、`delete_knowledge(doc_id)`、`rebuild_knowledge()`、`ask_knowledge(text)`，RPC 保留同名、参数和外层派发/内层业务两层 `ok`。在临时 `DESK_COMPANION_DATA_DIR` 中构造 ConversationService/ChatSessionService，绑定 FakeLLM；替换 `knowledge._require_models/_embed/_rerank/_ms_files` 和 `urllib.request.urlopen` 以复现模型/网络阶段，不要在调试时运行真实下载。GUI 导入禁用子进程覆盖全部八入口；认证 WebSocket 直接调用服务而非旧宿主业务方法。
+
+页面与下载进度读取不取得宿主执行锁，也不占共享助手；同步修改与试问短时准入，已有共享助手、笔记生成、手动压缩、宿主操作或其他知识库同步操作忙碌时立即拒绝。长网络/模型计算不持宿主、WRITES 或知识库存储锁。开始后预留共享 running 至成功/失败清理结束；读取和独立任务可继续。每次检索冻结设置和索引快照；入库/重建先完成全部计算，再在短存储锁内复验配置与索引，任何变化均拒绝覆盖。设置保存不自动重建，改变向量/切块设置后保留旧索引并明确要求重建。
+
+设置与索引使用同一跨进程资源锁及原子替换，JSON 格式兼容。删除来源仅移出索引，不删除 local_sources 登记、本地/飞书原文、笔记或引用快照；删除模型仅清指定缓存目录，保留索引、设置和笔记。失败返回 `stage/change_state` 及可得的目标编号/路径：`not_changed` 是尚未提交；`unconfirmed` 是进入写入但结果未确认；`committed` 是修改完成但页面读取失败；`partial` 是模型清理中可能已有部分文件删除。先重新读取核对，不自动重试，不承诺跨文件回滚。
+
+下载保留后台 daemon 与内存进度轮询。启动成功只代表已获资源并启动工作线程，不代表下载完成；启动后页面失败额外返回 `started=true/repo`，请先 `load_knowledge` 核对 `downloads`。失败保存 `.part`，用户再次请求时继续；进程退出不保留任务进度、不自动恢复、不新增取消。模型加载/推理以仓库名取得共享资源锁，下载/删除取得排他锁，跨进程冲突立即拒绝，不打断已有使用；不同模型及兼容读者可并行。文件元数据变化会使进程内缓存重新加载。Windows 共享锁使用 [LockFileEx](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex)，与原排他锁互斥；跨句柄、线程和真实进程用例验证准入与进程退出释放。
+
+试问同步返回原 trace，不写聊天/笔记历史。Atlas 验证正常完成后，产品只接受非空字符串且无工具调用，普通后台知识问答与笔记服务复用正文校验。用量仍在正常模型返回后、正文校验前记录；失败可能已有费用记录，异常携带的部分用量本批不补记。失败回执保留 `answer/answer_complete/stage`，错误文字同样包含已收到正文，供现有页面显示；`answer_complete` 只表示模型正文已校验，不能代替整体成功。同步 RPC 断连不取消后台操作，无自动重试；重新读取页面/进度核对，未落盘的试问正文无法在重连后恢复。真实权重加载、真实下载网络、GUI 实机和发布包另行验收。见 [ADR 0011](adr/0011-knowledge-service.md) 和 [#131](https://github.com/liukun158959-beep/tebb/issues/131)。
+
 ## 无 GUI 的手动压缩服务验收
 
 仓库根目录执行，使用临时数据、真实 OpenAI SDK 的 MockTransport、脚本 worker 和文件故障，不请求真实模型或发送外部消息：

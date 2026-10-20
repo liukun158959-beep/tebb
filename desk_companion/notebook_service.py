@@ -7,6 +7,7 @@ import uuid
 
 from . import notebook
 from .notebook_platform import NotebookPlatform
+from .model_text import require_text
 
 
 class NotebookService:
@@ -176,10 +177,7 @@ class NotebookService:
             conversation.record_llm_usage(result.get('usage'), str(uuid.uuid4()))
             details['steps']['usage'] = 'confirmed'
             details['stage'] = 'validation'
-            if not isinstance(message, dict) or message.get('tool_calls') or message.get('function_call'):
-                raise RuntimeError('模型返回了工具调用或无效消息，未保存为完整正文。')
-            if type(content) is not str or not content.strip():
-                raise RuntimeError('模型正文为空或不是字符串，未保存为完整正文。')
+            content = require_text(result)
             details['answer_complete'] = True
             details['steps']['validation'] = 'confirmed'
             return content.strip()

@@ -68,6 +68,145 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
                 if frame['type'] in ('done', 'error'):
                     return frame
 
+    async def test_knowledge_eight_service_routes_and_authenticated_failure_receipts(self):
+        from contextlib import ExitStack
+        import io
+        from desk_companion import knowledge as k, local_sources
+        from websockets.exceptions import ConnectionClosed
+        source_path = Path(self.temp.name) / 'source.md'
+        source_path.write_text('original body', encoding='utf-8')
+        source = local_sources.stage([str(source_path)])['sources'][0]
+        doc_id = 'local:' + source['id']
+        repo = k.EMBED_MODELS[0]['repo']
+        with ExitStack() as stack:
+            for name in ('board_knowledge', 'board_save_knowledge', 'board_download_knowledge',
+                    'board_delete_model', 'board_add_knowledge', 'board_delete_knowledge',
+                    'board_rebuild_knowledge', 'board_ask_knowledge'):
+                stack.enter_context(patch.object(self.host, name, side_effect=AssertionError('legacy route')))
+            stack.enter_context(patch.object(k, '_JOBS', {}))
+            stack.enter_context(patch.object(k, '_require_models'))
+            stack.enter_context(patch.object(k, '_embed', side_effect=lambda texts: [[1., 0.] for _ in texts]))
+            stack.enter_context(patch.object(k, '_rerank', side_effect=lambda q, rows: rows))
+            stack.enter_context(patch.object(self.host.conversation, 'engage_model'))
+            self.assertTrue((await self.notebook_rpc('load_knowledge'))['ok'])
+            self.assertTrue((await self.notebook_rpc('save_knowledge', payload=k.default_settings()))['ok'])
+            self.assertTrue((await self.notebook_rpc('add_knowledge', doc_id=doc_id, label='source'))['ok'])
+            self.assertTrue((await self.notebook_rpc('rebuild_knowledge'))['ok'])
+            before = memory.list_chat(self.host.state.session_id)
+            self.host.agent.llm = FakeLLM(['strict answer'])
+            result = await self.notebook_rpc('ask_knowledge', text='q')
+            self.assertEqual(result['trace']['answer'], 'strict answer')
+            self.assertEqual(memory.list_chat(self.host.state.session_id), before)
+            self.host.agent.llm = FakeLLM([dict(role='assistant', content='invalid', tool_calls=[dict(id='tool')])])
+            result = await self.notebook_rpc('ask_knowledge', text='q')
+            self.assertEqual(result['stage'], 'validation')
+            self.assertEqual(result['answer'], 'invalid')
+            with patch('desk_companion.video.atomic_write', side_effect=OSError('disk')):
+                result = await self.notebook_rpc('delete_knowledge', doc_id=doc_id)
+            self.assertEqual(result['change_state'], 'unconfirmed')
+            self.assertTrue((await self.notebook_rpc('delete_knowledge', doc_id=doc_id))['ok'])
+            self.assertTrue(source_path.exists())
+            class Response(io.BytesIO):
+                status = 200
+                headers = {}
+            with patch.object(k, '_ms_files', return_value=[dict(path='config.json', size=2),
+                        dict(path='model.safetensors', size=2)]), \
+                    patch('urllib.request.urlopen', side_effect=lambda *a, **kw: Response(b'{}')):
+                result = await self.notebook_rpc('download_knowledge', repo=repo)
+                self.assertTrue(result['ok'], result)
+                for _ in range(200):
+                    page = await self.notebook_rpc('load_knowledge')
+                    if not page['downloads'][0]['active']:
+                        break
+                    await asyncio.sleep(.01)
+                self.assertEqual(page['downloads'][0]['phase'], 'done')
+            # Wait for the worker's lease release after its final progress publication.
+            for _ in range(200):
+                result = await self.notebook_rpc('delete_model', repo=repo)
+                if result['ok']:
+                    break
+                await asyncio.sleep(.01)
+            self.assertTrue(result['ok'], result)
+            with self.assertRaises(ConnectionClosed):
+                async with connect(self.url.replace('test-token', 'wrong'), proxy=None) as ws:
+                    await ws.send(json.dumps(dict(type='rpc', method='save_knowledge',
+                        args=dict(payload=k.default_settings()))))
+                    await ws.recv()
+
+    async def test_knowledge_compute_disconnect_keeps_reads_workers_and_busy_guards(self):
+        import threading
+        from desk_companion import knowledge as k, local_sources
+        source_path = Path(self.temp.name) / 'source.md'
+        source_path.write_text('original body', encoding='utf-8')
+        source = local_sources.stage([str(source_path)])['sources'][0]
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        calls = []
+        def embed(texts):
+            entered.set(); calls.append(texts)
+            if not release.wait(45):
+                raise RuntimeError('not released')
+            return [[1., 0.] for _ in texts]
+        original = k.add_doc
+        def add(*args):
+            try:
+                return original(*args)
+            finally:
+                finished.set()
+        with patch.object(k, '_require_models'), patch.object(k, '_embed', side_effect=embed), \
+                patch.object(k, 'add_doc', side_effect=add):
+            async with connect(self.url, proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', method='add_knowledge',
+                    args=dict(doc_id='local:'+source['id'], label='source'))))
+                try:
+                    self.assertTrue(await asyncio.to_thread(entered.wait, 5))
+                    self.assertTrue((await self.notebook_rpc('load_knowledge'))['ok'])
+                    for method, args in [('save_knowledge', dict(payload=k.default_settings())),
+                            ('add_knowledge', dict(doc_id='x', label='x')), ('delete_knowledge', dict(doc_id='x')),
+                            ('rebuild_knowledge', {}), ('ask_knowledge', dict(text='q')),
+                            ('download_knowledge', dict(repo=k.EMBED_MODELS[0]['repo'])),
+                            ('delete_model', dict(repo=k.EMBED_MODELS[0]['repo']))]:
+                        self.assertEqual((await self.notebook_rpc(method, **args))['change_state'], 'not_changed')
+                    acquired = self.host.turn_lock.acquire(blocking=False)
+                    self.assertTrue(acquired)
+                    if acquired:
+                        self.host.turn_lock.release()
+                    task = await asyncio.to_thread(self.host.tasks.submit, '写入测试', 'other')
+                    done = await asyncio.wait_for(asyncio.to_thread(self.host.tasks.wait, task), 20)
+                    self.assertEqual(done['state'], 'succeeded', done)
+                    # A separate storage writer can progress; add must reject its stale snapshot.
+                    await asyncio.wait_for(asyncio.to_thread(k.save_settings,
+                        dict(k.default_settings(), retrieve_k=21)), 5)
+                    await ws.close()
+                finally:
+                    release.set()
+                self.assertTrue(await asyncio.to_thread(finished.wait, 5))
+            for _ in range(100):
+                if not self.host.conversation.running:
+                    break
+                await asyncio.sleep(.01)
+            self.assertFalse(self.host.conversation.running)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual((await self.notebook_rpc('load_knowledge'))['docs'], [])
+
+    async def test_knowledge_host_lock_and_pet_busy_immediately_refuse_admission(self):
+        import threading
+        entered, release = threading.Event(), threading.Event()
+        def hold():
+            with self.host.turn_lock:
+                entered.set(); release.wait(10)
+        thread = threading.Thread(target=hold); thread.start()
+        try:
+            self.assertTrue(await asyncio.to_thread(entered.wait, 3))
+            self.assertTrue((await self.notebook_rpc('load_knowledge'))['ok'])
+            self.assertFalse((await self.notebook_rpc('rebuild_knowledge'))['ok'])
+        finally:
+            release.set(); await asyncio.to_thread(thread.join, 5)
+        from types import SimpleNamespace
+        self.host.pet = SimpleNamespace(busy=True)
+        self.assertFalse((await self.notebook_rpc('rebuild_knowledge'))['ok'])
+        self.host.pet = None
+
     async def test_notebook_generation_service_rpc_preserves_protocol_and_failure_phases(self):
         from contextlib import ExitStack
         from desk_companion import knowledge, notebook

@@ -26,6 +26,7 @@ from .chat_sessions import ChatSessionService
 from .memory_editing import MemoryEditingService
 from .context_compression import ContextCompressionService
 from .notebook_service import NotebookService
+from .knowledge_service import KnowledgeService
 from .automation import AutomationScheduler
 from .board_workbench import BoardWorkbench
 from .bridge import Bridge
@@ -99,6 +100,7 @@ class App(BoardWorkbench):
         self.memory_editing = MemoryEditingService(self.chat_sessions)
         self.context_compression = ContextCompressionService(self.chat_sessions, start_guard=self._compression_start_guard)
         self.notebooks = NotebookService(self.chat_sessions, start_guard=self._notebook_start_guard)
+        self.knowledge_service = KnowledgeService(self.chat_sessions, start_guard=self._knowledge_start_guard)
         self.bridge = Bridge(self, session_changed=None if headless else self._on_session_changed)
         self._queue: queue.Queue = queue.Queue()
         self.pet = None
@@ -333,6 +335,36 @@ class App(BoardWorkbench):
         if self.pet is not None and self.pet.busy:
             raise RuntimeError('助手正在回复或仍在收尾，完成或停止后再修改笔记。')
         yield
+
+    @contextmanager
+    def _knowledge_start_guard(self):
+        if self.pet is not None and self.pet.busy:
+            raise RuntimeError('助手正在回复或仍在收尾，完成或停止后再操作知识库。')
+        yield
+
+    def board_knowledge(self):
+        return self.knowledge_service.load_knowledge()
+
+    def board_save_knowledge(self, payload):
+        return self.knowledge_service.save_knowledge(payload)
+
+    def board_download_knowledge(self, repo):
+        return self.knowledge_service.download_knowledge(repo)
+
+    def board_delete_model(self, repo):
+        return self.knowledge_service.delete_model(repo)
+
+    def board_add_knowledge(self, doc_id, label, source=None):
+        return self.knowledge_service.add_knowledge(doc_id, label, source)
+
+    def board_delete_knowledge(self, doc_id):
+        return self.knowledge_service.delete_knowledge(doc_id)
+
+    def board_rebuild_knowledge(self):
+        return self.knowledge_service.rebuild_knowledge()
+
+    def board_ask_knowledge(self, text):
+        return self.knowledge_service.ask_knowledge(text)
 
     def _on_session_changed(self, operation):
         snapshot = self.chat_sessions.load_chat_log()
