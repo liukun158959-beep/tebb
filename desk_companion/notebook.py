@@ -28,8 +28,8 @@ def _write_change(book, session_id, note_id=None, removed_files=()):
         _write(book)
     except Exception as exc:
         raise NotebookChangeError(
-            f'笔记记录保存结果未确认：{exc}。请重新读取核对，不要直接重复保存；'
-            '已经清理的生成文件不会恢复。',
+            f'笔记记录保存结果未确认：{exc}。请重新读取核对，不要直接重复操作。'
+            + ('已经清理的生成文件不会恢复。' if removed_files else ''),
             change_state='unconfirmed', session_id=session_id, note_id=note_id,
             removed_files=list(removed_files),
         ) from exc
@@ -93,7 +93,7 @@ def begin_notebook_turn(session_id: str, question: str) -> None:
         if session["title"] == "新笔记":
             session["title"] = text[:24]
         session["updated"] = _now()
-        _write(book)
+        _write_change(book, session['id'])
 
 
 def finish_notebook_turn(session_id: str, answer: str, cites: list) -> None:
@@ -106,7 +106,7 @@ def finish_notebook_turn(session_id: str, answer: str, cites: list) -> None:
         session = _find(book, session_id)
         session["turns"].append({"role": "pet", "text": body, "cites": checked})
         session["updated"] = _now()
-        _write(book)
+        _write_change(book, session['id'])
 
 
 def save_note(session_id: str, question: str, answer: str, cites: list) -> dict:

@@ -57,6 +57,140 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(frame['result']['ok'], frame)
         return frame['result']['result']
 
+    async def notebook_question(self, sid, tokens=None):
+        async with connect(self.url, proxy=None) as ws:
+            await ws.send(json.dumps(dict(type='notebook', session_id=sid, text='question', doc_ids=['doc-1'],
+                sampling=dict(reasoning_effort='low', temperature=.5, top_p=1))))
+            while True:
+                frame = json.loads(await asyncio.wait_for(ws.recv(), 5))
+                if frame['type'] == 'token' and tokens is not None:
+                    tokens.append(frame['data'])
+                if frame['type'] in ('done', 'error'):
+                    return frame
+
+    async def test_notebook_generation_service_rpc_preserves_protocol_and_failure_phases(self):
+        from contextlib import ExitStack
+        from desk_companion import knowledge, notebook
+        from websockets.exceptions import ConnectionClosed
+        cites = [dict(n=1, doc='source', title='section', text='original', doc_id='doc-1')]
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(knowledge, 'public_view', return_value=dict(docs=[])))
+            stack.enter_context(patch.object(knowledge, 'ask_sources', side_effect=lambda q, ids, complete:
+                dict(answer=complete('system', q), cites=cites)))
+            stack.enter_context(patch.object(self.host.conversation, 'engage_model'))
+            launch = stack.enter_context(patch('os.startfile', side_effect=OSError('no handler')))
+            stack.enter_context(patch.object(self.host, 'run_notebook', side_effect=AssertionError('legacy generation')))
+            stack.enter_context(patch.object(self.host, 'board_summarize_notebook', side_effect=AssertionError('legacy summary')))
+            sid = (await self.notebook_rpc('new_notebook'))['session_id']
+            self.host.agent.llm = FakeLLM(['complete answer [1]'])
+            tokens = []
+            result = await self.notebook_question(sid, tokens)
+            self.assertEqual(result['type'], 'done', result)
+            self.assertEqual(json.loads(result['data']), dict(answer='complete answer [1]', cites=cites))
+            self.assertEqual(''.join(tokens), 'complete answer [1]')
+            nid = (await self.notebook_rpc('save_notebook_note', session_id=sid,
+                question='question', answer='answer [1]', cites=cites))['note_id']
+            self.host.agent.llm = FakeLLM(['summary [1]'])
+            result = await self.notebook_rpc('summarize_notebook', session_id=sid, note_ids=[nid], sampling={})
+            self.assertEqual(result['stage'], 'open', result)
+            self.assertEqual(result['answer'], 'summary [1]')
+            self.assertTrue(Path(result['path']).is_file())
+            self.assertTrue(result['note_id'])
+            launch.assert_called_once()
+            self.host.agent.llm = FakeLLM([dict(role='assistant', content='wrong tool body',
+                tool_calls=[dict(id='tool')])])
+            result = await self.notebook_question(sid)
+            self.assertEqual(result['type'], 'error')
+            self.assertIsInstance(result['data'], str)
+            self.assertEqual(result['result']['stage'], 'validation')
+            self.assertFalse(result['result']['answer_complete'])
+            self.host.agent.llm = FakeLLM(['full answer [1]'])
+            original = notebook._write
+            writes = 0
+            def write(book):
+                nonlocal writes
+                writes += 1
+                original(book)
+                if writes == 2:
+                    raise OSError('answer ack lost')
+            with patch.object(notebook, '_write', side_effect=write):
+                result = await self.notebook_question(sid)
+            self.assertEqual(result['result']['stage'], 'answer_save', result)
+            self.assertEqual(result['result']['change_state'], 'unconfirmed')
+            self.assertEqual(result['result']['answer'], 'full answer [1]')
+            self.assertFalse(self.host.conversation.running)
+            before = notebook._path().read_bytes()
+            with self.assertRaises(ConnectionClosed):
+                async with connect(f'ws://127.0.0.1:{self.port}/ws?token=wrong', proxy=None) as ws:
+                    await ws.send(json.dumps(dict(type='notebook', session_id=sid, text='no', doc_ids=['doc-1'],
+                        sampling=dict(reasoning_effort='low', temperature=.5, top_p=1))))
+                    await ws.recv()
+            self.assertEqual(notebook._path().read_bytes(), before)
+
+    async def test_notebook_generation_disconnect_finishes_once_without_blocking_reads_or_workers(self):
+        import threading
+        from contextlib import ExitStack
+        from desk_companion import knowledge, notebook
+        cites = [dict(n=1, doc='source', title='section', text='original', doc_id='doc-1')]
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(knowledge, 'public_view', return_value=dict(docs=[])))
+            stack.enter_context(patch.object(knowledge, 'ask_sources', side_effect=lambda q, ids, complete:
+                dict(answer=complete('system', q), cites=cites)))
+            stack.enter_context(patch.object(self.host.conversation, 'engage_model'))
+            launch = stack.enter_context(patch('os.startfile'))
+            sid = (await self.notebook_rpc('new_notebook'))['session_id']
+            nid = (await self.notebook_rpc('save_notebook_note', session_id=sid,
+                question='question', answer='answer [1]', cites=cites))['note_id']
+            for mode in ('question', 'summary'):
+                entered, release = threading.Event(), threading.Event()
+                self.addCleanup(release.set)
+                def model(*args, **kwargs):
+                    if kwargs.get('on_delta'):
+                        kwargs['on_delta']('partial ')
+                    entered.set()
+                    if not release.wait(45):
+                        raise RuntimeError('fixture not released')
+                    return dict(message=dict(role='assistant', content='final body [1]'), usage={})
+                with patch.object(self.host.agent.llm, 'chat', side_effect=model) as call:
+                    async with connect(self.url, proxy=None) as ws:
+                        request = (dict(type='notebook', session_id=sid, text='question', doc_ids=['doc-1'],
+                            sampling=dict(reasoning_effort='low', temperature=.5, top_p=1)) if mode == 'question' else
+                            dict(type='rpc', method='summarize_notebook', args=dict(session_id=sid, note_ids=[nid], sampling={})))
+                        await ws.send(json.dumps(request))
+                        try:
+                            self.assertTrue(await asyncio.to_thread(entered.wait, 5))
+                            self.assertTrue((await self.notebook_rpc('load_notebook'))['ok'])
+                            rejected_question = await self.notebook_question(sid)
+                            self.assertEqual(rejected_question['type'], 'error')
+                            self.assertEqual(rejected_question['result']['stage'], 'admission')
+                            rejected = await self.notebook_rpc('summarize_notebook', session_id=sid, note_ids=[nid], sampling={})
+                            self.assertEqual(rejected['change_state'], 'not_changed')
+                            self.assertEqual(rejected['stage'], 'admission')
+                            acquired = self.host.turn_lock.acquire(blocking=False)
+                            self.assertTrue(acquired)
+                            if acquired:
+                                self.host.turn_lock.release()
+                            task = await asyncio.to_thread(self.host.tasks.submit, '写入测试', 'other')
+                            done = await asyncio.wait_for(asyncio.to_thread(self.host.tasks.wait, task), 20)
+                            self.assertEqual(done['state'], 'succeeded', done)
+                            await asyncio.wait_for(asyncio.to_thread(notebook.begin_notebook_turn, sid, 'concurrent'), 5)
+                            await ws.close()
+                            self.assertTrue(self.host.conversation.running)
+                        finally:
+                            release.set()
+                    for _ in range(100):
+                        if not self.host.conversation.running:
+                            break
+                        await asyncio.sleep(.05)
+                    self.assertFalse(self.host.conversation.running)
+                    self.assertEqual(call.call_count, 1)
+            self.assertEqual(launch.call_count, 1)
+            book = notebook._find(notebook._read(), sid)
+            self.assertEqual(len(book['notes']), 2)
+            self.assertEqual(sum(t['role'] == 'pet' for t in book['turns']), 1)
+            self.assertEqual(Path(self.temp.name, 'write_count').read_text(), '2')
+            self.assertTrue((await self.notebook_rpc('load_notebook'))['ok'])
+
     async def test_notebook_reads_and_busy_writes_during_question_summary_and_compression(self):
         import threading
         from contextlib import ExitStack

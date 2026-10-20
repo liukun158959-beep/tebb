@@ -864,10 +864,20 @@ export function App() {
           return next;
         });
       },
-      onError: (message) => {
+      onError: (message, result) => {
         setNoteBusy(false);
         setNoteStatus("");
         setNoteError(message);
+        if (typeof result?.answer === 'string' && result.answer) {
+          patchNote(sessionId, (turns) => {
+            const next = turns.slice();
+            const last = next[next.length - 1];
+            if (last?.role === 'pet') next[next.length - 1] = { ...last, text: result.answer!,
+              cites: result.answer_complete && Array.isArray(result.cites) ? result.cites : [] };
+            return next;
+          });
+          return;
+        }
         if (tokens) return;
         patchNote(sessionId, (turns) => {
           const next = turns.slice();

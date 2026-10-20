@@ -32,7 +32,7 @@ python -m unittest discover -s tests -p test_tasks.py -v
 
 预期：离线测试全部通过；后台任务不改变桌面选中的会话或窗口配置；模型或检索失败时不写入成功回复，临时工具清理失败时仍释放忙碌状态和回调。若失败，先看 unittest 的具体断言与子进程 stderr：`GUI import forbidden` 表示新增了窗口依赖；缺少 result 或出现 failure 则检查本轮异常、采样输入、工具回执及模型记录。
 
-已独立的范围包括普通/知识任务、共享对话业务、模型/人设配置、普通会话/只读记忆、长期事实/单句历史编辑、手动压缩及笔记基础读写/导出/生成文件操作；本地 API 的其它数据 RPC 仍通过 HeadlessApp 继承兼容，不代表整个后端已无 GUI 依赖。GUI 实机、真实模型和完整发布包验收单独报告。
+已独立的范围包括普通/知识任务、共享对话业务、模型/人设配置、普通会话/只读记忆、长期事实/单句历史编辑、手动压缩及笔记读写/来源问答/勾选总结/导出/生成文件操作；本地 API 的其它数据 RPC 仍通过 HeadlessApp 继承兼容，不代表整个后端已无 GUI 依赖。GUI 实机、真实模型和完整发布包验收单独报告。
 
 ## 记录范围与验证
 
@@ -125,7 +125,7 @@ python -m unittest tests.test_local_api.LocalApiTests.test_notebook_reads_and_bu
 
 底层 `notebook.json` 使用独立跨进程锁保护所有读改写，包括问答、收藏、导出登记及生成文件清理；复用临时文件原子替换，模型等待、飞书调用和系统打开文件不持笔记存储锁。跨进程测试竞争保存、问答写回、成果收藏及 Markdown 导出，核对每项增量均保留；操作系统锁在进程退出时释放。原子替换不等于笔记和生成文件的跨文件事务，也不承诺掉电耐久性。
 
-失败回执：`not_changed` 为准入/校验等失败；`partial` 为生成文件清理未完成、笔记记录仍保留，附 `session_id/note_id/removed_files/failed_file`；`unconfirmed` 为笔记记录保存结果未确认，附目标 ID 及已清理文件；`committed` 为记录已保存但聚合页读取失败。先重新读取目标核对；附件部分删除不会恢复，读取失败不能被解释为保存没有发生。问答、汇总生命周期仍留宿主，HeadlessApp 整体尚未脱离 GUI。见 [ADR 0008](adr/0008-notebook-service.md)、[#127](https://github.com/liukun158959-beep/tebb/issues/127) 及 [Windows 锁缺陷 #128](https://github.com/liukun158959-beep/tebb/issues/128)。
+失败回执：`not_changed` 为准入/校验等失败；`partial` 为生成文件清理未完成、笔记记录仍保留，附 `session_id/note_id/removed_files/failed_file`；`unconfirmed` 为笔记记录保存结果未确认，附目标 ID 及已清理文件；`committed` 为记录已保存但聚合页读取失败。先重新读取目标核对；附件部分删除不会恢复，读取失败不能被解释为保存没有发生。问答与勾选总结的后续共享服务见下文；HeadlessApp 整体尚未脱离 GUI。见 [ADR 0008](adr/0008-notebook-service.md)、[#127](https://github.com/liukun158959-beep/tebb/issues/127) 及 [Windows 锁缺陷 #128](https://github.com/liukun158959-beep/tebb/issues/128)。
 
 ## 无 GUI 的笔记导出及生成文件验收
 
@@ -146,6 +146,31 @@ Markdown 保留同名覆盖、旧文件清理及登记；成功导出后请求�
 `partial` 为旧文件清理未完成；`unconfirmed` 为文件生成/删除或登记写入结果未确认；`committed` 为文件与登记已完成但刷新或打开失败。`path` 始终为目标路径，是否确认生成需同时检查 `steps.generation`，不能仅凭 path 判定存在。刷新失败不继续系统打开。删除只影响指定生成文件和登记，保留其它文件、笔记、问答和引用来源；文件已缺失时清理失效登记。登记重复文件名时拒绝不明确的单文件操作。
 
 飞书每次创建新文档，保留现有 90 秒 CLI 超时；本服务不重试，底层 CLI 的内部行为不构成云端幂等保证。异常/超时/无有效回执按创建未确认处理，先去飞书核对；已确认创建但打开失败时回执保留 `url/document_id`。连接断开不取消已经运行的同步操作；本地导出/删除应重连后读取笔记并核对文件，飞书应核对云端，不能盲重试。本批无取消入口、云端去重或新 UI。参见 [ADR 0009](adr/0009-notebook-outputs.md) 和 [#129](https://github.com/liukun158959-beep/tebb/issues/129)；真实飞书、系统应用显示和发布包未由替身测试验证。
+
+## 无 GUI 的笔记问答与勾选总结验收
+
+在仓库根目录使用隔离数据、假模型或 OpenAI SDK 的 MockTransport、系统启动替身运行，无真实模型或外部写入：
+
+```powershell
+$env:PYTHONUTF8='1'
+python -m unittest tests.test_notebook_generation -v
+python -m unittest tests.test_local_api.LocalApiTests.test_notebook_generation_service_rpc_preserves_protocol_and_failure_phases tests.test_local_api.LocalApiTests.test_notebook_generation_disconnect_finishes_once_without_blocking_reads_or_workers tests.test_local_api.LocalApiTests.test_notebook_reads_and_busy_writes_during_question_summary_and_compression -v
+# client/ 下运行笔记传输、前端完整回归、类型检查和构建
+node --test tests/workspace.test.cjs
+pnpm test
+pnpm exec tsc --noEmit
+pnpm build
+```
+
+独立入口为 `NotebookService.run_notebook(session_id,text,doc_ids,sampling,delta_sink,status_sink)` 和 `summarize_notebook(session_id,note_ids,sampling)`。复用已有会话服务及其 ConversationService；在隔离数据中绑定 FakeLLM/MockTransport，并注入笔记平台替身，不能调用真实系统启动。服务返回业务 `ok`；问答传输仍用 `type=notebook`，成功 `done.data` 为原 JSON 字符串 `{answer,cites}`，失败 `error.data` 仍为字符串，额外 `result` 提供结构化失败详情。总结仍为同名 RPC，外层派发和内层业务两层 `ok`，成功包含原笔记页和 path/message。
+
+两入口短暂取得宿主准入、预留共享 running 后释放锁，忙碌立即拒绝；模型、文件导出和系统启动收尾结束才释放预留。读取和独立任务继续，模型及系统等待不持宿主、笔记存储或全局 WRITES。问答先保存提问再检索，来源错误也可能已留下提问。正常完成、非空字符串且没有 tool_calls/function_call 才持久化完整回答/新笔记；失败片段仅留当前页面或失败回执，不写成完整回答。总结使用所选已存回答快照、按选择顺序重新编号引用，不重新检索原文；成功保存新笔记再导出 Markdown 并请求系统打开。
+
+失败回执包含 `session_id/stage/change_state/steps`，以及已取得的 `answer/answer_complete/cites/note_id/path`。`answer_complete` 仅表示模型正文已通过校验，不表示已保存。`not_changed` 指笔记尚未变更（可能已有用量记录）；`partial` 指提问已写入但整轮未完成；`unconfirmed` 指提问/回答/笔记或文件登记写入结果未确认；`committed` 指笔记或文件已确认完成但后续步骤失败。结合 steps 判断哪项已确认，不能仅看全局 change_state。保存未确认先重新读取；已取得正文通过服务/RPC 失败结果保留，问答前端保留流式片段及返回正文，不将失败当成成功。
+
+用量沿用正常模型返回后先记录、再校验并保存正文的顺序；用量保存失败阻止正文持久化，正文仍通过失败回执返回。异常携带的 partial usage 本批不升级补记，不能据错误声称零费用。无 GUI 子进程用例覆盖正文/工具校验、SDK 不完整 finish、用量失败、写入确认丢失及总结导出/刷新/打开失败；认证 WebSocket 用例验证协议、错误 token、立即拒绝、独立 worker 实际写入，以及两入口断连后仅执行一次并完成后台收尾。
+
+笔记流加入一次性终态处理：提前关闭、网络错误、非法 JSON/事件或非法完成结果均解除前端等待并提示先核对，不把断线视为完成。正常 done 后主动关闭不再误报失败，忽略重复或迟到帧。只调整笔记流，普通聊天流不在本批。同步总结保留现有 RPC 断连提示；没有新增任务 ID、取消、自动重试或持久化恢复接口。断连后台可能继续保存/打开，重连后 load_notebook 核对；未落盘片段无法从后端恢复。真实模型、GUI 实机、系统应用显示及完整发布包需另外验收。见 [ADR 0010](adr/0010-notebook-generation.md) 与 [#130](https://github.com/liukun158959-beep/tebb/issues/130)。
 
 ## 无 GUI 的手动压缩服务验收
 

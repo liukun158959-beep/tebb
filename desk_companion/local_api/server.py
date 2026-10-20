@@ -14,6 +14,7 @@ import asyncio
 import json
 import hmac
 import os
+import threading
 
 from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
@@ -176,6 +177,7 @@ def _dispatch(method: str, args: dict, preview=False) -> dict:
                       "load_notebook", "new_notebook", "save_notebook_note", "delete_notebook_note",
                       "export_notebook_markdown", "export_notebook_feishu", "open_notebook_file",
                       "reveal_notebook_file", "delete_notebook_file",
+                      "summarize_notebook",
                       "load_collaboration", "collaboration_action", "project_workspace", "check_updates", "list_agent_tasks", "get_agent_task", "cancel_agent_task", "continue_agent_task", "save_agent_task_settings", "load_task_progress",
                       "list_debug_calls", "get_debug_call", "set_debug_recording", "explain_debug_call",
                       "load_model_network", "save_model_network",
@@ -300,18 +302,27 @@ async def _handle_notebook(ws, msg: dict) -> None:
         return
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
+    connected = threading.Event()
+    connected.set()
+
+    def publish(kind, data):
+        if connected.is_set():
+            try:
+                loop.call_soon_threadsafe(queue.put_nowait, (kind, data))
+            except RuntimeError:
+                pass  # A closed event loop cannot receive results; model cleanup still runs.
 
     def delta_sink(piece: str) -> None:
-        loop.call_soon_threadsafe(queue.put_nowait, ("token", piece))
+        publish('token', piece)
 
     def status_sink(text: str) -> None:
-        loop.call_soon_threadsafe(queue.put_nowait, ("status", text))
+        publish('status', text)
 
     def run() -> None:
         try:
             from ..agent_debug import context
-            with HOST.turn_lock, context(session=str(msg.get("session_id") or ""), channel="notebook"):
-                found = HOST.run_notebook(
+            with context(session=str(msg.get("session_id") or ""), channel="notebook"):
+                found = HOST.notebooks.run_notebook(
                     str(msg.get("session_id") or ""),
                     str(msg.get("text") or ""),
                     msg.get("doc_ids") if isinstance(msg.get("doc_ids"), list) else [],
@@ -319,19 +330,27 @@ async def _handle_notebook(ws, msg: dict) -> None:
                     delta_sink,
                     status_sink,
                 )
-            loop.call_soon_threadsafe(
-                queue.put_nowait,
-                ("done", json.dumps(found, ensure_ascii=False)),
-            )
+            if found['ok']:
+                publish('done', json.dumps(dict(answer=found['answer'], cites=found['cites']), ensure_ascii=False))
+            else:
+                publish('error', found)
         except Exception as exc:
-            loop.call_soon_threadsafe(queue.put_nowait, ("error", f"{type(exc).__name__}: {exc}"))
+            publish('error', f'{type(exc).__name__}: {exc}')
 
     asyncio.get_running_loop().run_in_executor(None, run)
-    while True:
-        kind, data = await queue.get()
-        await ws.send(json.dumps({"type": kind, "data": data}, ensure_ascii=False))
-        if kind in ("done", "error"):
-            break
+    try:
+        while True:
+            kind, data = await queue.get()
+            frame = dict(type=kind, data=data)
+            if kind == 'error' and isinstance(data, dict):
+                frame.update(data=data['error'], result=data)
+            await ws.send(json.dumps(frame, ensure_ascii=False))
+            if kind in ('done', 'error'):
+                break
+    except ConnectionClosed:
+        return
+    finally:
+        connected.clear()
 
 
 async def scheduled_jobs(host, shutdown):

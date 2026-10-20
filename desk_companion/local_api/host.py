@@ -2,13 +2,12 @@
 
 普通/知识问答委托 ConversationService；模型/人设 RPC 直接使用共享配置服务。
 普通会话与只读记忆 RPC 使用 ChatSessionService，记忆编辑使用 MemoryEditingService。
-手动压缩使用 ContextCompressionService；笔记基础、导出及文件 RPC 使用 NotebookService。
-看板、笔记问答及汇总等方法仍保留宿主兼容。
+手动压缩使用 ContextCompressionService；笔记读写、生成、导出及文件 RPC 使用 NotebookService。
+看板及知识库管理等方法仍保留宿主兼容。
 这里仍有 GUI 类继承，任务 worker 直接使用共享服务，不导入此模块。
 """
 from __future__ import annotations
 
-import os
 import threading
 import uuid
 from contextlib import contextmanager
@@ -169,117 +168,6 @@ class HeadlessApp(App):
                 return str(message.get("content") or "")
 
             return {"ok": True, "trace": ask(text, complete)}
-
-        return self._knowledge_call(run)
-
-    def run_notebook(self, session_id: str, text: str, doc_ids: list, sampling: dict, delta_sink, status_sink) -> dict:
-        if self._agent_running:
-            raise RuntimeError("助手正在回复，等这句说完再问。")
-        self.engage_model()
-        from ..knowledge import ask_sources
-        from ..notebook import begin_notebook_turn, finish_notebook_turn
-
-        self._agent_running = True
-        llm = self.agent.llm
-        llm.sampling = sampling
-        llm.on_reasoning = None
-        try:
-            status_sink("正在检索来源")
-            begin_notebook_turn(session_id, text)
-
-            def complete(system: str, user: str) -> str:
-                status_sink("正在写回答")
-                result = llm.chat(
-                    [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                    tools=None,
-                    on_delta=delta_sink,
-                )
-                self._record_llm_usage(result.get("usage"), str(uuid.uuid4()))
-                message = result.get("message") or {}
-                return str(message.get("content") or "")
-
-            found = ask_sources(text, doc_ids, complete)
-            finish_notebook_turn(session_id, found["answer"], found["cites"])
-            return {"answer": found["answer"], "cites": found["cites"]}
-        finally:
-            llm.sampling = None
-            llm.on_reasoning = None
-            self._agent_running = False
-
-    def board_summarize_notebook(self, session_id: str, note_ids: list, sampling: dict) -> dict:
-        def run() -> dict:
-            import re
-
-            from ..notebook import save_note, selected_answers, write_note_markdown
-
-            found = selected_answers(session_id, note_ids)
-            self.engage_model()
-            llm = self.agent.llm
-            llm.sampling = sampling
-            llm.on_reasoning = None
-            try:
-                cites = []
-                blocks = []
-                for note in found:
-                    mapping = {}
-                    for cite in note["cites"]:
-                        number = len(cites) + 1
-                        mapping[cite["n"]] = number
-                        row = dict(cite)
-                        row["n"] = number
-                        cites.append(row)
-
-                    def shift(match: re.Match, table=mapping) -> str:
-                        old = int(match.group(1))
-                        if old not in table:
-                            return match.group(0)
-                        return f"[{table[old]}]"
-
-                    answer_text = re.sub(r"\[(\d+)\]", shift, note["answer"])
-                    blocks.append(f"## {note['question']}\n{answer_text}")
-                themes = "、".join(note["question"] for note in found)
-                question = f"总结：{themes}"
-                result = llm.chat(
-                    [
-                        {
-                            "role": "system",
-                            "content": (
-                                "你在把勾选的模型回答写成一份文档。只使用这些回答里的内容。"
-                                "不要改去引用原文，也不要补回答里没有的内容。"
-                                "用到哪一条回答里的编号，就保持那个编号，例如 [1]。不要调用工具。"
-                            ),
-                        },
-                        {"role": "user", "content": "请把下面勾选的回答总结成一份文档。\n\n" + "\n\n".join(blocks)},
-                    ],
-                    tools=None,
-                )
-                self._record_llm_usage(result.get("usage"), str(uuid.uuid4()))
-                message = result.get("message") or {}
-                answer = str(message.get("content") or "").strip()
-            finally:
-                llm.sampling = None
-                llm.on_reasoning = None
-            if not answer:
-                raise RuntimeError("总结没有写出正文。恢复：再总结一次。")
-            page = save_note(session_id, question, answer, cites)
-            note_id = page.get("note_id")
-            if type(note_id) is not str or not note_id:
-                raise RuntimeError("总结没有存进笔记。恢复：再总结一次。")
-            try:
-                saved = write_note_markdown(session_id, note_id)
-            except Exception as exc:
-                raise RuntimeError(f"总结已存成笔记，但文档没有写下来：{exc}。恢复：在这条笔记上点 Markdown。") from exc
-            try:
-                os.startfile(saved["path"])
-            except OSError:
-                saved["ok"] = False
-                saved["error"] = f"总结已记在新笔记下：{saved['path']}，但没有打开。恢复：点「打开」。"
-                return saved
-            saved["message"] = "已把勾选的回答总结成一份文档，记在新笔记下面。"
-            return saved
 
         return self._knowledge_call(run)
 

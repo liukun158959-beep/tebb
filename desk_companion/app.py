@@ -395,6 +395,12 @@ class App(BoardWorkbench):
     def board_delete_notebook_file(self, session_id: str, note_id: str, name: str) -> dict:
         return self.notebooks.delete_notebook_file(session_id, note_id, name)
 
+    def run_notebook(self, session_id, text, doc_ids, sampling, delta_sink, status_sink):
+        return self.notebooks.run_notebook(session_id, text, doc_ids, sampling, delta_sink, status_sink)
+
+    def board_summarize_notebook(self, session_id: str, note_ids: list, sampling: dict) -> dict:
+        return self.notebooks.summarize_notebook(session_id, note_ids, sampling)
+
     def prepare_context(
         self,
         current_text: str,

@@ -393,7 +393,7 @@ class Bridge:
         return self._host.notebooks.export_notebook_feishu(session_id, note_id)
 
     def summarize_notebook(self, session_id: str, note_ids: list, sampling: dict) -> dict:
-        return self._host.board_summarize_notebook(session_id, note_ids, sampling)
+        return self._host.notebooks.summarize_notebook(session_id, note_ids, sampling)
 
     def open_notebook_file(self, session_id: str, note_id: str, name: str) -> dict:
         return self._host.notebooks.open_notebook_file(session_id, note_id, name)

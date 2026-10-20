@@ -67,6 +67,8 @@ export type NotebookDone = {
   }[];
 };
 
+export type NotebookFailure = Partial<NotebookDone> & { answer_complete?: boolean };
+
 export function streamNotebook(
   info: BackendInfo,
   sessionId: string,
@@ -77,11 +79,19 @@ export function streamNotebook(
     onToken: (piece: string) => void;
     onStatus: (text: string) => void;
     onDone: (payload: NotebookDone) => void;
-    onError: (message: string) => void;
+    onError: (message: string, result?: NotebookFailure) => void;
   },
 ): void {
   const ws = new WebSocket(wsUrl(info));
+  let settled = false;
+  function fail(message: string, result?: NotebookFailure) {
+    if (settled) return;
+    settled = true;
+    ws.close();
+    handlers.onError(message, result);
+  }
   ws.onopen = () => {
+    if (settled) return;
     ws.send(JSON.stringify({
       type: "notebook",
       session_id: sessionId,
@@ -91,18 +101,30 @@ export function streamNotebook(
     }));
   };
   ws.onmessage = (ev) => {
-    const msg = JSON.parse(String(ev.data)) as { type: string; data?: string };
-    if (msg.type === "token") handlers.onToken(msg.data || "");
-    else if (msg.type === "status") handlers.onStatus(msg.data || "");
-    else if (msg.type === "done") {
-      handlers.onDone(JSON.parse(msg.data || "{}") as NotebookDone);
-      ws.close();
-    } else if (msg.type === "error") {
-      handlers.onError(msg.data || "笔记提问失败");
-      ws.close();
+    if (settled) return;
+    let msg: { type: string; data?: string; result?: NotebookFailure };
+    let done: NotebookDone | undefined;
+    try {
+      msg = JSON.parse(String(ev.data));
+      if (typeof msg?.type !== 'string' || typeof msg.data !== 'string') throw new Error('invalid event');
+      if (msg.type === 'done') {
+        done = JSON.parse(msg.data) as NotebookDone;
+        if (typeof done?.answer !== 'string' || !done.answer.trim() || !Array.isArray(done.cites)) throw new Error('invalid result');
+      } else if (!['token', 'status', 'error'].includes(msg.type)) throw new Error('unknown event');
+    } catch {
+      fail('本地后端返回了无法解析的笔记结果，操作可能仍在执行；请重新读取笔记核对。');
+      return;
     }
+    if (msg.type === 'token') handlers.onToken(msg.data || '');
+    else if (msg.type === 'status') handlers.onStatus(msg.data || '');
+    else if (done) {
+      settled = true;
+      ws.close();
+      handlers.onDone(done);
+    } else fail(msg.data || '笔记提问失败', msg.result);
   };
-  ws.onerror = () => handlers.onError("连不上本地后端。恢复：看 tebb 日志后重启客户端");
+  ws.onerror = () => fail('笔记连接异常，尚未确认操作结果；后台可能继续，请重新读取笔记核对。');
+  ws.onclose = () => fail('笔记连接已断开，尚未收到完成结果；后台可能继续，请重新读取笔记核对。');
 }
 
 export function streamChat(

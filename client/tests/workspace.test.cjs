@@ -134,6 +134,46 @@ test('RPC rejects disconnects, invalid replies and explicit timeouts instead of 
   assert.deepEqual(await pending, { value: 42 });
 });
 
+test('notebook stream settles once on early close and retains already delivered text', () => {
+  const { streamNotebook } = load('api'); let socket; const errors = [], tokens = [], done = [];
+  global.WebSocket = class { constructor() { socket = this; } close() { this.onclose?.(); } send(value) { this.sent = JSON.parse(value); } };
+  const start = () => streamNotebook({port: 1, token: 'test'}, 'session', 'question', ['doc'], {}, {
+    onToken: text => tokens.push(text), onStatus() {}, onDone: value => done.push(value), onError: (...args) => errors.push(args),
+  });
+  start(); socket.onopen(); assert.equal(socket.sent.type, 'notebook');
+  socket.onmessage({data: JSON.stringify({type:'token', data:'partial'})});
+  socket.onclose(); socket.onerror();
+  socket.onmessage({data: JSON.stringify({type:'done', data:JSON.stringify({answer:'late', cites:[]})})});
+  assert.deepEqual(tokens, ['partial']); assert.equal(errors.length, 1); assert.match(errors[0][0], /后台可能继续/);
+  assert.deepEqual(done, []);
+  start(); socket.onerror(); socket.onclose(); assert.equal(errors.length, 2);
+});
+
+test('notebook stream rejects malformed events and keeps structured failure body without claiming completion', () => {
+  const { streamNotebook } = load('api'); let socket;
+  global.WebSocket = class { constructor() { socket = this; } close() { this.onclose?.(); } send() {} };
+  for (const frame of ['{bad', JSON.stringify({type:'done',data:'{bad'}),
+      JSON.stringify({type:'done',data:JSON.stringify({answer:'',cites:[]})}), JSON.stringify({type:'unknown',data:'bad'})]) {
+    let failures=0;
+    streamNotebook({port:1,token:'test'},'s','q',['d'],{}, {
+      onToken() {},onStatus() {},onDone(){assert.fail('invalid completion');},onError(message){failures++;assert.match(message,/无法解析/);},
+    });
+    socket.onmessage({data:frame}); socket.onclose(); assert.equal(failures,1);
+  }
+  let failed;
+  streamNotebook({port:1,token:'test'},'s','q',['d'],{}, {
+    onToken() {},onStatus() {},onDone(){assert.fail('failure is not completion');},onError:(message,result)=>{failed={message,result};},
+  });
+  socket.onmessage({data:JSON.stringify({type:'error',data:'save unconfirmed',result:{answer:'full body',answer_complete:true,cites:[]}})});
+  assert.equal(failed.result.answer,'full body');assert.equal(failed.message,'save unconfirmed');
+  let count=0;
+  streamNotebook({port:1,token:'test'},'s','q',['d'],{}, {
+    onToken() {},onStatus() {},onError(){assert.fail('successful close is not an error');},onDone(result){count++;assert.equal(result.answer,'complete');},
+  });
+  socket.onmessage({data:JSON.stringify({type:'done',data:JSON.stringify({answer:'complete',cites:[]})})});
+  socket.onclose(); assert.equal(count,1);
+});
+
 test('notebook titles are reading links, citations use complete stored Markdown, and batch/delete actions are explicit', async () => {
   let quoted, deleted = [], merged;
   const cite = { n: 1, doc: '来源', title: '原文', doc_id: 'd', text: '摘要', context: '# 完整片段\n**要点**' };

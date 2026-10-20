@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import re
+import uuid
 
 from . import notebook
 from .notebook_platform import NotebookPlatform
@@ -120,3 +122,136 @@ class NotebookService:
 
     def delete_notebook_file(self, session_id, note_id, name):
         return self._change(lambda: notebook.delete_note_file(session_id, note_id, name))
+
+    def _generate(self, session_id, action):
+        details = dict(session_id=session_id, stage='admission', change_state='not_changed',
+                       steps={}, answer_complete=False)
+
+        def run():
+            try:
+                return action(details)
+            except Exception as exc:
+                if isinstance(exc, notebook.NotebookChangeError):
+                    steps = dict(details['steps'], **exc.details.get('steps', {}))
+                    details.update(exc.details)
+                    details['steps'] = steps
+                    if details['stage'] == 'note_save' and details['change_state'] == 'committed':
+                        details['stage'] = 'note_refresh'
+                        details['steps']['note_save'] = 'confirmed'
+                partial = getattr(exc, 'partial', None)
+                if isinstance(partial, dict):
+                    message = partial.get('message') or {}
+                    content = message.get('content') if isinstance(message, dict) else None
+                    if isinstance(content, str):
+                        details['answer'] = content
+                details['steps'].setdefault(details['stage'],
+                    'unconfirmed' if details['change_state'] == 'unconfirmed' else 'failed')
+                target = ''.join(f' {key}={details[key]}' for key in ('note_id', 'path') if details.get(key))
+                return dict(details, ok=False, error=f'笔记生成未完整完成（{details["stage"]}）：{exc}。'
+                            f'{target} 请重新读取笔记核对结果，不要直接重复生成。')
+        result = self._change(run)
+        if not result.get('ok'):
+            result = dict(details, **result)
+        result.setdefault('session_id', session_id)
+        return result
+
+    def _complete(self, details, messages, sampling, on_delta=None):
+        conversation = self.sessions.conversation
+        llm = conversation.agent.llm
+        try:
+            llm.sampling = sampling
+            llm.on_reasoning = None
+            details['stage'] = 'model'
+            kwargs = dict(tools=None)
+            if on_delta is not None:
+                kwargs['on_delta'] = on_delta
+            # Atlas rejects incomplete transport finishes; the product also forbids tools.
+            result = llm.chat(messages, **kwargs)
+            message = result.get('message')
+            content = message.get('content') if isinstance(message, dict) else None
+            if isinstance(content, str):
+                details['answer'] = content
+            details['steps']['model'] = 'returned'
+            details['stage'] = 'usage'
+            conversation.record_llm_usage(result.get('usage'), str(uuid.uuid4()))
+            details['steps']['usage'] = 'confirmed'
+            details['stage'] = 'validation'
+            if not isinstance(message, dict) or message.get('tool_calls') or message.get('function_call'):
+                raise RuntimeError('模型返回了工具调用或无效消息，未保存为完整正文。')
+            if type(content) is not str or not content.strip():
+                raise RuntimeError('模型正文为空或不是字符串，未保存为完整正文。')
+            details['answer_complete'] = True
+            details['steps']['validation'] = 'confirmed'
+            return content.strip()
+        finally:
+            llm.sampling = None
+            llm.on_reasoning = None
+
+    def run_notebook(self, session_id, text, doc_ids, sampling, delta_sink, status_sink):
+        def run(details):
+            from .knowledge import ask_sources
+            details['stage'] = 'model_setup'
+            self.sessions.conversation.engage_model()
+            details['stage'] = 'question_save'
+            notebook.begin_notebook_turn(session_id, text)
+            details['steps']['question_save'] = 'confirmed'
+            details['change_state'] = 'partial'
+            details['stage'] = 'retrieval'
+            status_sink('正在检索来源')
+
+            def complete(system, user):
+                status_sink('正在写回答')
+                return self._complete(details, [dict(role='system', content=system),
+                    dict(role='user', content=user)], sampling, delta_sink)
+
+            found = ask_sources(text, doc_ids, complete)
+            details.update(answer=found['answer'], cites=found['cites'], stage='answer_save')
+            notebook.finish_notebook_turn(session_id, found['answer'], found['cites'])
+            return dict(ok=True, answer=found['answer'], cites=found['cites'])
+        return self._generate(session_id, run)
+
+    def summarize_notebook(self, session_id, note_ids, sampling):
+        def run(details):
+            details['stage'] = 'selection'
+            found = notebook.selected_answers(session_id, note_ids)
+            details['stage'] = 'model_setup'
+            self.sessions.conversation.engage_model()
+            question, body, cites = _summary_input(found)
+            details['cites'] = cites
+            answer = self._complete(details, [dict(role='system', content=(
+                '你在把勾选的模型回答写成一份文档。只使用这些回答里的内容。'
+                '不要改去引用原文，也不要补回答里没有的内容。'
+                '用到哪一条回答里的编号，就保持那个编号，例如 [1]。不要调用工具。')),
+                dict(role='user', content='请把下面勾选的回答总结成一份文档。\n\n' + body)], sampling)
+            details['answer'] = answer
+            details['stage'] = 'note_save'
+            page = notebook.save_note(session_id, question, answer, cites)
+            note_id = page['note_id']
+            details.update(note_id=note_id, change_state='committed', stage='export')
+            details['steps']['note_save'] = 'confirmed'
+            saved = notebook.write_note_markdown(session_id, note_id)
+            result = self._open_export(saved, saved['path'])
+            if result['ok']:
+                details['stage'] = 'complete'
+            return dict(details, **{key: value for key, value in result.items() if key != 'steps'},
+                        steps=dict(details['steps'], **result['steps']))
+        return self._generate(session_id, run)
+
+
+def _summary_input(notes):
+    """Merge snapshots in selection order; duplicate local citation numbers are remapped."""
+    cites, blocks = [], []
+    for note in notes:
+        mapping = {}
+        for cite in note['cites']:
+            number = len(cites) + 1
+            mapping[cite['n']] = number
+            cites.append(dict(cite, n=number))
+
+        def shift(match):
+            old = int(match.group(1))
+            return f'[{mapping[old]}]' if old in mapping else match.group(0)
+
+        answer = re.sub(r'\[(\d+)\]', shift, note['answer'])
+        blocks.append(f'## {note["question"]}\n{answer}')
+    return '总结：' + '、'.join(note['question'] for note in notes), '\n\n'.join(blocks), cites
