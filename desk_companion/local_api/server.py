@@ -181,6 +181,7 @@ def _dispatch(method: str, args: dict, preview=False) -> dict:
                       "load_knowledge", "save_knowledge", "download_knowledge", "delete_model",
                       "add_knowledge", "delete_knowledge", "rebuild_knowledge", "ask_knowledge",
                       "load_board", "create_agenda", "delete_agenda", "delete_task",
+                      "generate_week_review", "write_today_summary_doc", "write_week_review_doc",
                       "load_collaboration", "collaboration_action", "project_workspace", "check_updates", "list_agent_tasks", "get_agent_task", "cancel_agent_task", "continue_agent_task", "save_agent_task_settings", "load_task_progress",
                       "list_debug_calls", "get_debug_call", "set_debug_recording", "explain_debug_call",
                       "load_model_network", "save_model_network",
@@ -195,8 +196,7 @@ def _dispatch(method: str, args: dict, preview=False) -> dict:
         else:
             # 桌面数据操作仍串行；Agent 的共享写入也与界面修改互斥。
             with HOST.turn_lock:
-                mutating = {"add_fact", "update_fact", "delete_fact", "delete_memory_turn", "clear_chat",
-                            "write_today_summary_doc", "write_week_review_doc"}
+                mutating = {"add_fact", "update_fact", "delete_fact", "delete_memory_turn", "clear_chat"}
                 if method in mutating:
                     from ..resource_lock import WRITES
                     with WRITES:

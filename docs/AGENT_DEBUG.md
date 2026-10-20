@@ -222,6 +222,28 @@ today.json 所有读改写复用 ResourceLock 与原子替换。刷新仅合并�
 
 沿用 CLI 单次 60 秒超时及同步 RPC，不新增操作 ID、取消、持久化任务、自动重试或远端幂等协议。断连只结束前端等待，后台可能继续创建/删除和写缓存；先重新连接并用 `load_board(refresh=true)` 查询远端，必要时去飞书按事件 ID/标题/时间核对，不能只凭未刷新的本地缓存判定未执行。跨日或没有 event_id 时，需在对应日期核对；不自动重建同一日程。真实飞书服务/通知、GUI 实机、真实沙箱与发布包另行验收。见 [ADR 0012](adr/0012-board-service.md) 和 [#132](https://github.com/liukun158959-beep/tebb/issues/132)。
 
+## 无 GUI 的周复盘服务验收
+
+仓库根目录执行，使用临时数据、假模型、飞书 CLI 替身和实际认证 WebSocket，不向真实飞书创建文档或请求系统打开：
+
+```powershell
+python -m unittest tests.test_weekly_review -v
+python -m unittest tests.test_local_api.LocalApiTests.test_review_three_rpc_routes_authentication_and_failure_facts tests.test_local_api.LocalApiTests.test_review_model_and_publication_disconnect_allow_reads_board_and_workers tests.test_local_api.LocalApiTests.test_review_host_lock_and_old_desktop_busy_refuse_immediately -v
+python -m unittest discover -s tests -v
+```
+
+`WeeklyReviewService(chat_sessions, start_guard=..., open_document=...)` 提供三个原有入口：无参 `generate_week_review()`、无参 `write_today_summary_doc()`、`write_week_review_doc(payload)`，及调度器使用的 `write_scheduled_review(doc)`。独立调试先设临时 `DESK_COMPANION_DATA_DIR`，构造 ConversationService、ChatSessionService，给 conversation.agent 绑定 FakeLLM，替换 board_data 的看板/周材料读取、github.format_week_review_text、skill_catalog.read_skill、feishu_auth.create_markdown_doc、feishu_docs.overwrite_markdown_doc，并注入打开函数。认证 RPC 白名单和参数不变，检查外层派发 `ok` 与内层业务 `ok`；直接调用共享服务无需导入 App、Bridge 或窗口。
+
+材料加载前即预留共享助手至保存/打开或失败清理，忙碌立即拒绝；只读、今日看板远端操作、独立后台任务继续。短准入时非阻塞检查宿主锁和旧桌宠 busy，外部等待不持宿主、全局 WRITES、会话或存储锁；自动化复盘最终准入竞争返回 `retryable_busy=true`，队列和 queued 记录保留至后续调度，不能立刻循环重试，也不能把它写作模型失败。独立资讯动作仍可执行。自动化配置与整体调度/停机恢复不属于本批。
+
+生成固定开始日期、周一起点和材料截止时刻；summary_at 记录该材料截止时刻。沿用 GitHub 产出、飞书日程和未完成待办及 weekly-retro 技能，区分产出和会议/待办；用量仍在正常模型返回后、正文校验及保存前落账。Atlas 负责完成原因，产品复用 require_text 拒绝空、非字符串和工具调用正文；模型异常的 partial 正文保留在失败回执，不冒充已落盘复盘。模型/材料/用量失败不替换旧正文，保存结果未确认先读取核对。保存日期在同一短存储锁内复验，旧日结果不得写进新日缓存；新正文、summary_at、清空 doc_url 一次原子替换，看板分区仍保留最新值。
+
+三种发布统一要求非空正文、summary_at 在当前周且不在未来。write_today_summary_doc 总是新建、登记有效 URL 并请求打开；write_week_review_doc 接收 doc 或 title 二选一，覆盖或新建，有有效返回链接才登记，仅新建请求打开；自动化只覆盖配置文档，不登记链接、不请求打开。打开结果为请求已提交，不承诺用户系统已展示文档。每次固定开始时正文，登记时检查原日期、原正文与生成时间，冲突保留已确认远端结果而不将旧链接写到新正文。
+
+回执增加 `stage/change_state/steps`、可取得的 summary、summary_at、target、url、document_id，以及发布的 remote_state、cache_state；原正常快照和 URL 保留。远端未明确成功是 unconfirmed；确认远端成功后本地登记/读取/系统打开失败是 committed，文案同样保留目标或链接。CLI 确认创建但缺链接时保留 document_id，标记 remote_result 阶段，不盲重建。保存与读取合并在既有 save_today_fields 入口中，没有额外自动远端刷新；存储前置核对未通过说明 not_changed，进入原子写入后异常按 unconfirmed 报告，不能声称回滚。错误字段保留已得正文并不表示该正文已替换今日缓存。
+
+同步 RPC 与模型/飞书既有超时沿用，不增加进度、取消、幂等键或自动重试。断连后台可能继续保存或打开，重连先用 load_board 读取本地并在飞书核对目标文档；仅缓存没有链接不能证明远端未创建。真实模型、真实飞书、GUI 实机与发布包另行验收。见 [ADR 0013](adr/0013-weekly-review-service.md) 和 [#133](https://github.com/liukun158959-beep/tebb/issues/133)。
+
 ## 无 GUI 的手动压缩服务验收
 
 仓库根目录执行，使用临时数据、真实 OpenAI SDK 的 MockTransport、脚本 worker 和文件故障，不请求真实模型或发送外部消息：

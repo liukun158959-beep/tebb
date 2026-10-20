@@ -30,6 +30,7 @@ from .knowledge_service import KnowledgeService
 from .automation import AutomationScheduler
 from .board_workbench import BoardWorkbench
 from .board_service import BoardService
+from .weekly_review import WeeklyReviewService
 from .bridge import Bridge
 from .layered import enable_dpi_aware, work_area
 from .logutil import crash, install_crash_hooks, log, mark_ready, start_os_watchdog
@@ -71,9 +72,6 @@ DAILY_ASK = """【今日纸条】请先调用 get_today_agenda 和 get_open_task
 2. 再用有序列表列出今天其余值得盯的 2 到 4 项
 3. 若有多条日程或待办，再给一张表格，列：事项 / 截止 / 状态
 不要鸡汤，不要写成一段话。工具失败就原样说明怎么修。"""
-SUMMARY_ASK = """【本周复盘】不要调用工具。只根据后面的本周材料写中文 Markdown，不要编造材料里没有的事。
-结构、红线和能用的语法以【技能规程】为准，不要另起章节，不要把整篇包进代码块。
-不要把会议、待办或对话写成产出。"""
 PAPER = "#FFF6EC"
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWCP_ROUND = 2
@@ -102,6 +100,7 @@ class App(BoardWorkbench):
         self.context_compression = ContextCompressionService(self.chat_sessions, start_guard=self._compression_start_guard)
         self.notebooks = NotebookService(self.chat_sessions, start_guard=self._notebook_start_guard)
         self.board_service = BoardService()
+        self.weekly_review = WeeklyReviewService(self.chat_sessions, start_guard=self._review_start_guard)
         self.knowledge_service = KnowledgeService(self.chat_sessions, start_guard=self._knowledge_start_guard)
         self.bridge = Bridge(self, session_changed=None if headless else self._on_session_changed)
         self._queue: queue.Queue = queue.Queue()
@@ -344,6 +343,12 @@ class App(BoardWorkbench):
             raise RuntimeError('助手正在回复或仍在收尾，完成或停止后再操作知识库。')
         yield
 
+    @contextmanager
+    def _review_start_guard(self):
+        if self.pet is not None and self.pet.busy:
+            raise RuntimeError('助手正在回复或仍在收尾，完成或停止后再操作周复盘。')
+        yield
+
     def board_knowledge(self):
         return self.knowledge_service.load_knowledge()
 
@@ -570,142 +575,10 @@ class App(BoardWorkbench):
         self.send_chat(LOG_ASK)
 
     def generate_week_review(self) -> dict:
-        if self._agent_running:
-            return {"ok": False, "error": "助手正在回复，等这句说完再生成本周复盘。"}
-        if self.agent is None:
-            return {
-                "ok": False,
-                "error": self._agent_error or "还没接上模型。打开看板「模型」页填写。",
-            }
-        from .board_data import (
-            fetch_week_feishu,
-            load_today_snapshot,
-            save_today_fields,
-            week_range,
-        )
-        from .github import format_week_review_text
-        from .skill_catalog import read_skill
-
-        try:
-            load_today_snapshot(refresh=False)
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-        monday, now = week_range()
-        feishu = fetch_week_feishu(monday, now)
-        if not feishu["agenda"].get("ok"):
-            return {
-                "ok": False,
-                "error": feishu["agenda"].get("error")
-                or "本周日程读取失败，去「飞书」页检查登录。",
-            }
-        if not feishu["tasks"].get("ok"):
-            return {
-                "ok": False,
-                "error": feishu["tasks"].get("error")
-                or "未完成待办读取失败，去「飞书」页检查登录。",
-            }
-        try:
-            github_text = format_week_review_text(monday, now)
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-        try:
-            skill = read_skill("weekly-retro")
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-        self._agent_running = True
-        run_id = str(uuid.uuid4())
-        try:
-            prompt = (
-                SUMMARY_ASK
-                + "\n\n【技能规程】\n"
-                + skill["body"]
-                + "\n\n【本周材料】\n"
-                + self._week_review_materials(monday, now, feishu, github_text)
-            )
-            result = self.agent.llm.chat(
-                [
-                    {
-                        "role": "system",
-                        "content": self.state.persona
-                        + "\n\n你现在只写本周复盘，不要调用工具。按用户消息里的技能规程写。",
-                    },
-                    {"role": "user", "content": prompt},
-                ]
-            )
-            self._record_llm_usage(result.get("usage"), run_id)
-            message = result.get("message") or {}
-            markdown = str(message.get("content") or "").strip()
-            if not markdown:
-                raise RuntimeError("复盘正文为空。")
-            summary_at = datetime.now(TZ).isoformat(timespec="seconds")
-            snap = save_today_fields(summary=markdown, summary_at=summary_at)
-            return {
-                "ok": True,
-                **snap,
-                "message": "本周复盘已写在自动化任务「周复盘」和今日页，并已落盘。",
-            }
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-        finally:
-            self._agent_running = False
+        return self.weekly_review.generate_week_review()
 
     def write_today_summary_doc(self) -> dict:
-        from .board_data import load_today_snapshot, save_today_fields, week_range
-        from .feishu_auth import create_markdown_doc
-
-        try:
-            snap = load_today_snapshot(refresh=False)
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-        markdown = (snap.get("summary") or "").strip()
-        if not markdown:
-            return {"ok": False, "error": "还没有复盘。先在自动化任务「周复盘」里生成。"}
-        try:
-            monday, now = week_range()
-            title = f"{monday.strftime('%Y-%m-%d')}～{now.strftime('%Y-%m-%d')} 周复盘"
-            created = create_markdown_doc(title, markdown)
-            snap = save_today_fields(doc_url=created["url"])
-            os.startfile(created["url"])
-            return {
-                "ok": True,
-                **snap,
-                "url": created["url"],
-                "message": "复盘已写到飞书文档，并打开了链接。",
-            }
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-
-    def _week_review_materials(
-        self, monday: datetime, now: datetime, feishu: dict, github_text: str
-    ) -> str:
-        start = monday.strftime("%Y-%m-%d")
-        end = now.strftime("%Y-%m-%d %H:%M")
-        parts = [
-            f"区间：{start}～{end} 东八区",
-            "",
-            "## GitHub 产出与待完成",
-            github_text.strip() or "无",
-            "",
-            "## 飞书本周日程",
-        ]
-        agenda_items = feishu["agenda"].get("items") or []
-        if not agenda_items:
-            parts.append("本周无日程。")
-        else:
-            for item in agenda_items:
-                when = item.get("start") or ""
-                if item.get("end"):
-                    when = f"{when} – {item['end']}"
-                parts.append(f"- {when} {item.get('summary') or ''}".strip())
-        parts.extend(["", "## 飞书未完成待办"])
-        task_items = feishu["tasks"].get("items") or []
-        if not task_items:
-            parts.append("无未完成待办。")
-        else:
-            for item in task_items:
-                due = item.get("due_at") or "无截止"
-                parts.append(f"- {item.get('summary') or ''}（截止 {due}）")
-        return "\n".join(parts)
+        return self.weekly_review.write_today_summary_doc()
 
     def _record_llm_usage(self, usage, run_id: str) -> None:
         return self.conversation.record_llm_usage(usage, run_id)

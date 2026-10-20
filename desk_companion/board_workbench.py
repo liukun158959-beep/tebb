@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 
 
 from .conversation_input import CLI_CHIPS, compose_turn
@@ -60,27 +59,7 @@ class BoardWorkbench:
                 "error": "\n".join(errors), "wiki_connected": bool(load_settings().get("wiki_url"))}
 
     def write_week_review_doc(self, payload: dict) -> dict:
-        from .board_data import load_today_snapshot, save_today_fields
-        from .feishu_docs import create_or_overwrite_markdown
-
-        if not isinstance(payload, dict):
-            return {"ok": False, "error": "写入参数必须是对象。"}
-        try:
-            snap = load_today_snapshot(refresh=False)
-            markdown = (snap.get("summary") or "").strip()
-            result = create_or_overwrite_markdown(
-                markdown=markdown,
-                doc=str(payload.get("doc") or ""),
-                title=str(payload.get("title") or ""),
-            )
-            url = result.get("url") or ""
-            if url:
-                snap = save_today_fields(doc_url=url)
-                if "新建" in str(result.get("message") or ""):
-                    os.startfile(url)
-            return {"ok": True, **snap, **result}
-        except Exception as extra:
-            return {"ok": False, "error": str(extra)}
+        return self.weekly_review.write_week_review_doc(payload)
 
     def list_automation_jobs(self, seen: bool = False) -> dict:
         try:

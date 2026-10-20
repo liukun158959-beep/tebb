@@ -4,7 +4,7 @@
 普通会话与只读记忆 RPC 使用 ChatSessionService，记忆编辑使用 MemoryEditingService。
 手动压缩使用 ContextCompressionService；笔记读写、生成、导出及文件 RPC 使用 NotebookService。
 知识库八入口使用 KnowledgeService；今日看板四入口使用 BoardService。
-周复盘、自动化等仍保留宿主兼容。
+周复盘三入口使用 WeeklyReviewService；自动化配置与调度仍保留宿主兼容。
 这里仍有 GUI 类继承，任务 worker 直接使用共享服务，不导入此模块。
 """
 from __future__ import annotations
@@ -79,6 +79,16 @@ class HeadlessApp(App):
             raise RuntimeError('助手正在处理其他操作，完成或停止后再操作知识库。')
         try:
             with super()._knowledge_start_guard():
+                yield
+        finally:
+            self.turn_lock.release()
+
+    @contextmanager
+    def _review_start_guard(self):
+        if not self.turn_lock.acquire(blocking=False):
+            raise RuntimeError('助手正在处理其他操作，完成或停止后再操作周复盘。')
+        try:
+            with super()._review_start_guard():
                 yield
         finally:
             self.turn_lock.release()

@@ -49,6 +49,7 @@ flowchart TD
 | 手动上下文压缩 | `context_compression.py` | 同步压缩生命周期、会话预留与分阶段保存，模型等待不持有全局锁 |
 | 笔记与生成文件服务 | `notebook_service.py`、`notebook.py`、`notebook_platform.py` | 基础读写、来源问答、勾选总结、导出及生成文件操作；共享忙碌准入、模型完成校验、跨进程存储和分阶段失败回执，外部操作通过适配器注入 |
 | 知识库管理服务 | `knowledge_service.py`、`knowledge.py` | 八个同步管理/试问入口、后台下载准入；设置和索引快照、计算后复验提交，以及模型跨进程使用/修改保护 |
+| 周复盘服务 | `weekly_review.py` | 生成、三种飞书发布路径、共享忙碌准入、材料日期固定与发布快照核对；RPC 和自动化共用，无 GUI 依赖 |
 | 今日看板服务 | `board_service.py`、`board_data.py`、`client/src/client/board-actions.ts` | 四入口业务回执、独立远端操作资源、分区合并与跨日保护；前端保留失败输入、读取顺序及行内错误 |
 | 任务可靠性 | `tasks.py`、`task_worker.py`、`task_process.py` | 排队、独立执行、超时、进程回收与恢复 |
 | 知识与记忆 | `knowledge.py`、`context_pack.py`、`facts.py` | 文档切分、检索重排、上下文压缩与可追溯事实 |
@@ -72,11 +73,13 @@ flowchart TD
 
 知识库八入口由 `KnowledgeService(chat_sessions, start_guard=...)` 提供。同步修改/试问立即准入或拒绝，页面/进度读取不等模型；计算阶段使用设置与索引快照，提交前复验，修改设置不自动重建。模型加载/推理取得共享资源使用权，下载/删除取得排他修改权，跨进程冲突立即拒绝；后台下载仅启动阶段占共享助手。来源原文与笔记引用独立保留，失败按实际阶段回执。见 [ADR 0011](adr/0011-knowledge-service.md) 和 [知识库调试](AGENT_DEBUG.md#无-gui-的知识库服务验收)。
 
-今日看板的加载、创建日程、删除日程和删除待办由 `BoardService()` 提供，Bridge 直接调用，旧 App 的加载入口薄转发；共同底层也覆盖聊天工具、桌宠和自动化。当天缓存读取可继续，远端操作按看板资源跨进程非阻塞准入，不占模型 busy，长 IO 不持宿主、全局或缓存锁。所有缓存写入者短时加锁合并最新分区、原子替换，并检查自然日；周复盘摘要和链接写入可以与远端刷新并行。远端结果未确认、已完成但查询失败、缓存保存未确认分别报告；前端检查业务结果、保留失败输入和原列表，忽略旧读取响应。见 [ADR 0012](adr/0012-board-service.md) 与 [今日看板调试](AGENT_DEBUG.md#无-gui-的今日看板服务验收)。周复盘/自动化整体生命周期和 HeadlessApp 去继承仍待后续。
+今日看板的加载、创建日程、删除日程和删除待办由 `BoardService()` 提供，Bridge 直接调用，旧 App 的加载入口薄转发；共同底层也覆盖聊天工具、桌宠和自动化。当天缓存读取可继续，远端操作按看板资源跨进程非阻塞准入，不占模型 busy，长 IO 不持宿主、全局或缓存锁。所有缓存写入者短时加锁合并最新分区、原子替换，并检查自然日；周复盘摘要和链接写入可以与远端刷新并行。远端结果未确认、已完成但查询失败、缓存保存未确认分别报告；前端检查业务结果、保留失败输入和原列表，忽略旧读取响应。见 [ADR 0012](adr/0012-board-service.md) 与 [今日看板调试](AGENT_DEBUG.md#无-gui-的今日看板服务验收)。自动化整体生命周期和 HeadlessApp 去继承仍待后续。
 
 记忆页的 `add_fact`、`update_fact`、`delete_fact`、`delete_memory_turn` 由 `MemoryEditingService(chat_sessions)` 处理，旧 App 兼容方法和 Bridge 共用同一实例。事实编辑复用原有校验、来源记录及跨进程写锁；共享助手回复期间拒绝编辑，独立后台任务不阻止全局事实编辑，已运行回复可能保留旧快照。历史删除固定当前会话并使用同一任务保护，先验证存在，再失效覆盖该句的摘要、删除同角色同正文的全部重复记录。失败按阶段报告，不自动取消任务或回滚文件。见 [ADR 0006](adr/0006-memory-editing-service.md) 和 [记忆编辑验收](AGENT_DEBUG.md#无-gui-的记忆编辑服务验收)。
 
 手动压缩 RPC 直接使用 `ContextCompressionService`，通过会话服务与 `TaskManager.reserve_session` 短暂登记当前会话预留和共享助手忙碌，等待模型时不持有宿主锁、会话锁、队列条件锁或 WRITES，写摘要时才获取共享写锁。当前会话任务未结束时拒绝开始；压缩期间拒绝该会话新任务和共享状态修改，只读及其他会话任务/取消继续。原压缩算法、模型超时、用量记录与同步返回结构沿用，断开不等于取消，不自动重试。见 [ADR 0007](adr/0007-context-compression-service.md) 和 [手动压缩验收](AGENT_DEBUG.md#无-gui-的手动压缩服务验收)。
+
+周复盘三个 RPC 直接调用 `WeeklyReviewService(chat_sessions, start_guard=..., open_document=...)`，旧 App/BoardWorkbench 只保留薄转发；自动化 `retro_gen/retro_write` 使用同一实例。准入阶段短暂固定共享忙碌，材料、模型、飞书和系统打开等待均不持宿主、WRITES 或存储锁；定时复盘遇到最终准入竞争保留排队，后续调度再尝试，不记录业务失败，也不阻止独立资讯任务。生成固定开始日期和材料区间，仅保存正常完整、非空、无工具调用的正文，并原子清除旧链接；发布固定正文，以日期、正文和生成时间核对本地链接登记。三条发布路径保留原有新建/覆盖、登记和打开差异，失败保留正文、目标和远端事实，不自动重跑模型或重发文档；自动化配置与完整调度生命周期下一批处理。见 [ADR 0013](adr/0013-weekly-review-service.md) 与 [周复盘调试](AGENT_DEBUG.md#无-gui-的周复盘服务验收)。
 
 ### 模型调用边界
 

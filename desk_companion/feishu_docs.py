@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from .feishu_auth import _first_json, create_markdown_doc
+from .feishu_auth import _first_json
 from .feishu_tools import AUTH_HINT, _run_lark
 
 
@@ -78,36 +78,13 @@ def overwrite_markdown_doc(doc: str, markdown: str) -> dict:
         stdin=body,
     )
     env = _as_object(raw, "覆盖飞书文档")
-    if env.get("ok") is False:
-        raise RuntimeError(f"覆盖飞书文档失败。{AUTH_HINT}\n{raw}")
+    if env.get("ok") is not True:
+        raise RuntimeError(f"覆盖飞书文档未返回明确成功结果。{AUTH_HINT}\n{raw}")
     url = target if target.startswith("http") else ""
     data = env.get("data")
     if isinstance(data, dict):
         url = str(data.get("url") or url)
     return {"ok": True, "url": url, "message": "复盘已覆盖写入所选飞书文档。"}
-
-
-def create_or_overwrite_markdown(
-    *, markdown: str, doc: str = "", title: str = ""
-) -> dict:
-    """选中文档则覆盖；否则必须有标题才新建。两者都空则失败。"""
-    body = (markdown or "").strip()
-    if not body:
-        raise RuntimeError("还没有复盘正文。先在自动化任务「周复盘」里生成。")
-    target = (doc or "").strip()
-    heading = (title or "").strip()
-    if target and heading:
-        raise RuntimeError("覆盖已有文档时不要同时填新标题。选一篇，或只填标题新建。")
-    if target:
-        return overwrite_markdown_doc(target, body)
-    if heading:
-        created = create_markdown_doc(heading, body)
-        return {
-            "ok": True,
-            "url": created["url"],
-            "message": "复盘已写到新建的飞书文档，并打开了链接。",
-        }
-    raise RuntimeError("写入飞书要先选一篇已有文档，或填写新文档标题。")
 
 
 def _as_object(raw: str, what: str) -> dict:

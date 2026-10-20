@@ -68,6 +68,130 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
                 if frame['type'] in ('done', 'error'):
                     return frame
 
+    def review_setup(self):
+        from contextlib import ExitStack
+        from desk_companion import board_data as b
+        from tests.test_weekly_review import MONDAY, NOW, DAY, SECTIONS, URL
+        stack = ExitStack(); self.addCleanup(stack.close)
+        stack.enter_context(patch.object(b, 'week_range', return_value=(MONDAY, NOW)))
+        stack.enter_context(patch.object(b, 'today_date', return_value=DAY))
+        stack.enter_context(patch.object(b, 'fetch_board', return_value=SECTIONS))
+        stack.enter_context(patch.object(b, 'fetch_week_feishu', return_value=SECTIONS))
+        stack.enter_context(patch('desk_companion.github.format_week_review_text', return_value='output'))
+        stack.enter_context(patch('desk_companion.skill_catalog.read_skill', return_value=dict(body='rules')))
+        create = stack.enter_context(patch('desk_companion.feishu_auth.create_markdown_doc',
+            return_value=dict(ok=True, url=URL, document_id='created')))
+        stack.enter_context(patch('desk_companion.feishu_docs.overwrite_markdown_doc', return_value=dict(ok=True, url=URL)))
+        opened = stack.enter_context(patch.object(self.host.weekly_review, '_open_document'))
+        for name in ('generate_week_review', 'write_today_summary_doc', 'write_week_review_doc'):
+            stack.enter_context(patch.object(self.host, name, side_effect=AssertionError('legacy review call')))
+        b.load_today_snapshot(refresh=False)
+        b.save_today_fields(summary='old review', summary_at=NOW.isoformat(timespec='seconds'), doc_url='old url')
+        return create, opened
+
+    async def test_review_three_rpc_routes_authentication_and_failure_facts(self):
+        from desk_companion import board_data as b
+        from websockets.exceptions import ConnectionClosed
+        from tests.test_weekly_review import URL
+        create, opened = self.review_setup()
+        self.host.agent.llm = FakeLLM(['new review'])
+        generated = await self.notebook_rpc('generate_week_review')
+        self.assertTrue(generated['ok'], generated)
+        self.assertEqual((generated['summary'], generated['doc_url']), ('new review', ''))
+        self.assertTrue((await self.notebook_rpc('write_today_summary_doc'))['ok'])
+        opened.assert_called_once_with(URL)
+        opened.reset_mock()
+        self.assertTrue((await self.notebook_rpc('write_week_review_doc', payload=dict(doc='token')))['ok'])
+        opened.assert_not_called()
+        opened.side_effect = OSError('shell failure')
+        result = await self.notebook_rpc('write_week_review_doc', payload=dict(title='title'))
+        self.assertEqual((result['stage'], result['remote_state'], result['url']), ('open', 'confirmed', URL), result)
+        self.assertEqual(b._read_today_file()['doc_url'], URL)
+        create.side_effect = RuntimeError('timeout')
+        result = await self.notebook_rpc('write_today_summary_doc')
+        self.assertEqual((result['stage'], result['remote_state']), ('remote', 'unconfirmed'), result)
+        before = b.today_path().read_bytes(); count = create.call_count
+        with self.assertRaises(ConnectionClosed):
+            async with connect(self.url.replace('test-token', 'wrong'), proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', method='write_today_summary_doc')))
+                await ws.recv()
+        self.assertEqual(b.today_path().read_bytes(), before)
+        self.assertEqual(create.call_count, count)
+
+    async def test_review_model_and_publication_disconnect_allow_reads_board_and_workers(self):
+        import threading
+        from unittest.mock import Mock
+        from desk_companion import board_data as b
+        from desk_companion.resource_lock import WRITES
+        from tests.test_weekly_review import NOW, URL
+        create, opened = self.review_setup()
+        for method in ('generate_week_review', 'write_today_summary_doc'):
+            entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+            self.addCleanup(release.set)
+            def slow(*args, **kwargs):
+                entered.set()
+                if not release.wait(45):
+                    raise RuntimeError('not released')
+                return dict(message=dict(content='after disconnect')) if method=='generate_week_review' else dict(ok=True, url=URL)
+            self.host.agent.llm = Mock(model='fake')
+            if method == 'generate_week_review':
+                self.host.agent.llm.chat.side_effect = slow
+            else:
+                create.side_effect = slow
+                b.save_today_fields(summary='to publish', summary_at=NOW.isoformat(timespec='seconds'))
+            service = self.host.weekly_review
+            operation = getattr(service, method)
+            def tracked():
+                result = operation()
+                if not result.get('retryable_busy'):
+                    finished.set()
+                return result
+            with patch.object(service, method, side_effect=tracked):
+                async with connect(self.url, proxy=None) as ws:
+                    await ws.send(json.dumps(dict(type='rpc', method=method)))
+                    try:
+                        self.assertTrue(await asyncio.to_thread(entered.wait, 5))
+                        self.assertTrue(self.host.conversation.running)
+                        self.assertTrue((await self.notebook_rpc('load_board', refresh=True))['ok'])
+                        self.assertTrue((await self.notebook_rpc('load_notebook'))['ok'])
+                        for name, args in [('generate_week_review', {}), ('write_today_summary_doc', {}),
+                                           ('write_week_review_doc', dict(payload=dict(title='no'))), ('new_notebook', {})]:
+                            rejected = await self.notebook_rpc(name, **args)
+                            self.assertFalse(rejected['ok'], rejected)
+                        acquired = self.host.turn_lock.acquire(blocking=False)
+                        self.assertTrue(acquired)
+                        if acquired:
+                            self.host.turn_lock.release()
+                        def write():
+                            with WRITES.hold(blocking=False):
+                                b.save_today_fields(doc_url='parallel')
+                        await asyncio.wait_for(asyncio.to_thread(write), 5)
+                        task = await asyncio.to_thread(self.host.tasks.submit, '写入测试', 'other')
+                        result = await asyncio.wait_for(asyncio.to_thread(self.host.tasks.wait, task), 20)
+                        self.assertEqual(result['state'], 'succeeded', result)
+                        await ws.close()
+                    finally:
+                        release.set()
+                    self.assertTrue(await asyncio.to_thread(finished.wait, 5))
+            self.assertFalse(self.host.conversation.running)
+            saved = await self.notebook_rpc('load_board')
+            self.assertEqual(saved['summary'], 'after disconnect' if method=='generate_week_review' else 'to publish')
+            self.assertEqual(saved['doc_url'], '' if method=='generate_week_review' else URL)
+        create.assert_called_once()
+        opened.assert_called_once_with(URL)
+
+    async def test_review_host_lock_and_old_desktop_busy_refuse_immediately(self):
+        from types import SimpleNamespace
+        create, opened = self.review_setup()
+        with self.host.turn_lock:
+            self.assertTrue((await self.notebook_rpc('generate_week_review'))['retryable_busy'])
+            self.assertTrue((await self.notebook_rpc('write_today_summary_doc'))['retryable_busy'])
+            self.assertTrue((await self.notebook_rpc('load_board'))['ok'])
+        self.host.pet = SimpleNamespace(busy=True)
+        self.assertTrue((await self.notebook_rpc('write_today_summary_doc'))['retryable_busy'])
+        self.assertFalse(self.host.conversation.running)
+        create.assert_not_called(); opened.assert_not_called()
+
     async def test_board_four_rpc_routes_keep_contracts_and_failure_stages(self):
         from desk_companion import board_data as b
         from tests.test_board_service import DAY, START, END, AGENDA, TASKS

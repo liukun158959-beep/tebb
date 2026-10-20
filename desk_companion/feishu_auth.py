@@ -12,6 +12,13 @@ _login_busy = False
 _login_error = ""
 
 
+class DocumentCreationError(RuntimeError):
+    """A confirmed creation envelope whose document cannot yet be used."""
+    def __init__(self, message, document_id):
+        super().__init__(message)
+        self.document_id = document_id
+
+
 def feishu_status() -> dict:
     try:
         _lark_bin()
@@ -208,5 +215,6 @@ def create_markdown_doc(title: str, markdown: str, *, parent_token: str = "", pr
         raise RuntimeError(f"创建飞书文档成功信封缺少 document。\n{raw}")
     url = doc.get("url")
     if not url:
-        raise RuntimeError(f"创建飞书文档成功但没有 url。\n{raw}")
+        raise DocumentCreationError(f"创建飞书文档成功但没有 url。\n{raw}",
+                                    str(doc.get('document_id') or ''))
     return {"ok": True, "url": str(url), "document_id": str(doc.get("document_id") or "")}

@@ -344,11 +344,12 @@ class AutomationScheduler:
             self._worker.start()
 
     def _loop(self) -> None:
+        deferred = False
         try:
             while True:
                 if self._stopping.is_set():
                     return
-                busy = self._host_busy()
+                busy = self._host_busy() or deferred
                 job_id = None
                 action = ""
                 with self._lock:
@@ -363,7 +364,12 @@ class AutomationScheduler:
                 if not job_id:
                     return
                 try:
-                    self._execute(job_id)
+                    if self._execute(job_id) is False:
+                        with self._lock:
+                            if not self._stopping.is_set():
+                                self._queued[action] = job_id
+                        deferred = True
+                        continue
                 finally:
                     with self._lock:
                         self._running_action = ""
@@ -371,7 +377,7 @@ class AutomationScheduler:
             with self._lock:
                 self._worker = None
             self._notify()
-            if self._queued and not self._stopping.is_set() and (not self._host_busy() or "ai_news" in self._queued):
+            if not deferred and self._queued and not self._stopping.is_set() and (not self._host_busy() or "ai_news" in self._queued):
                 self._kick()
 
     def _host_busy(self) -> bool:
@@ -383,7 +389,7 @@ class AutomationScheduler:
             return True
         return False
 
-    def _execute(self, job_id: str) -> None:
+    def _execute(self, job_id: str) -> bool | None:
         try:
             with _STORE_LOCK:
                 store = load_store()
@@ -398,15 +404,14 @@ class AutomationScheduler:
             if action == "ai_news":
                 self._start_news(job_id)
                 return
-            elif action == "retro_gen":
-                result = self.host.generate_week_review()
-                if not result.get("ok"):
-                    raise RuntimeError(result.get("error") or "生成本周复盘失败。")
-            elif action == "retro_write":
-                from .feishu_docs import overwrite_markdown_doc
-
-                markdown = _week_summary_markdown()
-                overwrite_markdown_doc(doc, markdown)
+            elif action in {"retro_gen", "retro_write"}:
+                service = self.host.weekly_review
+                result = (service.generate_week_review() if action == "retro_gen"
+                          else service.write_scheduled_review(doc))
+                if result.get('retryable_busy'):
+                    return False
+                if not result.get('ok'):
+                    raise RuntimeError(result.get('error') or '周复盘执行失败。')
             else:
                 raise RuntimeError(f"不认识的动作 {action}。")
         except Exception as extra:
@@ -754,20 +759,3 @@ def _heartbeat(store: dict, now: datetime) -> bool:
             return False
     store["last_alive_at"] = stamp
     return True
-
-
-def _week_summary_markdown() -> str:
-    from .board_data import load_today_snapshot, week_range
-
-    snap = load_today_snapshot(refresh=False)
-    markdown = (snap.get("summary") or "").strip()
-    if not markdown:
-        raise RuntimeError("还没有本周复盘正文。先生成或配一条更早的生成。")
-    at = snap.get("summary_at") or ""
-    if not at:
-        raise RuntimeError("复盘没有生成时间，不能确认是本周。先再生成一次。")
-    when = _parse_iso(str(at), "summary_at")
-    monday, _now_week = week_range()
-    if when < monday:
-        raise RuntimeError("已有复盘不是本周。先生成或配一条更早的生成。")
-    return markdown

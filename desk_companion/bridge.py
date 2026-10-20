@@ -408,7 +408,7 @@ class Bridge:
         return self._host.list_mcp_tools()
 
     def write_week_review_doc(self, payload: dict) -> dict:
-        return self._host.write_week_review_doc(payload)
+        return self._host.weekly_review.write_week_review_doc(payload)
 
     def list_automation_jobs(self, seen: bool = False) -> dict:
         return self._host.list_automation_jobs(bool(seen))
@@ -472,10 +472,10 @@ class Bridge:
         self._host.ui(self._host.ask_logs)
 
     def generate_week_review(self) -> dict:
-        return self._host.generate_week_review()
+        return self._host.weekly_review.generate_week_review()
 
     def write_today_summary_doc(self) -> dict:
-        return self._host.write_today_summary_doc()
+        return self._host.weekly_review.write_today_summary_doc()
 
     def close_board(self) -> None:
         self._host.ui(self._host.hide_board)

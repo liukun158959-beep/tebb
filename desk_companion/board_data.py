@@ -135,7 +135,7 @@ def load_today_snapshot(*, refresh: bool) -> dict:
         return _merge_sections(day, board)
 
 
-def save_today_fields(**fields) -> dict:
+def save_today_fields(*, expected_date=None, expected_summary=None, **fields) -> dict:
     """Summary/link writers merge under a short storage lock, never the network lease."""
     allowed = {'summary', 'summary_at', 'doc_url'}
     unknown = [key for key in fields if key not in allowed]
@@ -143,11 +143,18 @@ def save_today_fields(**fields) -> dict:
         raise RuntimeError(f"今日快照不能改这些键：{', '.join(unknown)}。")
     with _STORE:
         day = today_date()
+        if expected_date is not None and expected_date != day:
+            raise BoardChangeError('操作期间已跨日，未将旧复盘或链接写入今日缓存。请重新读取核对。',
+                stage='cache_precondition', change_state='not_changed', cache_state='not_changed')
         cached = _read_today_file()
         if cached is None:
             raise RuntimeError('还没有今日快照。先打开看板「今日」页或点刷新，再生成本周复盘。')
         if cached['date'] != day:
             raise RuntimeError(f"今日快照是 {cached['date']}，今天已是 {day}。先点「刷新」拉今天的日程。")
+        if expected_summary is not None and any(cached[key] != expected_summary[key]
+                                                for key in ('summary', 'summary_at')):
+            raise BoardChangeError('复盘正文已变化，未把旧文档链接登记到新正文。请核对远端文档和本地复盘。',
+                stage='cache_precondition', change_state='not_changed', cache_state='not_changed')
         snap = dict(cached, **fields)
         _assert_day(day)
         _write_today_file(snap)
