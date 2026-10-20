@@ -21,10 +21,6 @@ class ResourceLock:
                 path = data_root() / "memory" / "locks" / (hashlib.sha256(self.name.encode()).hexdigest() + ".lock")
                 path.parent.mkdir(parents=True, exist_ok=True)
                 self.file = path.open("a+b")
-                self.file.seek(0)
-                if not self.file.read(1):
-                    self.file.write(b"0")
-                    self.file.flush()
                 if os.name == "nt":
                     import msvcrt
                     while True:
@@ -37,6 +33,12 @@ class ResourceLock:
                 else:
                     import fcntl
                     fcntl.flock(self.file.fileno(), fcntl.LOCK_EX)
+                # Windows byte-range locks also reject reads from another process.
+                # Lock the range first (including an empty file), then initialize it.
+                self.file.seek(0)
+                if not self.file.read(1):
+                    self.file.write(b"0")
+                    self.file.flush()
             self.depth += 1
             return self
         except BaseException:
