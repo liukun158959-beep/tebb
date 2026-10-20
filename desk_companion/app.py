@@ -25,6 +25,7 @@ from .conversation import ConversationService
 from .chat_sessions import ChatSessionService
 from .memory_editing import MemoryEditingService
 from .context_compression import ContextCompressionService
+from .notebook_service import NotebookService
 from .automation import AutomationScheduler
 from .board_workbench import BoardWorkbench
 from .bridge import Bridge
@@ -97,6 +98,7 @@ class App(BoardWorkbench):
                                                 reservation_guard=self._session_reservation)
         self.memory_editing = MemoryEditingService(self.chat_sessions)
         self.context_compression = ContextCompressionService(self.chat_sessions, start_guard=self._compression_start_guard)
+        self.notebooks = NotebookService(self.chat_sessions, start_guard=self._notebook_start_guard)
         self.bridge = Bridge(self, session_changed=None if headless else self._on_session_changed)
         self._queue: queue.Queue = queue.Queue()
         self.pet = None
@@ -326,6 +328,12 @@ class App(BoardWorkbench):
     def _compression_start_guard(self):
         return nullcontext()
 
+    @contextmanager
+    def _notebook_start_guard(self):
+        if self.pet is not None and self.pet.busy:
+            raise RuntimeError('助手正在回复或仍在收尾，完成或停止后再修改笔记。')
+        yield
+
     def _on_session_changed(self, operation):
         snapshot = self.chat_sessions.load_chat_log()
         if not snapshot['ok']:
@@ -359,6 +367,18 @@ class App(BoardWorkbench):
 
     def board_compress_context(self) -> dict:
         return self.context_compression.compress_context()
+
+    def board_load_notebook(self) -> dict:
+        return self.notebooks.load_notebook()
+
+    def board_new_notebook(self) -> dict:
+        return self.notebooks.new_notebook()
+
+    def board_save_notebook_note(self, session_id: str, question: str, answer: str, cites: list) -> dict:
+        return self.notebooks.save_notebook_note(session_id, question, answer, cites)
+
+    def board_delete_notebook_note(self, session_id: str, note_id: str) -> dict:
+        return self.notebooks.delete_notebook_note(session_id, note_id)
 
     def prepare_context(
         self,

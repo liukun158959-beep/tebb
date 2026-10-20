@@ -172,7 +172,9 @@ def _dispatch(method: str, args: dict, preview=False) -> dict:
             from ..agent_debug import context
             with context(session=HOST.state.session_id, channel="backend"):
                 return target(**kwargs)
-        if method.startswith("terminal_") or method in {"compress_context", "load_chat_log", "load_memory", "load_collaboration", "collaboration_action", "project_workspace", "check_updates", "list_agent_tasks", "get_agent_task", "cancel_agent_task", "continue_agent_task", "save_agent_task_settings", "load_task_progress",
+        if method.startswith("terminal_") or method in {"compress_context", "load_chat_log", "load_memory",
+                      "load_notebook", "new_notebook", "save_notebook_note", "delete_notebook_note",
+                      "load_collaboration", "collaboration_action", "project_workspace", "check_updates", "list_agent_tasks", "get_agent_task", "cancel_agent_task", "continue_agent_task", "save_agent_task_settings", "load_task_progress",
                       "list_debug_calls", "get_debug_call", "set_debug_recording", "explain_debug_call",
                       "load_model_network", "save_model_network",
                       "load_video_settings", "save_video_settings", "list_task_videos", "export_task_video",

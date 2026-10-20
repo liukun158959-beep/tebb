@@ -2,7 +2,8 @@
 
 普通/知识问答委托 ConversationService；模型/人设 RPC 直接使用共享配置服务。
 普通会话与只读记忆 RPC 使用 ChatSessionService，记忆编辑使用 MemoryEditingService。
-手动压缩使用 ContextCompressionService；看板、笔记等数据方法仍保留 App 的继承兼容。
+手动压缩使用 ContextCompressionService；笔记基础 RPC 使用 NotebookService。
+看板、笔记问答及导出等方法仍保留宿主兼容。
 这里仍有 GUI 类继承，任务 worker 直接使用共享服务，不导入此模块。
 """
 from __future__ import annotations
@@ -60,6 +61,16 @@ class HeadlessApp(App):
             raise RuntimeError('助手正在处理其他操作，完成后再压缩上下文。')
         try:
             yield
+        finally:
+            self.turn_lock.release()
+
+    @contextmanager
+    def _notebook_start_guard(self):
+        if not self.turn_lock.acquire(blocking=False):
+            raise RuntimeError('助手正在处理其他操作，完成或停止后再修改笔记。')
+        try:
+            with super()._notebook_start_guard():
+                yield
         finally:
             self.turn_lock.release()
 
@@ -161,16 +172,6 @@ class HeadlessApp(App):
 
         return self._knowledge_call(run)
 
-    def board_load_notebook(self) -> dict:
-        from ..notebook import load_notebook
-
-        return self._knowledge_call(load_notebook)
-
-    def board_new_notebook(self) -> dict:
-        from ..notebook import new_notebook
-
-        return self._knowledge_call(new_notebook)
-
     def run_notebook(self, session_id: str, text: str, doc_ids: list, sampling: dict, delta_sink, status_sink) -> dict:
         if self._agent_running:
             raise RuntimeError("助手正在回复，等这句说完再问。")
@@ -207,16 +208,6 @@ class HeadlessApp(App):
             llm.sampling = None
             llm.on_reasoning = None
             self._agent_running = False
-
-    def board_save_notebook_note(self, session_id: str, question: str, answer: str, cites: list) -> dict:
-        from ..notebook import save_note
-
-        return self._knowledge_call(lambda: save_note(session_id, question, answer, cites))
-
-    def board_delete_notebook_note(self, session_id: str, note_id: str) -> dict:
-        from ..notebook import delete_note
-
-        return self._knowledge_call(lambda: delete_note(session_id, note_id))
 
     def board_export_notebook_markdown(self, session_id: str, note_id: str) -> dict:
         def run() -> dict:

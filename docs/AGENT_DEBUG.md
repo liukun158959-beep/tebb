@@ -108,6 +108,25 @@ python -m unittest tests.test_local_api.LocalApiTests.test_memory_editing_rpc_us
 
 服务测试的子进程拒绝 GUI 导入并实际执行编辑；真实失败 worker 在终态后暂停最终写回，验证历史删除仍被阻止，事实编辑允许。认证 WebSocket 回归令旧 App 编辑方法报错，确保 RPC 直接调用独立服务，覆盖成功快照、忙碌/隔离、摘要故障和已保存但读取失败。该服务独立不代表整个 HeadlessApp 已去除 GUI 继承；实机、真实模型及发布包验证单独报告。对应 [#118](https://github.com/liukun158959-beep/tebb/issues/118)。
 
+## 无 GUI 的笔记基础服务验收
+
+仓库根目录执行，使用临时笔记、假模型、假知识库和真实 localhost WebSocket；不读私人笔记、不写飞书或请求真实模型：
+
+```powershell
+python -m unittest tests.test_resource_lock tests.test_notebook_service -v
+python -m unittest tests.test_local_api.LocalApiTests.test_notebook_reads_and_busy_writes_during_question_summary_and_compression tests.test_local_api.LocalApiTests.test_notebook_rpc_failure_phases_host_admission_and_authentication -v
+```
+
+独立调用先设置临时 `DESK_COMPANION_DATA_DIR`，构造 `ConversationService`、`ChatSessionService` 和 `NotebookService(chat_sessions, start_guard=...)`。四个方法为 `load_notebook()`、`new_notebook()`、`save_notebook_note(session_id, question, answer, cites)`、`delete_notebook_note(session_id, note_id)`。服务可以在禁止 GUI/Bridge 导入的子进程内调用，知识库仍须有可读的配置及索引（空库可用）；故障测试用 `knowledge.public_view` 替身，不依赖 embedding 下载。RPC 按同名方法派发，保留外层派发、内层业务两层 `ok`，不能只检查外层。
+
+正常读取返回 `ok/docs/sessions`，新建另有 `session_id`，保存另有 `note_id`，删除返回新快照。新建每次分配独立 ID；重复保存同一内容仍生成新笔记，故不自动重试。三项写入不改变普通会话选择；引用是已存快照，不要求来源以后一直留在知识库。笔记生成文件仅限笔记目录，删除不影响问答 turns、其它笔记及来源原文。
+
+只读加载不取得宿主执行锁，也不占用共享助手。宿主忙碌、共享回复、笔记问答/汇总、手动压缩期间，三项写入立即返回 `ok=false/change_state=not_changed`，不等模型结束后执行；旧桌面还检查宠物收尾状态。独立任务不一概阻止笔记操作。专项 WebSocket 测试暂停三个假模型调用，验证读取、忙碌拒绝和独立 worker 实际写入可同时进行。
+
+底层 `notebook.json` 使用独立跨进程锁保护所有读改写，包括问答、收藏、导出登记及生成文件清理；复用临时文件原子替换，模型等待、飞书调用和系统打开文件不持笔记存储锁。跨进程测试竞争保存、问答写回、成果收藏及 Markdown 导出，核对每项增量均保留；操作系统锁在进程退出时释放。原子替换不等于笔记和生成文件的跨文件事务，也不承诺掉电耐久性。
+
+失败回执：`not_changed` 为准入/校验等失败；`partial` 为生成文件清理未完成、笔记记录仍保留，附 `session_id/note_id/removed_files/failed_file`；`unconfirmed` 为笔记记录保存结果未确认，附目标 ID 及已清理文件；`committed` 为记录已保存但聚合页读取失败。先重新读取目标核对；附件部分删除不会恢复，读取失败不能被解释为保存没有发生。问答、汇总、导出自身生命周期仍留宿主，HeadlessApp 整体尚未脱离 GUI。见 [ADR 0008](adr/0008-notebook-service.md)、[#127](https://github.com/liukun158959-beep/tebb/issues/127) 及 [Windows 锁缺陷 #128](https://github.com/liukun158959-beep/tebb/issues/128)。
+
 ## 无 GUI 的手动压缩服务验收
 
 仓库根目录执行，使用临时数据、真实 OpenAI SDK 的 MockTransport、脚本 worker 和文件故障，不请求真实模型或发送外部消息：

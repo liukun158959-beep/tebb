@@ -5,14 +5,44 @@
 from __future__ import annotations
 
 import json
-import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .resource_lock import ResourceLock
+
 TZ = timezone(timedelta(hours=8))
-_LOCK = threading.Lock()
+_LOCK = ResourceLock('notebook')
 _BAD_NAME = '\\/:*?"<>|'
+
+
+class NotebookChangeError(RuntimeError):
+    """A mutation failed after its outcome could differ from an unchanged notebook."""
+    def __init__(self, message, *, change_state, **details):
+        super().__init__(message)
+        self.details = dict(change_state=change_state, **details)
+
+
+def _write_change(book, session_id, note_id=None, removed_files=()):
+    try:
+        _write(book)
+    except Exception as exc:
+        raise NotebookChangeError(
+            f'笔记记录保存结果未确认：{exc}。请重新读取核对，不要直接重复保存；'
+            '已经清理的生成文件不会恢复。',
+            change_state='unconfirmed', session_id=session_id, note_id=note_id,
+            removed_files=list(removed_files),
+        ) from exc
+
+
+def _changed_page(session_id, note_id):
+    try:
+        return load_notebook()
+    except Exception as exc:
+        raise NotebookChangeError(
+            f'笔记操作已保存，但读取笔记页失败：{exc}。请重新读取核对，不要重复执行操作。',
+            change_state='committed', session_id=session_id, note_id=note_id,
+        ) from exc
 
 
 def _path() -> Path:
@@ -47,7 +77,7 @@ def new_notebook() -> dict:
             "notes": [],
         }
         book["sessions"].insert(0, session)
-        _write(book)
+        _write_change(book, session['id'])
         sessions = book["sessions"]
     return {"ok": True, "docs": page["docs"], "sessions": sessions, "session_id": session["id"]}
 
@@ -100,8 +130,8 @@ def save_note(session_id: str, question: str, answer: str, cites: list) -> dict:
             "files": [],
         })
         session["updated"] = _now()
-        _write(book)
-    page = load_notebook()
+        _write_change(book, session['id'], note_id)
+    page = _changed_page(session['id'], note_id)
     page["note_id"] = note_id
     return page
 
@@ -130,14 +160,16 @@ def delete_note(session_id: str, note_id: str) -> dict:
     with _LOCK:
         book = _read()
         session = _find(book, session_id)
-        target_note = next((item for item in session["notes"] if item["id"] == target), None)
-        if target_note is None:
-            raise RuntimeError("没有这条笔记。")
-        _unlink_files(target_note["files"])
+        target_note = _find_note(session, target)
+        try:
+            removed = _unlink_files(target_note["files"])
+        except NotebookChangeError as exc:
+            exc.details.update(session_id=session['id'], note_id=target)
+            raise
         session["notes"] = [item for item in session["notes"] if item["id"] != target]
         session["updated"] = _now()
-        _write(book)
-    return load_notebook()
+        _write_change(book, session['id'], target, removed)
+    return _changed_page(session['id'], target)
 
 
 def selected_answers(session_id: str, note_ids: list) -> list[dict]:
@@ -226,6 +258,11 @@ def delete_note_file(session_id: str, note_id: str, name: str) -> dict:
 
 
 def _read() -> dict:
+    with _LOCK:
+        return _read_locked()
+
+
+def _read_locked() -> dict:
     path = _path()
     if not path.is_file():
         return {"sessions": []}
@@ -242,18 +279,21 @@ def _read() -> dict:
 
 
 def _write(book: dict) -> None:
-    path = _path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"sessions": book["sessions"]}, ensure_ascii=False, indent=2), encoding="utf-8")
+    from .video import atomic_write
+
+    with _LOCK:
+        atomic_write(_path(), {"sessions": book["sessions"]})
 
 
 def _find(book: dict, session_id: str) -> dict:
     target = (session_id or "").strip()
     if not target:
         raise RuntimeError("笔记会话 id 是空的。恢复：从侧边栏重新打开笔记。")
-    for item in book["sessions"]:
-        if item["id"] == target:
-            return item
+    matches = [item for item in book['sessions'] if item['id'] == target]
+    if len(matches) > 1:
+        raise RuntimeError('笔记会话 id 重复，请先核对笔记文件。')
+    if matches:
+        return matches[0]
     raise RuntimeError("没有这条笔记会话。恢复：从侧边栏重新打开。")
 
 
@@ -261,9 +301,11 @@ def _find_note(session: dict, note_id: str) -> dict:
     target = (note_id or "").strip()
     if not target:
         raise RuntimeError("生成文档需要笔记 id。恢复：先把回答存成笔记。")
-    for item in session["notes"]:
-        if item["id"] == target:
-            return item
+    matches = [item for item in session['notes'] if item['id'] == target]
+    if len(matches) > 1:
+        raise RuntimeError('笔记 id 重复，请先核对笔记文件。')
+    if matches:
+        return matches[0]
     raise RuntimeError("没有这条笔记。恢复：先把回答存成笔记。")
 
 
@@ -423,11 +465,21 @@ def _file_named(note: dict, name: str) -> dict:
     raise RuntimeError("这条笔记下面没有这个文件。恢复：重新生成。")
 
 
-def _unlink_files(files: list[dict]) -> None:
+def _unlink_files(files: list[dict]) -> list[str]:
+    removed = []
     for item in files:
         path = Path(item["path"])
-        if path.is_file():
-            path.unlink()
+        try:
+            if path.is_file():
+                path.unlink()
+                removed.append(item['name'])
+        except Exception as exc:
+            raise NotebookChangeError(
+                f'生成文件清理未完成，笔记记录仍保留；可能已有部分文件删除：{exc}。'
+                '请核对已删除和失败文件后重试，已删除文件不会恢复。',
+                change_state='partial', removed_files=list(removed), failed_file=item['name'],
+            ) from exc
+    return removed
 
 
 def _filename(title: str, note_id: str) -> str:

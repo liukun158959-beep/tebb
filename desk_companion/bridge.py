@@ -375,16 +375,16 @@ class Bridge:
         return self._host.board_ask_knowledge(text)
 
     def load_notebook(self) -> dict:
-        return self._host.board_load_notebook()
+        return self._host.notebooks.load_notebook()
 
     def new_notebook(self) -> dict:
-        return self._host.board_new_notebook()
+        return self._host.notebooks.new_notebook()
 
     def save_notebook_note(self, session_id: str, question: str, answer: str, cites: list) -> dict:
-        return self._host.board_save_notebook_note(session_id, question, answer, cites)
+        return self._host.notebooks.save_notebook_note(session_id, question, answer, cites)
 
     def delete_notebook_note(self, session_id: str, note_id: str) -> dict:
-        return self._host.board_delete_notebook_note(session_id, note_id)
+        return self._host.notebooks.delete_notebook_note(session_id, note_id)
 
     def export_notebook_markdown(self, session_id: str, note_id: str) -> dict:
         return self._host.board_export_notebook_markdown(session_id, note_id)
