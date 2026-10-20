@@ -87,6 +87,7 @@ def prepare_injection(
     exclude_user: str | None,
     complete,
     manual: bool,
+    save=None,
 ) -> list[dict]:
     """返回要灌进模型的历史。manual 为真时不管预算，收掉最近一轮以外的原文。"""
     if type(current_text) is not str:
@@ -100,11 +101,11 @@ def prepare_injection(
             "恢复：缩短这句话，或去掉附上的飞书正文后再发。"
         )
     if manual:
-        return _compress_manual(session_id, rows, pack, complete)
+        return _compress_manual(session_id, rows, pack, complete, save or save_pack)
     inject = _inject_rows_from(rows, pack)
     if estimate_messages(inject) <= room:
         return inject
-    return _compress_auto(session_id, rows, pack, room, complete)
+    return _compress_auto(session_id, rows, pack, room, complete, save or save_pack)
 
 
 def raw_tail(session_id: str) -> list[dict]:
@@ -128,7 +129,7 @@ def drop_pack_if_covered(session_id: str, role: str, text: str) -> bool:
     return False
 
 
-def _compress_manual(session_id: str, rows: list[dict], pack: dict | None, complete) -> list[dict]:
+def _compress_manual(session_id: str, rows: list[dict], pack: dict | None, complete, save) -> list[dict]:
     uncovered = _uncovered(rows, pack)
     prefix, tail = _last_exchange(uncovered)
     if not prefix:
@@ -138,11 +139,11 @@ def _compress_manual(session_id: str, rows: list[dict], pack: dict | None, compl
     summary = _summarize(pack, prefix, complete)
     covered = list(pack["covered"]) if pack else []
     covered.extend(prefix)
-    saved = _save(session_id, summary, covered)
+    saved = save(session_id, summary, covered)
     return _inject_rows_from(rows, saved)
 
 
-def _compress_auto(session_id: str, rows: list[dict], pack: dict | None, room: int, complete) -> list[dict]:
+def _compress_auto(session_id: str, rows: list[dict], pack: dict | None, room: int, complete, save) -> list[dict]:
     if room < SUMMARY_ROOM:
         raise RuntimeError(
             "留下摘要的位置之后，这一轮已经放不下。"
@@ -166,7 +167,7 @@ def _compress_auto(session_id: str, rows: list[dict], pack: dict | None, room: i
             "压缩之后仍然超过 128000 token。"
             "恢复：在记忆页删掉更早的对话后再发。"
         )
-    return _inject_rows_from(rows, _save(session_id, summary, covered))
+    return _inject_rows_from(rows, save(session_id, summary, covered))
 
 
 def _summarize(pack: dict | None, folded: list[dict], complete) -> str:
@@ -245,7 +246,8 @@ def _without_current(rows: list[dict], exclude_user: str | None) -> list[dict]:
     return rows
 
 
-def _save(session_id: str, summary: str, covered: list[dict]) -> dict:
+def save_pack(session_id: str, summary: str, covered: list[dict]) -> dict:
+    """Validate and persist one summary while preserving other sessions."""
     clean = []
     seen = set()
     for item in covered:

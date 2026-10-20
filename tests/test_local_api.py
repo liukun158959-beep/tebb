@@ -49,6 +49,172 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         self.service.close()
         await self.service.wait_closed()
 
+    async def test_compression_rpc_keeps_reads_other_workers_and_cancellation_available(self):
+        from contextlib import ExitStack
+        import threading
+        sid = self.host.state.session_id
+        for role, text in (('user', 'old question'), ('pet', 'old answer'),
+                           ('user', 'latest question'), ('pet', 'latest answer')):
+            memory.append_chat(role, text, sid)
+        before = memory.list_chat(sid)
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        def model(*args, **kwargs):
+            entered.set()
+            if not release.wait(40):
+                raise RuntimeError('test did not release compression')
+            return dict(message=dict(role='assistant', content='RPC summary'),
+                        usage=dict(prompt_tokens=10, completion_tokens=5))
+
+        async def rpc(method, **args):
+            async with connect(self.url, proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', id=method, method=method, args=args)))
+                envelope = json.loads(await asyncio.wait_for(ws.recv(), 30 if method == 'compress_context' else 5))['result']
+            self.assertTrue(envelope['ok'], envelope)
+            return envelope['result']
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(self.host.conversation, 'engage_model'))
+            stack.enter_context(patch.object(self.host.agent.llm, 'chat', side_effect=model))
+            for method in ('board_compress_context', 'prepare_context', 'board_memory'):
+                stack.enter_context(patch.object(self.host, method, side_effect=AssertionError('inherited method')))
+            pending = asyncio.create_task(rpc('compress_context'))
+            try:
+                self.assertTrue(await asyncio.to_thread(entered.wait, 5))
+                self.assertTrue((await rpc('load_memory'))['ok'])
+                self.assertEqual((await rpc('load_chat_log'))['items'], before)
+                self.assertFalse((await rpc('compress_context'))['ok'])
+                for method, args in (('new_chat_session', {}), ('switch_chat_session', dict(session_id='other')),
+                                     ('clear_chat', {}), ('add_fact', dict(text='busy')),
+                                     ('update_fact', dict(fact_id='missing', text='busy')),
+                                     ('delete_fact', dict(fact_id='missing')),
+                                     ('delete_memory_turn', dict(role='user', text='old question')),
+                                     ('save_persona', dict(payload=dict(persona='new', max_steps=5, nudge_enabled=True))),
+                                     ('use_model', dict(model_id='other')),
+                                     ('save_model_network', dict(payload=dict(mode='direct')))):
+                    self.assertFalse((await rpc(method, **args))['ok'], method)
+                async with connect(self.url, proxy=None) as ws:
+                    await ws.send(json.dumps(dict(type='chat', text='must not queue', chips={},
+                        sampling=dict(reasoning_effort='low', temperature=.5, top_p=1))))
+                    frame = json.loads(await asyncio.wait_for(ws.recv(), 5))
+                self.assertEqual(frame['type'], 'error')
+                self.assertIn('整理上下文', frame['data'])
+                # A real independent worker executes a WRITES-protected tool while compression waits.
+                task = await asyncio.wait_for(asyncio.to_thread(self.host.tasks.submit, '写入测试', 'other'), 5)
+                await rpc('list_agent_tasks')
+                done = await asyncio.wait_for(asyncio.to_thread(self.host.tasks.wait, task), 20)
+                self.assertEqual(done['state'], 'succeeded', done)
+                self.assertEqual(Path(self.temp.name, 'write_count').read_text(), '1')
+                self.assertTrue(memory.list_chat('other'))
+                # Cancellation must acquire the same task condition lock, not wait for the model.
+                cancel_task = await asyncio.wait_for(asyncio.to_thread(self.host.tasks.submit, 'cancel me', 'third'), 5)
+                cancelled = await rpc('cancel_agent_task', task_id=cancel_task)
+                self.assertTrue(cancelled['ok'], cancelled)
+                self.assertEqual(memory.list_chat(sid), before)
+            finally:
+                release.set()
+            result = await pending
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['context']['summary'], 'RPC summary')
+        self.assertFalse(self.host.conversation.running)
+        self.assertEqual(memory.list_chat(sid), before)
+
+    async def test_compression_disconnect_finishes_once_and_can_be_read_after_reconnect(self):
+        import threading
+        from unittest.mock import Mock
+        sid = self.host.state.session_id
+        for role, text in (('user', 'old question'), ('pet', 'old answer'),
+                           ('user', 'latest question'), ('pet', 'latest answer')):
+            memory.append_chat(role, text, sid)
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        def model(*args, **kwargs):
+            entered.set()
+            if not release.wait(10):
+                raise RuntimeError('test did not release disconnected compression')
+            return dict(message=dict(content='saved after disconnect'), usage={})
+        call = Mock(side_effect=model)
+        with patch.object(self.host.conversation, 'engage_model'), patch.object(self.host.agent.llm, 'chat', call):
+            async with connect(self.url, proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', id='compress', method='compress_context')))
+                try:
+                    self.assertTrue(await asyncio.to_thread(entered.wait, 5))
+                    await ws.close()
+                finally:
+                    release.set()
+            for _ in range(100):
+                if not self.host.conversation.running:
+                    break
+                await asyncio.sleep(.05)
+            self.assertFalse(self.host.conversation.running)
+            async with connect(self.url, proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', id='read', method='load_memory')))
+                envelope = json.loads(await asyncio.wait_for(ws.recv(), 5))['result']
+            self.assertEqual(envelope['result']['context']['summary'], 'saved after disconnect')
+            self.assertEqual(call.call_count, 1)
+        with self.host.tasks.reserve_session(sid):
+            pass  # Disconnected caller did not leak the session reservation.
+
+    async def test_compression_rpc_distinguishes_uncertain_save_and_committed_refresh_failure(self):
+        from desk_companion import context_compression, context_pack
+        sid = self.host.state.session_id
+        for role, text in (('user', 'old question'), ('pet', 'old answer'),
+                           ('user', 'latest question'), ('pet', 'latest answer')):
+            memory.append_chat(role, text, sid)
+        async def compress():
+            async with connect(self.url, proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', id='compress', method='compress_context')))
+                envelope = json.loads(await asyncio.wait_for(ws.recv(), 5))['result']
+            self.assertTrue(envelope['ok'], envelope)
+            return envelope['result']
+        with patch.object(self.host.conversation, 'engage_model'), patch.object(self.host.agent.llm, 'chat',
+                return_value=dict(message=dict(content='saved summary'), usage={} )):
+            with patch.object(context_compression, 'save_pack', side_effect=OSError('save failed')):
+                result = await compress()
+            self.assertEqual(result['change_state'], 'unconfirmed')
+            self.assertEqual(context_pack.context_view(sid, 'system')['summary'], '')
+            with patch.object(self.host.chat_sessions, 'load_memory', return_value=dict(ok=False, error='refresh failed')):
+                result = await compress()
+            self.assertEqual(result['change_state'], 'committed')
+            self.assertEqual(context_pack.context_view(sid, 'system')['summary'], 'saved summary')
+        self.assertFalse(self.host.conversation.running)
+
+    async def test_compression_rejects_occupied_host_without_waiting_or_calling_model(self):
+        from unittest.mock import Mock
+        call = Mock()
+        self.host.agent.llm.chat = call
+        with self.host.turn_lock:
+            async with connect(self.url, proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', id='compress', method='compress_context')))
+                envelope = json.loads(await asyncio.wait_for(ws.recv(), 5))['result']
+        self.assertTrue(envelope['ok'], envelope)
+        self.assertEqual(envelope['result']['change_state'], 'not_changed')
+        call.assert_not_called()
+        self.assertFalse(self.host.conversation.running)
+
+    async def test_compression_rejects_current_queue_without_calling_model(self):
+        from unittest.mock import Mock
+        from desk_companion.tasks import TaskManager
+        self.host.tasks.shutdown()
+        with patch.object(TaskManager, '_schedule', return_value=None):
+            manager = TaskManager(self.host)
+        self.host._tasks = manager
+        self.addCleanup(manager.shutdown)
+        sid = self.host.state.session_id
+        for role, text in (('user', 'old question'), ('pet', 'old answer'),
+                           ('user', 'latest question'), ('pet', 'latest answer')):
+            memory.append_chat(role, text, sid)
+        task = manager.submit('pending request', sid)
+        model = Mock(return_value=dict(message=dict(content='summary'), usage={}))
+        self.host.agent.llm.chat = model
+        async with connect(self.url, proxy=None) as ws:
+            await ws.send(json.dumps(dict(type='rpc', id='compress', method='compress_context')))
+            envelope = json.loads(await asyncio.wait_for(ws.recv(), 10))['result']
+        self.assertTrue(envelope['ok'], envelope)
+        self.assertFalse(envelope['result']['ok'], envelope)
+        model.assert_not_called()
+        self.assertEqual(manager.get(task)['state'], 'queued')
+
     async def test_memory_editing_rpc_uses_service_and_preserves_task_boundaries(self):
         from contextlib import ExitStack
         import threading

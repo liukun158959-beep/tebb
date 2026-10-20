@@ -498,7 +498,7 @@ class Bridge:
         return self._host.chat_sessions.load_memory()
 
     def compress_context(self) -> dict:
-        return self._host.board_compress_context()
+        return self._host.context_compression.compress_context()
 
     def add_fact(self, text: str) -> dict:
         return self._host.memory_editing.add_fact(text)
@@ -527,6 +527,8 @@ class Bridge:
 
     def save_model_network(self, payload: dict) -> dict:
         from .model_network import save
+        if self._host.conversation.running:
+            return dict(ok=False, error='助手正在执行，完成后再修改模型网络配置。')
         return save(payload)
 
     def load_models(self) -> dict:

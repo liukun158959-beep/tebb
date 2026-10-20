@@ -1,7 +1,7 @@
 """Ordinary chat selection, snapshots and clearing, independent of windows and RPC."""
 from __future__ import annotations
 
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 import threading
 
 from . import context_pack, memory
@@ -12,9 +12,10 @@ from .state import new_session_id
 
 
 class ChatSessionService:
-    def __init__(self, conversation, *, mutation_guard=None):
+    def __init__(self, conversation, *, mutation_guard=None, reservation_guard=None):
         self.conversation = conversation
         self._mutation_guard = mutation_guard or (lambda _sid: nullcontext())
+        self._reservation_guard = reservation_guard or (lambda _sid: nullcontext())
         self._lock = threading.RLock()
 
     @property
@@ -37,6 +38,22 @@ class ChatSessionService:
             if self.conversation.running:
                 raise RuntimeError('助手正在回复，等待完成或停止后再修改会话。')
             yield self.state.session_id
+
+    @contextmanager
+    def reserve_operation(self):
+        """Reserve the selected session and shared assistant, releasing locks for IO."""
+        with ExitStack() as lifetime:
+            with self.mutable_session() as sid:
+                lifetime.enter_context(self._reservation_guard(sid))
+                self.conversation.running = True
+            try:
+                yield sid
+            finally:
+                with self._lock:
+                    try:
+                        lifetime.close()
+                    finally:
+                        self.conversation.running = False
 
     def _change(self, operation, action):
         # Shared writers also read snapshots: always take WRITES before our lock.

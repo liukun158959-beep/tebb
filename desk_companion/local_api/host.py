@@ -2,7 +2,7 @@
 
 普通/知识问答委托 ConversationService；模型/人设 RPC 直接使用共享配置服务。
 普通会话与只读记忆 RPC 使用 ChatSessionService，记忆编辑使用 MemoryEditingService。
-手动压缩及其余数据方法仍保留 App 的继承兼容。
+手动压缩使用 ContextCompressionService；看板、笔记等数据方法仍保留 App 的继承兼容。
 这里仍有 GUI 类继承，任务 worker 直接使用共享服务，不导入此模块。
 """
 from __future__ import annotations
@@ -50,6 +50,18 @@ class HeadlessApp(App):
     def _session_mutation_guard(self, session_id):
         with self.tasks.session_mutation_guard(session_id):
             yield
+
+    def _session_reservation(self, session_id):
+        return self.tasks.reserve_session(session_id)
+
+    @contextmanager
+    def _compression_start_guard(self):
+        if not self.turn_lock.acquire(blocking=False):
+            raise RuntimeError('助手正在处理其他操作，完成后再压缩上下文。')
+        try:
+            yield
+        finally:
+            self.turn_lock.release()
 
     def ui(self, fn) -> None:
         # 无头：没有窗口队列，直接同步执行

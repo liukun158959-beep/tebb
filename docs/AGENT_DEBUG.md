@@ -32,7 +32,7 @@ python -m unittest discover -s tests -p test_tasks.py -v
 
 预期：离线测试全部通过；后台任务不改变桌面选中的会话或窗口配置；模型或检索失败时不写入成功回复，临时工具清理失败时仍释放忙碌状态和回调。若失败，先看 unittest 的具体断言与子进程 stderr：`GUI import forbidden` 表示新增了窗口依赖；缺少 result 或出现 failure 则检查本轮异常、采样输入、工具回执及模型记录。
 
-已独立的范围包括普通/知识任务、共享对话业务、模型/人设配置、普通会话/只读记忆及长期事实/单句历史编辑；本地 API 的其它数据 RPC 仍通过 HeadlessApp 继承兼容，不代表整个后端已无 GUI 依赖。GUI 实机、真实模型和完整发布包验收单独报告。
+已独立的范围包括普通/知识任务、共享对话业务、模型/人设配置、普通会话/只读记忆、长期事实/单句历史编辑及手动压缩；本地 API 的其它数据 RPC 仍通过 HeadlessApp 继承兼容，不代表整个后端已无 GUI 依赖。GUI 实机、真实模型和完整发布包验收单独报告。
 
 ## 记录范围与验证
 
@@ -87,7 +87,7 @@ python -m unittest discover -s tests -p test_conversation.py -v
 
 首次访问回归不预先注入任务管理器，分别以清空会话 RPC 和发送消息作为首次入口，使用脚本 worker 完成任务、写入历史并查询任务列表，确认只初始化一次。若首次操作出现 `NoneType` 的 `submit` 或 `session_mutation_guard` 错误，先检查 HeadlessApp.tasks 的延迟初始化，而非窗口状态。修复见 [#117](https://github.com/liukun158959-beep/tebb/issues/117)。
 
-失败时检查 error 与 change_state：`not_changed` 表示校验或忙碌拒绝；`unconfirmed` 表示选择/摘要持久化失败、文件结果未确认，选择失败会恢复内存 ID；`partial` 表示摘要已清理但历史未清理完成；`committed` 表示数据已更新但模型临时上下文或 GUI 刷新失败。按提示重新读取并核对后重试，不声称跨文件事务回滚。记忆编辑的后续拆分见下一节；手动压缩和整个 HeadlessApp 去继承仍待后续处理。
+失败时检查 error 与 change_state：`not_changed` 表示校验或忙碌拒绝；`unconfirmed` 表示选择/摘要持久化失败、文件结果未确认，选择失败会恢复内存 ID；`partial` 表示摘要已清理但历史未清理完成；`committed` 表示数据已更新但模型临时上下文或 GUI 刷新失败。按提示重新读取并核对后重试，不声称跨文件事务回滚。记忆编辑和手动压缩的后续拆分见下文；整个 HeadlessApp 去继承仍待后续处理。
 
 ## 无 GUI 的记忆编辑服务验收
 
@@ -107,3 +107,24 @@ python -m unittest tests.test_local_api.LocalApiTests.test_memory_editing_rpc_us
 失败查看 `error/change_state`：`not_changed` 表示校验或忙碌拒绝；`unconfirmed` 表示事实写入或摘要失效等文件操作结果未确认，摘要失败尚未删除历史；`partial` 表示包含该句的摘要已失效，但历史删除未完成；`committed` 表示编辑已完成但记忆页读取或临时上下文清理失败。后两者不能当作“未修改”重复提交；先用 `load_memory/load_chat_log` 核对，需要时检查文件并恢复后重试。原存储没有跨文件事务，此处不承诺中断回滚。
 
 服务测试的子进程拒绝 GUI 导入并实际执行编辑；真实失败 worker 在终态后暂停最终写回，验证历史删除仍被阻止，事实编辑允许。认证 WebSocket 回归令旧 App 编辑方法报错，确保 RPC 直接调用独立服务，覆盖成功快照、忙碌/隔离、摘要故障和已保存但读取失败。该服务独立不代表整个 HeadlessApp 已去除 GUI 继承；实机、真实模型及发布包验证单独报告。对应 [#118](https://github.com/liukun158959-beep/tebb/issues/118)。
+
+## 无 GUI 的手动压缩服务验收
+
+仓库根目录执行，使用临时数据、真实 OpenAI SDK 的 MockTransport、脚本 worker 和文件故障，不请求真实模型或发送外部消息：
+
+```powershell
+python -m unittest tests.test_context_compression -v
+python -m unittest tests.test_local_api.LocalApiTests.test_compression_rejects_current_queue_without_calling_model tests.test_local_api.LocalApiTests.test_compression_rejects_occupied_host_without_waiting_or_calling_model tests.test_local_api.LocalApiTests.test_compression_rpc_keeps_reads_other_workers_and_cancellation_available tests.test_local_api.LocalApiTests.test_compression_disconnect_finishes_once_and_can_be_read_after_reconnect tests.test_local_api.LocalApiTests.test_compression_rpc_distinguishes_uncertain_save_and_committed_refresh_failure -v
+```
+
+入口 `ContextCompressionService(chat_sessions, start_guard=...)` 的 `compress_context()` 无参数，保留原记忆页 `ok/total/fact_limit/facts/context/items` 结构；RPC 仍有外层派发与内层业务两层 `ok`。独立调用时先设置临时 `DESK_COMPANION_DATA_DIR`，创建持久 UserState 和 ConversationService，再构造会话服务。绑定 TaskManager 时同时传入 `mutation_guard=manager.session_mutation_guard` 和 `reservation_guard=manager.reserve_session`；只有前者不足以保护长调用期间的新任务提交。后台的 start_guard 短暂、非阻塞获取宿主操作锁，只保护开始和模型绑定，忙碌则明确拒绝。
+
+压缩开始前必须没有当前会话排队、执行、取消或 active 收尾任务，也不能有共享助手回复/其它预留。会话服务短暂固定当前选择并设置共享忙碌，任务层登记会话预留；网络等待不持有会话锁、任务条件锁、宿主锁或全局 WRITES。压缩期间拒绝重复压缩、当前会话新任务、会话切换/清空、记忆编辑及模型/人设/模型网络配置修改，直到保存、快照读取与清理结束。读取及其他会话任务的执行、查询和取消仍可用；同 submission_key 重取已存在任务不算新任务，保留原幂等回执。
+
+模型和上下文复用 ConversationService.prepare_context：传入已有摘要和未覆盖的较早原文，保留最近完整 user/pet 一轮；尾部不成完整一轮时保留最后一句，没有更早记录则明确失败。完整原文、长期事实、其他会话与笔记保留。没有工具定义，也不执行模型返回的工具；Atlas 校验正常完成后，产品还要求无工具调用且正文为非空字符串，空、截断、过滤、工具返回或网络失败均不提交新摘要。自动压缩共用相同的模型结果校验。
+
+摘要保存沿用 context_pack 的校验、临时文件替换和其他会话保留，通过公开 `save_pack` 入口短暂获取共享写锁完成。`change_state=not_changed` 表示未替换摘要；`unconfirmed` 表示已进入摘要保存、文件结果未确认；`committed` 表示摘要已保存，但后续快照读取或清理失败。先重新读取记忆页核对，不能把后两者当作“未执行”直接重复压缩，也不声称跨文件回滚。
+
+用量沿用原顺序：正常模型回执先落账，再检查正文并保存，所以空正文、工具返回或保存失败可能已有费用记录；用量写入失败会阻止新摘要保存。模型异常携带的 partial usage 本批未另行补记。请求仍走现有 HTTP 调试记录和会话上下文，不增加日志或调试网络服务。
+
+同步 RPC 沿用既有模型网络超时，没有新增任务 ID、流式进度、总时限或取消入口。连接断开不取消线程内模型请求，可能继续保存；重连后调用 `load_memory/load_chat_log` 核对，不自动重试。预期专项测试通过，特别是模型等待时另一个真实 worker 可完成 WRITES 保护的工具，以及断连后只有一次模型调用、预留正确释放。整个 HeadlessApp 仍有看板/笔记继承；GUI 实机、真实模型、真实沙箱和发布包另行报告。见 [#119](https://github.com/liukun158959-beep/tebb/issues/119)。

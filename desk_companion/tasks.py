@@ -25,6 +25,7 @@ class TaskManager:
         self.command = command or [sys.executable, "-u", "-m", "desk_companion.task_worker"]
         self.cv = threading.Condition(threading.RLock())
         self.active = {}
+        self._session_reservations = set()
         self.listeners = {}
         self.stopped = False
         self.settings_path = self.path.parent / "task_settings.json"
@@ -87,6 +88,8 @@ class TaskManager:
                     if tuple(existing) != (text, session, channel):
                         raise ValueError("任务去重编号已用于其他任务。")
                     return task_id
+            if session in self._session_reservations:
+                raise RuntimeError('当前会话正在整理上下文，完成后再提交任务。')
             limits = {**self.settings, **(task_limits or {})}
             from .video_analysis import initial_video_url
             video_url = request.get("video_url") or (initial_video_url(text) if not request.get("resume_note")
@@ -132,12 +135,26 @@ class TaskManager:
         with self.cv:
             if self.stopped:
                 raise RuntimeError('桌宠正在退出，暂时不能修改会话。')
+            if session in self._session_reservations:
+                raise RuntimeError('当前会话正在整理上下文，完成后再修改会话。')
             with self.db() as db:
                 pending = db.execute("SELECT 1 FROM tasks WHERE session=? AND state IN ('queued','running','cancelling') LIMIT 1",
                                      (session,)).fetchone()
             if pending or any(control['session'] == session for control in self.active.values()):
                 raise RuntimeError('当前会话任务尚未结束或仍在收尾，等待完成或停止后再修改会话。')
             yield
+
+    @contextmanager
+    def reserve_session(self, session):
+        """Reserve an idle session without holding the queue lock during model IO."""
+        with self.session_mutation_guard(session):
+            self._session_reservations.add(session)
+        try:
+            yield
+        finally:
+            with self.cv:
+                self._session_reservations.remove(session)
+                self.cv.notify_all()
 
     def list(self, channel="", session=""):
         with self.db() as db:
@@ -214,7 +231,7 @@ class TaskManager:
                     return
                 with self.db() as db:
                     queue = [dict(r) for r in db.execute("SELECT * FROM tasks WHERE state='queued' ORDER BY created,rowid")]
-                busy = {v["session"] for v in self.active.values()}
+                busy = {v["session"] for v in self.active.values()} | self._session_reservations
                 for row in queue:
                     if len(self.active) >= self.settings["parallel"]:
                         break

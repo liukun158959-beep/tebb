@@ -16,6 +16,7 @@ import hmac
 import os
 
 from websockets.asyncio.server import serve
+from websockets.exceptions import ConnectionClosed
 
 from ..sampling import parse_sampling
 from .host import HeadlessApp
@@ -171,7 +172,7 @@ def _dispatch(method: str, args: dict, preview=False) -> dict:
             from ..agent_debug import context
             with context(session=HOST.state.session_id, channel="backend"):
                 return target(**kwargs)
-        if method.startswith("terminal_") or method in {"load_chat_log", "load_memory", "load_collaboration", "collaboration_action", "project_workspace", "check_updates", "list_agent_tasks", "get_agent_task", "cancel_agent_task", "continue_agent_task", "save_agent_task_settings", "load_task_progress",
+        if method.startswith("terminal_") or method in {"compress_context", "load_chat_log", "load_memory", "load_collaboration", "collaboration_action", "project_workspace", "check_updates", "list_agent_tasks", "get_agent_task", "cancel_agent_task", "continue_agent_task", "save_agent_task_settings", "load_task_progress",
                       "list_debug_calls", "get_debug_call", "set_debug_recording", "explain_debug_call",
                       "load_model_network", "save_model_network",
                       "load_video_settings", "save_video_settings", "list_task_videos", "export_task_video",
@@ -186,7 +187,7 @@ def _dispatch(method: str, args: dict, preview=False) -> dict:
             # 桌面数据操作仍串行；Agent 的共享写入也与界面修改互斥。
             with HOST.turn_lock:
                 mutating = {"add_fact", "update_fact", "delete_fact", "delete_memory_turn", "clear_chat",
-                            "write_today_summary_doc", "write_week_review_doc", "export_notebook_feishu", "compress_context"}
+                            "write_today_summary_doc", "write_week_review_doc", "export_notebook_feishu"}
                 if method in mutating:
                     from ..resource_lock import WRITES
                     with WRITES:
@@ -226,7 +227,10 @@ async def _handler(ws):
             args = msg.get("args") or {}
             # 数据方法可能有阻塞 IO（飞书/GitHub），丢线程池不堵事件循环
             res = await asyncio.to_thread(_dispatch, method, args, preview)
-            await ws.send(json.dumps({"type": "rpc_result", "id": msg.get("id"), "result": res}))
+            try:
+                await ws.send(json.dumps({"type": "rpc_result", "id": msg.get("id"), "result": res}))
+            except ConnectionClosed:
+                return  # The operation finished; a disconnected caller must read its result again.
         elif mtype == "chat":
             await _handle_chat(ws, msg)
         elif mtype == "notebook":

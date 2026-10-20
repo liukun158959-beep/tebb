@@ -108,6 +108,7 @@ class ConversationService:
         *,
         exclude_user: str | None = None,
         manual: bool = False,
+        save_pack=None,
     ) -> list[dict]:
         from .assistant import build_system_prompt
         from .context_pack import prepare_injection
@@ -127,7 +128,12 @@ class ConversationService:
             )
             self.record_llm_usage(result.get("usage"), str(uuid.uuid4()))
             message = result.get("message") or {}
-            return str(message.get("content") or "")
+            if message.get('tool_calls') or message.get('function_call'):
+                raise RuntimeError('压缩返回了工具调用，未保存摘要，请检查模型后重试。')
+            content = message.get('content')
+            if type(content) is not str or not content.strip():
+                raise RuntimeError('压缩结果为空或不是文本，未保存摘要，请检查模型后重试。')
+            return content
 
         return prepare_injection(
             self.state.session_id,
@@ -136,6 +142,7 @@ class ConversationService:
             exclude_user=exclude_user,
             complete=complete,
             manual=manual,
+            save=save_pack,
         )
 
     def inject_prepared(self, current_text: str, *, exclude_user: str | None = None) -> None:

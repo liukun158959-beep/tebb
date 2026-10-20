@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import webview
@@ -24,6 +24,7 @@ from .assistant_settings import AssistantSettingsService
 from .conversation import ConversationService
 from .chat_sessions import ChatSessionService
 from .memory_editing import MemoryEditingService
+from .context_compression import ContextCompressionService
 from .automation import AutomationScheduler
 from .board_workbench import BoardWorkbench
 from .bridge import Bridge
@@ -92,8 +93,10 @@ class App(BoardWorkbench):
             on_status=None if headless else self.on_stream_status)
         self.assistant_settings = AssistantSettingsService(self.conversation)
         self.automation = AutomationScheduler(self)
-        self.chat_sessions = ChatSessionService(self.conversation, mutation_guard=self._session_mutation_guard)
+        self.chat_sessions = ChatSessionService(self.conversation, mutation_guard=self._session_mutation_guard,
+                                                reservation_guard=self._session_reservation)
         self.memory_editing = MemoryEditingService(self.chat_sessions)
+        self.context_compression = ContextCompressionService(self.chat_sessions, start_guard=self._compression_start_guard)
         self.bridge = Bridge(self, session_changed=None if headless else self._on_session_changed)
         self._queue: queue.Queue = queue.Queue()
         self.pet = None
@@ -317,6 +320,12 @@ class App(BoardWorkbench):
             raise RuntimeError('助手正在回复或仍在收尾，等待完成或停止后再修改会话。')
         yield
 
+    def _session_reservation(self, session_id):
+        return nullcontext()
+
+    def _compression_start_guard(self):
+        return nullcontext()
+
     def _on_session_changed(self, operation):
         snapshot = self.chat_sessions.load_chat_log()
         if not snapshot['ok']:
@@ -349,14 +358,7 @@ class App(BoardWorkbench):
         return self.chat_sessions.load_memory()
 
     def board_compress_context(self) -> dict:
-        if self._agent_running:
-            return {"ok": False, "error": "助手正在回复，等这句说完再压缩。"}
-        try:
-            self.engage_model()
-            self.prepare_context("", manual=True)
-            return self.board_memory()
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.context_compression.compress_context()
 
     def prepare_context(
         self,
