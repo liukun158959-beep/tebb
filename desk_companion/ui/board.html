@@ -1562,6 +1562,8 @@
         del.type = "button";
         del.textContent = "删除";
         del.addEventListener("click", () => deleteJob(job.id, job.name));
+        const active = job.active || ["queued", "running"].includes(job.last_result);
+        [cb, run, edit, del].forEach(control => { control.disabled = !!active; });
         actions.appendChild(en);
         actions.appendChild(run);
         actions.appendChild(edit);

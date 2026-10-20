@@ -4,7 +4,7 @@
 普通会话与只读记忆 RPC 使用 ChatSessionService，记忆编辑使用 MemoryEditingService。
 手动压缩使用 ContextCompressionService；笔记读写、生成、导出及文件 RPC 使用 NotebookService。
 知识库八入口使用 KnowledgeService；今日看板四入口使用 BoardService。
-周复盘三入口使用 WeeklyReviewService；自动化配置与调度仍保留宿主兼容。
+周复盘三入口使用 WeeklyReviewService；自动化配置与调度由 AutomationService 拥有。
 这里仍有 GUI 类继承，任务 worker 直接使用共享服务，不导入此模块。
 """
 from __future__ import annotations
@@ -35,16 +35,6 @@ class HeadlessApp(App):
                 from ..collaboration import Collaboration
                 self._collaboration = Collaboration()
             return self._collaboration
-
-    @property
-    def tasks(self):
-        if self._tasks is not None:
-            return self._tasks
-        with self.turn_lock:
-            if self._tasks is None:
-                from ..tasks import TaskManager
-                self._tasks = TaskManager(self)
-            return self._tasks
 
     @contextmanager
     def _session_mutation_guard(self, session_id):

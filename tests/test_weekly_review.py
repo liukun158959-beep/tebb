@@ -15,6 +15,7 @@ from unittest.mock import Mock, patch
 from desk_companion import board_data as b, automation, feishu_auth, feishu_docs
 from desk_companion.chat_sessions import ChatSessionService
 from desk_companion.weekly_review import WeeklyReviewService
+from desk_companion.automation_service import AutomationService
 
 
 NOW = datetime(2026, 10, 21, 12, tzinfo=b.TZ)
@@ -317,7 +318,7 @@ class ReviewSchedulerTests(ReviewFixture):
         return next(j for j in automation.load_store()['jobs'] if j['action']==action)['id']
 
     def test_scheduled_review_actions_use_same_service_and_record_real_outcomes(self):
-        scheduler = automation.AutomationScheduler(SimpleNamespace(weekly_review=self.service))
+        scheduler = AutomationService(review=self.service)
         generate, publish = self.job('retro_gen'), self.job('retro_write')
         scheduler._execute(generate); scheduler._execute(publish)
         self.assertEqual([j['last_result'] for j in automation.load_store()['jobs']], ['ok', 'ok'])
@@ -333,7 +334,7 @@ class ReviewSchedulerTests(ReviewFixture):
 
     def test_final_admission_race_keeps_queue_and_retries_only_after_later_kick(self):
         jid = self.job('retro_gen')
-        scheduler = automation.AutomationScheduler(SimpleNamespace(weekly_review=self.service, _agent_running=False))
+        scheduler = AutomationService(review=self.service)
         self.conversation.running = True  # Host precheck can race the service admission.
         with patch.object(scheduler, '_kick'), patch.object(scheduler, '_notify'):
             scheduler.run_now(jid)
@@ -351,7 +352,7 @@ class ReviewSchedulerTests(ReviewFixture):
 
     def test_deferred_review_still_allows_independent_news_to_start(self):
         jid = self.job('retro_gen')
-        scheduler = automation.AutomationScheduler(SimpleNamespace(weekly_review=self.service, _agent_running=False))
+        scheduler = AutomationService(review=self.service)
         self.conversation.running = True
         scheduler._queued = dict(retro_gen=jid, ai_news='news')
         execute = scheduler._execute

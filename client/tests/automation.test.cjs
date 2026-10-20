@@ -48,3 +48,42 @@ test('preview, archive and group publication are distinct; enable checks targets
   assert.equal(saved.enabled, true); assert.equal(saved.hour, 9); assert.equal(saved.minute, 0);
   act(() => renderer.unmount());
 });
+
+test('active result cleanup freezes edits and deletion; failed save preserves form and explains confirmed stage', async () => {
+  const filename = path.resolve(__dirname, '../src/client/automation.tsx');
+  const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: {
+    module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const mod = new Module(filename, module); mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
+  let job = { id: 'job', name: 'existing', action: 'retro_write', enabled: false, cadence: 'daily', weekdays: [],
+    hour: 12, minute: 0, doc: 'target', last_result: 'fail', active: false };
+  let refresh; const calls = [];
+  const rpc = async (_info, method, args) => {
+    calls.push([method, args]);
+    if (method === 'load_news') return { settings: { profile: '', wiki_url: '', base_url: '', table_id: '',
+      base_token: '', chat_id: '', topics: [], lookback_days: 7, highlights: 5 }, runs: [] };
+    if (method === 'list_automation_jobs') return { ok: true, items: [{ ...job }] };
+    if (method === 'list_agent_tasks') return { items: [] };
+    return { ok: false, stage: 'snapshot', change_state: 'committed', error: '配置已保存，但列表读取失败，请重新读取核对。' };
+  };
+  const original = mod.require.bind(mod);
+  mod.require = id => id === './page-stack' ? { usePageActive: () => true } : id === './api' ? { rpc }
+    : id === './Markdown' ? { Markdown: () => null } : original(id);
+  mod._compile(code, filename);
+  global.window = { setInterval: fn => { refresh = fn; return 1; }, clearInterval() {} };
+  let view; await act(async () => { view = create(React.createElement(mod.exports.AutomationPane, { info: { port: 1, token: 'test' } })); });
+  const button = name => view.root.findAllByType('button').find(n => n.children.join('') === name);
+  await act(async () => button('修改').props.onClick());
+  const name = () => view.root.findAllByType('input').find(n => n.props.value === 'existing' || n.props.value === 'retained draft');
+  act(() => name().props.onChange({ target: { value: 'retained draft' } }));
+  await act(async () => button('保存定时任务').props.onClick());
+  assert.equal(name().props.value, 'retained draft');
+  assert.match(view.root.findByProps({ role: 'alert' }).children.join(''), /已保存.*读取失败/);
+  assert.equal(calls.filter(([m]) => m === 'save_automation_job').length, 1);
+  job = { ...job, active: true }; // Final receipt is pending even though last_result says fail.
+  await act(async () => refresh());
+  for (const label of ['修改', '删除定时', '立即执行', '保存定时任务']) assert.equal(button(label).props.disabled, true, label);
+  act(() => button('新增定时任务').props.onClick());
+  assert.equal(!!button('保存定时任务').props.disabled, false);
+  assert.equal(calls.filter(([m]) => m === 'delete_automation_job').length, 0);
+  act(() => view.unmount());
+});

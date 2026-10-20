@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from desk_companion import automation, news, news_controller, news_publish
+from desk_companion.automation_service import AutomationService
 from desk_companion.memory import TZ
 
 
@@ -376,7 +377,7 @@ class NewsTests(unittest.TestCase):
         manager.list.return_value = {"items": []}
         manager.submit.return_value = "task"
         with patch.object(news, "load_settings", return_value=run["settings"]):
-            started = news_controller.start(SimpleNamespace(tasks=manager), publish=False)
+            started = news_controller.start(manager, publish=False)
         self.assertEqual(started["task_id"], "task")
         req = manager.submit.call_args.kwargs
         self.assertEqual(req["workflow"], "ai_news")
@@ -417,7 +418,7 @@ class NewsTests(unittest.TestCase):
         self.assertFalse((self.root / "memory/chat.jsonl").exists())
 
     def test_independent_news_can_start_while_legacy_host_is_busy(self):
-        scheduler = automation.AutomationScheduler(SimpleNamespace(_agent_running=True))
+        scheduler = AutomationService(busy=lambda: True)
         scheduler._queued = {"retro_gen": "retro", "ai_news": "news"}
         with patch.object(scheduler, "_execute") as execute, patch.object(scheduler, "_notify"):
             scheduler._loop()
@@ -429,7 +430,7 @@ class NewsTests(unittest.TestCase):
         manager = Mock()
         manager.get.side_effect = [dict(state="failed", started=__import__('time').time(), error="临时错误"),
                                    dict(state="succeeded", started=__import__('time').time(), error="")]
-        scheduler = automation.AutomationScheduler(SimpleNamespace(tasks=manager))
+        scheduler = AutomationService(tasks=lambda: manager)
         with patch.object(news, "load_run", return_value={"retryable": True}), \
              patch.object(news_controller, "start", return_value={"task_id": "retry"}) as start, \
              patch.object(scheduler, "_news_result") as result:

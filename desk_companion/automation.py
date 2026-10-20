@@ -4,14 +4,14 @@ from __future__ import annotations
 from .paths import data_root
 
 import json
-import threading
-import time
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
+from functools import wraps
+from contextlib import contextmanager
 
-from .logutil import log
 from .memory import TZ
+from .resource_lock import ResourceLock
 
 CONFIG_NAME = "automation_jobs.json"
 ACTIONS = ("retro_gen", "retro_write", "ai_news")
@@ -42,13 +42,35 @@ WEEKDAY_NAMES = "一二三四五六日"
 TICK_SEC = 15
 HEARTBEAT_SEC = 60
 MISS_GAP_SEC = HEARTBEAT_SEC * 2
-_STORE_LOCK = threading.Lock()
+_STORE_LOCK = ResourceLock('automation-store')
+
+
+class AutomationChangeError(RuntimeError):
+    def __init__(self, message, **details):
+        super().__init__(message)
+        self.details = details
+
+
+@contextmanager
+def transaction():
+    """Keep read/modify/save together; callers release this before external work."""
+    with _STORE_LOCK:
+        yield
+
+
+def _stored(fn):
+    @wraps(fn)
+    def run(*args, **kwargs):
+        with _STORE_LOCK:
+            return fn(*args, **kwargs)
+    return run
 
 
 def jobs_path() -> Path:
     return data_root() / CONFIG_NAME
 
 
+@_stored
 def load_store() -> dict:
     path = jobs_path()
     if not path.is_file():
@@ -87,16 +109,32 @@ def load_store() -> dict:
     return {"jobs": out, "last_alive_at": alive}
 
 
+@_stored
 def save_store(store: dict) -> None:
     path = jobs_path()
     payload = {
         "jobs": [_job_payload(job) for job in store["jobs"]],
         "last_alive_at": store["last_alive_at"],
     }
-    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    temp = path.with_suffix(".tmp")
-    temp.write_text(text, encoding="utf-8")
-    temp.replace(path)
+    from .video import atomic_write
+    try:
+        atomic_write(path, payload)
+    except Exception as exc:
+        raise AutomationChangeError(f'自动化记录保存结果未确认：{exc}。请重新读取核对，不要直接重复执行。',
+                                    stage='store_save', change_state='unconfirmed') from exc
+
+
+def _idle(job):
+    if job['last_result'] in {'queued', 'running'}:
+        raise RuntimeError('该作业正在排队、执行或收尾，完成或停止后再修改、启停或删除。')
+
+
+def _saved_snapshot(job_id):
+    try:
+        return dict(list_snapshot(), job_id=job_id)
+    except Exception as exc:
+        raise AutomationChangeError(f'配置已保存，但列表读取失败：{exc}。请重新读取核对。',
+            stage='snapshot', change_state='committed', job_id=job_id) from exc
 
 
 def list_snapshot(*, queued: dict[str, str] | None = None) -> dict:
@@ -133,6 +171,7 @@ def upsert_job(payload: dict) -> dict:
                     break
             if existing is None:
                 raise RuntimeError("没有这条定时任务。")
+            _idle(existing)
         name = str(payload.get("name") or "").strip()
         if not name:
             raise RuntimeError("任务名称不能空。")
@@ -187,8 +226,13 @@ def upsert_job(payload: dict) -> dict:
             existing["doc"] = doc
         if not store["last_alive_at"]:
             store["last_alive_at"] = now.isoformat(timespec="seconds")
-        save_store(store)
-        return list_snapshot()
+        job_id = rec['id'] if existing is None else existing['id']
+        try:
+            save_store(store)
+        except AutomationChangeError as exc:
+            exc.details['job_id'] = job_id
+            raise
+        return _saved_snapshot(job_id)
 
 
 def delete_job(job_id: str) -> dict:
@@ -197,12 +241,17 @@ def delete_job(job_id: str) -> dict:
         raise RuntimeError("删除需要任务 id。")
     with _STORE_LOCK:
         store = load_store()
+        _idle(_find(store, target))
         keep = [item for item in store["jobs"] if item["id"] != target]
         if len(keep) == len(store["jobs"]):
             raise RuntimeError("没有这条定时任务。")
         store["jobs"] = keep
-        save_store(store)
-        return list_snapshot()
+        try:
+            save_store(store)
+        except AutomationChangeError as exc:
+            exc.details['job_id'] = target
+            raise
+        return _saved_snapshot(target)
 
 
 def mark_alerts_seen() -> dict:
@@ -226,293 +275,9 @@ def has_alert() -> bool:
     )
 
 
-class AutomationScheduler:
-    def __init__(self, host) -> None:
-        self.host = host
-        self._lock = threading.Lock()
-        self._queued: dict[str, str] = {}
-        self._running_action = ""
-        self._worker: threading.Thread | None = None
-        self._last_tick = 0.0
-        self._booted = False
-        self._news_active = {}
-        self._stopping = threading.Event()
-
-    def tick(self) -> None:
-        if self._stopping.is_set():
-            return
-        now_m = time.monotonic()
-        if self._last_tick and now_m - self._last_tick < TICK_SEC:
-            return
-        self._last_tick = now_m
-        pending = []
-        try:
-            with self._lock:
-                occupied = set(self._queued)
-                if self._running_action:
-                    occupied.add(self._running_action)
-                if self._news_active:
-                    occupied.add("ai_news")
-            with _STORE_LOCK:
-                store = load_store()
-                now = _now()
-                dirty = False
-                if not self._booted:
-                    dirty = _abandon_queued(store) or dirty
-                    dirty = _mark_missed(store, now) or dirty
-                    self._booted = True
-                else:
-                    dirty = _mark_missed(store, now) or dirty
-                due_jobs = _due_jobs(store, now)
-                for job in due_jobs:
-                    key = _slot_key(_latest_slot(now, job) or now, job)
-                    if job["action"] == "ai_news" and job["action"] in occupied:
-                        continue  # 不消费这个时段；前一任务结束后再触发最新一次。
-                    job["last_run_slot"] = key
-                    dirty = True
-                    if job["action"] in occupied:
-                        continue
-                    occupied.add(job["action"])
-                    job["last_result"] = "queued"
-                    job["last_error"] = ""
-                    job["alert_seen"] = True
-                    pending.append(job)
-                dirty = _heartbeat(store, now) or dirty
-                if dirty:
-                    save_store(store)
-            for job in pending:
-                self._queue_action(job["action"], job["id"])
-        except Exception as extra:
-            log(f"automation tick: {extra}")
-            return
-        self._kick()
-
-    def run_now(self, job_id: str) -> dict:
-        target = (job_id or "").strip()
-        if not target:
-            raise RuntimeError("立刻执行需要任务 id。")
-        with _STORE_LOCK:
-            store = load_store()
-            job = _find(store, target)
-            action = job["action"]
-        if not self._queue_action(action, target):
-            raise RuntimeError("同类任务正在跑或已在排队，不会叠第二趟。")
-        with _STORE_LOCK:
-            store = load_store()
-            job = _find(store, target)
-            job["last_result"] = "queued"
-            job["last_error"] = ""
-            job["alert_seen"] = True
-            save_store(store)
-        self._kick()
-        snap = self.snapshot()
-        snap["message"] = "已加入执行队列。"
-        return snap
-
-    def snapshot(self) -> dict:
-        with self._lock:
-            queued = dict(self._queued)
-        with _STORE_LOCK:
-            return list_snapshot(queued=queued)
-
-    def seen(self) -> dict:
-        mark_alerts_seen()
-        snap = self.snapshot()
-        snap["alert"] = False
-        return snap
-
-    def drop_queued(self, job_id: str) -> None:
-        with self._lock:
-            drop = [key for key, value in self._queued.items() if value == job_id]
-            for key in drop:
-                del self._queued[key]
-
-    def _queue_action(self, action: str, job_id: str) -> bool:
-        with self._lock:
-            if self._stopping.is_set() or action in self._queued or action == self._running_action or (action == "ai_news" and self._news_active):
-                return False
-            self._queued[action] = job_id
-            return True
-
-    def _kick(self) -> None:
-        with self._lock:
-            if self._worker is not None and self._worker.is_alive():
-                return
-            if not self._queued:
-                return
-            self._worker = threading.Thread(target=self._loop, daemon=True)
-            self._worker.start()
-
-    def _loop(self) -> None:
-        deferred = False
-        try:
-            while True:
-                if self._stopping.is_set():
-                    return
-                busy = self._host_busy() or deferred
-                job_id = None
-                action = ""
-                with self._lock:
-                    for key in ACTION_ORDER:
-                        if busy and key != "ai_news":
-                            continue
-                        if key in self._queued:
-                            action = key
-                            job_id = self._queued.pop(key)
-                            self._running_action = key
-                            break
-                if not job_id:
-                    return
-                try:
-                    if self._execute(job_id) is False:
-                        with self._lock:
-                            if not self._stopping.is_set():
-                                self._queued[action] = job_id
-                        deferred = True
-                        continue
-                finally:
-                    with self._lock:
-                        self._running_action = ""
-        finally:
-            with self._lock:
-                self._worker = None
-            self._notify()
-            if not deferred and self._queued and not self._stopping.is_set() and (not self._host_busy() or "ai_news" in self._queued):
-                self._kick()
-
-    def _host_busy(self) -> bool:
-        host = self.host
-        if getattr(host, "_agent_running", False):
-            return True
-        pet = getattr(host, "pet", None)
-        if pet is not None and pet.busy:
-            return True
-        return False
-
-    def _execute(self, job_id: str) -> bool | None:
-        try:
-            with _STORE_LOCK:
-                store = load_store()
-                job = _find(store, job_id)
-                action = job["action"]
-                doc = job["doc"]
-        except Exception as extra:
-            log(f"automation execute load: {extra}")
-            return
-        error = ""
-        try:
-            if action == "ai_news":
-                self._start_news(job_id)
-                return
-            elif action in {"retro_gen", "retro_write"}:
-                service = self.host.weekly_review
-                result = (service.generate_week_review() if action == "retro_gen"
-                          else service.write_scheduled_review(doc))
-                if result.get('retryable_busy'):
-                    return False
-                if not result.get('ok'):
-                    raise RuntimeError(result.get('error') or '周复盘执行失败。')
-            else:
-                raise RuntimeError(f"不认识的动作 {action}。")
-        except Exception as extra:
-            error = str(extra)
-        with _STORE_LOCK:
-            store = load_store()
-            try:
-                job = _find(store, job_id)
-            except RuntimeError:
-                return
-            if error:
-                job["last_result"] = "fail"
-                job["last_error"] = error
-                job["alert_seen"] = False
-            else:
-                job["last_result"] = "ok"
-                job["last_error"] = ""
-                job["alert_seen"] = True
-            save_store(store)
-
-    def _start_news(self, job_id):
-        from .news_controller import start
-        started = start(self.host, publish=True, job_id=job_id)
-        with self._lock:
-            self._news_active[job_id] = started["task_id"]
-        self._news_result(job_id, "running", started["task_id"])
-        threading.Thread(target=self._monitor_news, args=(job_id, started), daemon=True).start()
-
-    def _news_result(self, job_id, result, task_id, error="", reset_slot=False):
-        with _STORE_LOCK:
-            store = load_store()
-            try:
-                job = _find(store, job_id)
-            except RuntimeError:
-                return
-            job.update(last_result=result, last_task_id=task_id, last_error=error, alert_seen=result not in {"fail", "missed"})
-            if reset_slot:
-                job["last_run_slot"] = ""
-            save_store(store)
-
-    def _monitor_news(self, job_id, started):
-        from .news import load_run
-        from .news_controller import start
-        from .tasks import TERMINAL
-        deadline = None
-        task_id = started["task_id"]
-        finished = False
-        try:
-            for attempt in range(2):
-                while True:
-                    task = self.host.tasks.get(task_id, False)
-                    if task["started"] and deadline is None:
-                        deadline = time.monotonic() + max(0, 900 - (time.time() - task["started"]))
-                    if task["state"] in TERMINAL or self._stopping.wait(.3):
-                        break
-                if task["state"] == "succeeded":
-                    self._news_result(job_id, "ok", task_id)
-                    finished = True
-                    return
-                run = load_run(started["run_id"])
-                seconds = int((deadline or time.monotonic()) - time.monotonic())
-                if attempt or self._stopping.is_set() or task["state"] == "cancelled" or not run.get("retryable") or seconds < 20:
-                    if self._stopping.is_set():
-                        self._news_result(job_id, "missed", task_id, "桌宠退出时资讯任务未完成，下次恢复最新一次并核实发布回执。", reset_slot=True)
-                    else:
-                        self._news_result(job_id, "fail", task_id, task["error"] or "资讯任务中断，已保留阶段回执。")
-                    finished = True
-                    return
-                self.host.tasks.event(task_id, "status", "资讯任务遇到临时失败，将在剩余时间内重试一次，复用已完成阶段。")
-                if self._stopping.wait(2):
-                    return
-                retried = start(self.host, publish=True, job_id=job_id, seconds=max(1, seconds-2), attempt=1)
-                task_id = retried["task_id"]
-                with self._lock:
-                    self._news_active[job_id] = task_id
-                self._news_result(job_id, "running", task_id)
-        except Exception:
-            self._news_result(job_id, "fail", task_id, "资讯恢复调度未完成，请检查任务记录和设置。")
-            finished = True
-        finally:
-            if not finished and self._stopping.is_set():
-                self._news_result(job_id, "missed", task_id, "桌宠退出时资讯任务未完成，下次恢复最新一次并核实发布回执。", reset_slot=True)
-            with self._lock:
-                self._news_active.pop(job_id, None)
-
-    def stop(self):
-        self._stopping.set()
-        with self._lock:
-            self._queued.clear()
-
-
-    def _notify(self) -> None:
-        host = self.host
-        try:
-            host.ui(lambda: host._eval_board("jobs_changed"))
-        except Exception as extra:
-            log(f"automation notify: {extra}")
-
-
 def _job_payload(job: dict) -> dict:
-    return {**{key: job[key] for key in JOB_KEYS}, "last_task_id": job.get("last_task_id", "")}
+    return {**{key: job[key] for key in JOB_KEYS}, "last_task_id": job.get("last_task_id", ""),
+            **({"execution": job["execution"]} if "execution" in job else {})}
 
 
 def _parse_job(item, path: Path, index: int) -> dict:
@@ -585,7 +350,17 @@ def _parse_job(item, path: Path, index: int) -> dict:
         "last_error": last_error,
         "alert_seen": alert_seen,
         "last_task_id": str(item.get("last_task_id", "")),
+        **({"execution": _parse_execution(item["execution"])} if "execution" in item else {}),
     }
+
+
+def _parse_execution(value):
+    if not isinstance(value, dict) or any(type(value.get(k)) is not str
+            for k in ('id', 'action', 'doc', 'phase')):
+        raise RuntimeError('自动化 execution 必须包含字符串 id/action/doc/phase。')
+    if value['action'] not in ACTIONS or ('result' in value and not isinstance(value['result'], dict)):
+        raise RuntimeError('自动化 execution 的动作或结果无效。')
+    return value
 
 
 def _parse_weekdays(raw, cadence: str, where: str = "任务") -> list[int]:
@@ -666,17 +441,26 @@ def _schedule_text(job: dict) -> str:
 def _abandon_queued(store: dict) -> bool:
     dirty = False
     for job in store["jobs"]:
-        if job["last_result"] in {"queued", "running"}:
+        if job["last_result"] in {"queued", "running"} or job.get('execution', {}).get('phase') == 'unconfirmed':
             job["last_result"] = "missed"
-            job["last_error"] = "进程退出时仍在排队，未执行。"
+            execution = job.get('execution') or {}
+            not_started = execution.get('phase') == 'queued'
+            job['last_error'] = ('进程退出时尚未开始，未执行。' if not_started else
+                                 '上次执行结果未确认（含旧版无法判断的记录），请先核对，不要直接重发。')
+            if execution:
+                job['execution'] = dict(execution, phase='not_started' if not_started else 'unconfirmed')
             job["alert_seen"] = False
             dirty = True
             if job["action"] == "ai_news":
                 job["last_run_slot"] = ""  # 最新一次补跑使用发布回执恢复，不从头重复写入。
+            else:
+                now = _now()
+                if _slot_dt(now, job) <= now:
+                    job['last_run_slot'] = _slot_key(now, job)
     return dirty
 
 
-def _mark_missed(store: dict, now: datetime) -> bool:
+def _mark_missed(store: dict, now: datetime, *, active=()) -> bool:
     raw = store["last_alive_at"]
     if not raw:
         return False
@@ -687,7 +471,7 @@ def _mark_missed(store: dict, now: datetime) -> bool:
     for job in store["jobs"]:
         if job["action"] == "ai_news":
             continue
-        if not job["enabled"]:
+        if not job["enabled"] or job["id"] in active:
             continue
         created = _parse_iso(job["created_at"], "created_at")
         latest = ""

@@ -61,38 +61,17 @@ class BoardWorkbench:
     def write_week_review_doc(self, payload: dict) -> dict:
         return self.weekly_review.write_week_review_doc(payload)
 
-    def list_automation_jobs(self, seen: bool = False) -> dict:
-        try:
-            if seen:
-                return self.automation.seen()
-            return self.automation.snapshot()
-        except Exception as extra:
-            return {"ok": False, "error": str(extra)}
+    def list_automation_jobs(self, seen=False):
+        return self.automation.list_automation_jobs(seen)
 
-    def save_automation_job(self, payload: dict) -> dict:
-        from .automation import upsert_job
+    def save_automation_job(self, payload):
+        return self.automation.save_automation_job(payload)
 
-        try:
-            upsert_job(payload)
-            return self.automation.snapshot()
-        except Exception as extra:
-            return {"ok": False, "error": str(extra)}
+    def delete_automation_job(self, job_id):
+        return self.automation.delete_automation_job(job_id)
 
-    def delete_automation_job(self, job_id: str) -> dict:
-        from .automation import delete_job
-
-        try:
-            self.automation.drop_queued(str(job_id or ""))
-            delete_job(str(job_id or ""))
-            return self.automation.snapshot()
-        except Exception as extra:
-            return {"ok": False, "error": str(extra)}
-
-    def run_automation_job(self, job_id: str) -> dict:
-        try:
-            return self.automation.run_now(str(job_id or ""))
-        except Exception as extra:
-            return {"ok": False, "error": str(extra)}
+    def run_automation_job(self, job_id):
+        return self.automation.run_automation_job(job_id)
 
     def send_board_chat(self, text: str, chips: dict | None = None) -> dict:
         if isinstance(chips, str):

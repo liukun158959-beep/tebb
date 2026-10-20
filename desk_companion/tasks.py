@@ -17,9 +17,13 @@ TERMINAL = {"succeeded", "failed", "cancelled", "timed_out", "interrupted"}
 DEFAULTS = {"parallel": 2, "call_timeout": 90, "task_timeout": 300, "pet_progress": True}
 
 
+def submission_task_id(submission_key):
+    """Stable identity for callers reconciling an acknowledged-or-unknown submission."""
+    return uuid.uuid5(uuid.NAMESPACE_URL, 'tebb-task:' + submission_key).hex
+
+
 class TaskManager:
     def __init__(self, host=None, path=None, command=None, prewarm=0):
-        self.host = host
         self.path = Path(path or data_root() / "memory" / "tasks.sqlite3")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.command = command or [sys.executable, "-u", "-m", "desk_companion.task_worker"]
@@ -77,7 +81,7 @@ class TaskManager:
             raise ValueError("缺少会话。")
         if not isinstance(submission_key, str) or len(submission_key) > 200:
             raise ValueError("任务去重编号无效。")
-        task_id = uuid.uuid5(uuid.NAMESPACE_URL, "tebb-task:" + submission_key).hex if submission_key else uuid.uuid4().hex
+        task_id = submission_task_id(submission_key) if submission_key else uuid.uuid4().hex
         with self.cv:
             if self.stopped:
                 raise RuntimeError("桌宠正在退出。")

@@ -68,6 +68,97 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
                 if frame['type'] in ('done', 'error'):
                     return frame
 
+    async def test_automation_four_routes_skip_host_busy_and_keep_active_guards_and_auth(self):
+        from unittest.mock import Mock
+        from desk_companion import automation as a
+        from tests.test_automation_service import payload
+        from websockets.exceptions import ConnectionClosed
+        self.addCleanup(lambda: self.host.automation.stop(0))
+        for name in ('list_automation_jobs','save_automation_job','delete_automation_job','run_automation_job'):
+            patch.object(self.host, name, side_effect=AssertionError('legacy automation')).start()
+        self.host.conversation.running = True
+        with self.host.turn_lock:
+            saved = await self.notebook_rpc('save_automation_job', payload=payload())
+            self.assertTrue(saved['ok'], saved)
+            jid = saved['job_id']
+            self.assertTrue((await self.notebook_rpc('list_automation_jobs'))['ok'])
+            with patch.object(self.host.automation, '_kick'):
+                accepted = await self.notebook_rpc('run_automation_job', job_id=jid)
+            self.assertTrue(accepted['ok'], accepted)
+            self.assertTrue(accepted['execution']['id'])
+            for method, args in [('save_automation_job', dict(payload=dict(payload(), id=jid))),
+                                 ('delete_automation_job', dict(job_id=jid)),
+                                 ('run_automation_job', dict(job_id=jid))]:
+                self.assertFalse((await self.notebook_rpc(method, **args))['ok'])
+        self.host.conversation.running = False
+        review = Mock(); review.generate_week_review.return_value = dict(ok=True, summary='rpc review')
+        self.host.automation.review = review
+        await asyncio.to_thread(self.host.automation._loop)
+        page = await self.notebook_rpc('list_automation_jobs', seen=True)
+        self.assertEqual(page['items'][0]['execution']['result']['summary'], 'rpc review')
+        self.assertFalse(page['items'][0]['active'])
+        before = a.jobs_path().read_bytes()
+        with self.assertRaises(ConnectionClosed):
+            async with connect(self.url.replace('test-token', 'bad-token'), proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', method='delete_automation_job', args=dict(job_id=jid))))
+                await ws.recv()
+        self.assertEqual(a.jobs_path().read_bytes(), before)
+        self.assertTrue((await self.notebook_rpc('delete_automation_job', job_id=jid))['ok'])
+
+    async def test_automation_disconnect_keeps_receipt_other_config_and_worker_available(self):
+        import threading
+        from unittest.mock import Mock
+        from tests.test_automation_service import payload
+        from desk_companion import automation as a
+        self.addCleanup(lambda: self.host.automation.stop(0))
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        review = Mock()
+        def publish(doc):
+            entered.set()
+            if not release.wait(40):
+                raise RuntimeError('not released')
+            return dict(ok=False, stage='remote', remote_state='unconfirmed', target=doc,
+                        summary='retained body', error='远端结果未确认，请核对。')
+        review.write_scheduled_review.side_effect = publish
+        self.host.automation.review = review
+        original = self.host.automation._execute
+        def tracked(jid):
+            try:
+                return original(jid)
+            finally:
+                finished.set()
+        saved = await self.notebook_rpc('save_automation_job', payload=payload(action='retro_write'))
+        jid = saved['job_id']
+        with patch.object(self.host.automation, '_execute', side_effect=tracked):
+            async with connect(self.url, proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', method='run_automation_job', args=dict(job_id=jid))))
+                try:
+                    self.assertTrue(await asyncio.to_thread(entered.wait, 5))
+                    page = await self.notebook_rpc('list_automation_jobs')
+                    identity = page['items'][0]['execution']['id']
+                    self.assertTrue(page['items'][0]['active'])
+                    self.assertFalse((await self.notebook_rpc('delete_automation_job', job_id=jid))['ok'])
+                    self.assertTrue((await self.notebook_rpc('save_automation_job', payload=payload(name='other')))['ok'])
+                    def write():
+                        from desk_companion.resource_lock import WRITES
+                        with WRITES.hold(blocking=False), a.transaction():
+                            return a.load_store()
+                    await asyncio.wait_for(asyncio.to_thread(write), 5)
+                    task_id = await asyncio.to_thread(self.host.tasks.submit, '写入测试', 'other')
+                    result = await asyncio.wait_for(asyncio.to_thread(self.host.tasks.wait, task_id), 20)
+                    self.assertEqual(result['state'], 'succeeded', result)
+                    await ws.close()
+                finally:
+                    release.set()
+                self.assertTrue(await asyncio.to_thread(finished.wait, 5))
+        page = await self.notebook_rpc('list_automation_jobs')
+        row = next(j for j in page['items'] if j['id']==jid)
+        self.assertEqual(row['execution']['id'], identity)
+        self.assertEqual(row['execution']['result']['remote_state'], 'unconfirmed')
+        self.assertEqual(row['execution']['result']['summary'], 'retained body')
+        review.write_scheduled_review.assert_called_once_with('token')
+
     def review_setup(self):
         from contextlib import ExitStack
         from desk_companion import board_data as b
@@ -1037,8 +1128,8 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(envelope['result']['ok'], envelope)
             return envelope['result']
 
-        def create_manager(host):
-            manager = TaskManager(host, command=command)
+        def create_manager():
+            manager = TaskManager(command=command)
             self.addCleanup(manager.shutdown)
             return manager
 
@@ -1062,7 +1153,7 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(memory.list_chat(self.host.state.session_id)), 2)
                     self.assertEqual(len((await rpc('list_agent_tasks'))['items']), 1 + (first == 'chat'))
                     self.assertIs(self.host.tasks, self.host._tasks)
-                    constructor.assert_called_once_with(self.host)
+                    constructor.assert_called_once()
 
     async def test_health_and_readonly_rpc(self):
         reader, writer = await asyncio.open_connection("127.0.0.1", self.port)

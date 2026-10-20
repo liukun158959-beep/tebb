@@ -56,19 +56,16 @@ fn set_hit_regions(regions: tauri::State<HitRegions>, rects: Vec<Rect>) {
 }
 
 #[tauri::command]
-async fn backend_info(info: tauri::State<'_, BackendInfo>, failure: tauri::State<'_, BackendFailure>) -> Result<BackendInfo, String> {
+async fn backend_info(app: tauri::AppHandle, info: tauri::State<'_, BackendInfo>, failure: tauri::State<'_, BackendFailure>) -> Result<BackendInfo, String> {
     if let Some(error) = failure.0.lock().map_err(|err| err.to_string())?.clone() {
         return Err(error);
     }
     let backend = info.inner().clone();
     let port = backend.port;
     // 窗口先打开并显示启动页，健康检查在后台等待，不阻塞 UI 线程。
-    let healthy = tauri::async_runtime::spawn_blocking(move || wait_healthy(port))
+    tauri::async_runtime::spawn_blocking(move || wait_healthy(port, &app.state::<BackendProcess>().0))
         .await
-        .map_err(|err| format!("助手启动检查失败：{err}。请查看启动终端。"))?;
-    if !healthy {
-        return Err("本地助手未能启动。请查看用户数据目录中的 backend.log，再重新启动客户端。开发版请确认 Python 与 Atlas 已安装。".into());
-    }
+        .map_err(|err| format!("助手启动检查失败：{err}。请查看启动终端。"))??;
     Ok(backend)
 }
 
@@ -213,17 +210,30 @@ fn gen_token() -> String {
     format!("tok{nanos:x}")
 }
 
-fn wait_healthy(port: u16) -> bool {
+fn backend_exit_error(code: Option<i32>) -> String {
+    if code == Some(73) {
+        "该数据目录已有运行实例，请使用已有客户端或先退出该实例。".into()
+    } else {
+        "本地助手未能启动。请查看用户数据目录中的 backend.log，再重新启动客户端。开发版请确认 Python 与 Atlas 已安装。".into()
+    }
+}
+
+fn wait_healthy(port: u16, process: &Mutex<Option<Child>>) -> Result<(), String> {
     let url = format!("http://127.0.0.1:{port}/health");
     for _ in 0..50 {
+        if let Some(child) = process.lock().map_err(|err| err.to_string())?.as_mut() {
+            if let Some(status) = child.try_wait().map_err(|err| err.to_string())? {
+                return Err(backend_exit_error(status.code()));
+            }
+        }
         if let Ok(resp) = ureq::get(&url).timeout(Duration::from_millis(500)).call() {
             if resp.status() == 200 {
-                return true;
+                return Ok(());
             }
         }
         std::thread::sleep(Duration::from_millis(200));
     }
-    false
+    Err(backend_exit_error(None))
 }
 
 // 后台轮询：全局鼠标落在任一命中区域内 -> 可交互；否则穿透。
@@ -395,6 +405,22 @@ fn stop_backend(child: &mut Child, info: &BackendInfo) {
 #[cfg(test)]
 mod menu_tests {
     use super::*;
+
+    #[test]
+    fn exited_duplicate_backend_reports_ownership_conflict() {
+        let mut command = Command::new("python");
+        command.args(["-c", "raise SystemExit(73)"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        let process = Mutex::new(Some(command.spawn().unwrap()));
+        let started = std::time::Instant::now();
+        assert!(wait_healthy(pick_free_port(), &process).unwrap_err().contains("已有运行实例"));
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert!(!backend_exit_error(Some(1)).contains("已有运行实例"));
+    }
 
     #[test]
     fn backend_exits_after_authenticated_shutdown_without_forced_kill() {

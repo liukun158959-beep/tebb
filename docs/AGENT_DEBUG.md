@@ -222,6 +222,33 @@ today.json 所有读改写复用 ResourceLock 与原子替换。刷新仅合并�
 
 沿用 CLI 单次 60 秒超时及同步 RPC，不新增操作 ID、取消、持久化任务、自动重试或远端幂等协议。断连只结束前端等待，后台可能继续创建/删除和写缓存；先重新连接并用 `load_board(refresh=true)` 查询远端，必要时去飞书按事件 ID/标题/时间核对，不能只凭未刷新的本地缓存判定未执行。跨日或没有 event_id 时，需在对应日期核对；不自动重建同一日程。真实飞书服务/通知、GUI 实机、真实沙箱与发布包另行验收。见 [ADR 0012](adr/0012-board-service.md) 和 [#132](https://github.com/liukun158959-beep/tebb/issues/132)。
 
+## 无 GUI 的自动化服务验收
+
+仓库根目录使用临时数据、假周复盘/资讯与实际子进程验证，不发真实飞书消息或覆盖文档：
+
+```powershell
+python -m unittest tests.test_automation_service tests.test_weekly_review.ReviewSchedulerTests tests.test_news -v
+python -m unittest tests.test_local_api.LocalApiTests.test_automation_four_routes_skip_host_busy_and_keep_active_guards_and_auth tests.test_local_api.LocalApiTests.test_automation_disconnect_keeps_receipt_other_config_and_worker_available -v
+$env:DESK_TEST_ATLAS_SOURCE = 'E:/Learn_Project/Atlas'
+python -m unittest discover -s tests -v
+# client/：pnpm test、pnpm exec tsc --noEmit、pnpm build
+# client/src-tauri/：cargo test --locked --lib、cargo check --locked
+```
+
+无 GUI 入口是 `AutomationService(review=..., tasks=..., busy=..., changed=...)`。review 复用 WeeklyReviewService 的生成和定时覆盖接口；tasks 为返回同一个 TaskManager 的提供函数；busy 只用于复盘延后，changed 由宿主适配通知。四方法参数保持 `list_automation_jobs(seen=False)`、`save_automation_job(payload)`、`delete_automation_job(job_id)`、`run_automation_job(job_id)`；另有 tick/stop 生命周期。生产新旧入口持有同一数据目录进程运行权，必须在飞书、TaskManager 恢复与调度前取得；第二进程被拒绝且不能修改原任务状态。独立调试使用隔离 DESK_COMPANION_DATA_DIR 与注入依赖，不在生产数据目录另构造任务管理器来观察原任务。
+
+列表/空闲配置不取得宿主执行锁或共享助手，配置 ResourceLock 只保护短读改写与 JSON 原子替换。活跃范围含排队、执行、资讯监控/重试和回执收尾，禁止修改启停/动作/目标及删除该作业；其他空闲作业可继续，删除仅删除配置。前端同时检查 active 与 queued/running，保留失败表单并显示实际阶段，旧桌面亦禁止活跃行操作；后端仍是最终准入所有者。
+
+automation_jobs.json 保留既有字段，兼容增加可选 execution：id/action/doc/phase/accepted_at/result；这是最近一轮执行快照，不是可重放的持久队列或完整历史。原正常返回结构保留，另提供 job_id/execution/active；回执写入未确认时还提供 pending_result，继续保留活跃占用，tick 只补写本地回执，不能再次调用模型或发布。stage/change_state 区分准入 not_changed、store_save/enqueue_save 未确认以及提交后 snapshot 读取失败 committed；未知回执可能已落盘，需读取核对。入队保存抛错时不安装内存队列，不会在后续 tick 悄悄执行；新建保存错误仍保留产生的 job_id，便于确认是否已创建。
+
+复盘开始前保存 running，模型和远端请求不持配置/宿主/WRITES。保留上批 retryable_busy 延后而不报业务失败；同类 action 去重与顺序继续，定时冲突而未执行明确记 missed。禁用配置可手动执行，正常手动执行不消费自动时段。复盘漏跑不补跑，资讯追赶最近一次；未开始、已开始、旧版本 queued 无法判定分别处理，不能把历史 queued 一概说成未执行。恢复时消费已经到达的复盘时段，防止在同一分钟把不明执行自动重提；未来正常定时继续。
+
+资讯控制器依赖明确的 TaskManager。自动化每轮/重试使用现有 submission_key 去重，登记后回执异常先按同一任务 ID 查询，不能重提；读取暂时失败保留执行占用与错误，继续观察该任务。保留原来 15 分钟预算、最多一次临时失败重试、取消不重试，以及新闻发布阶段/远端核对/消息幂等窗口。不另造重试或外部写入协议。资讯任务已创建但 running 回执写入失败，仍监控该任务；最终结果收尾保存失败则仅补写本地记录。
+
+stop 先关准入和启动、清理未开始队列，再在默认 0.5 秒内等待调度/监控线程；TaskManager 使用原有限时退出，客户端保持原 6 秒退出轮询窗口及超时终止。不能承诺取消已发出的网络请求；复盘已有结果可能迟到，仍归同一 execution ID，进程运行权不能提前释放。崩溃或强制退出由系统释放运行权，重启对已开始/旧版不明复盘提示先核对，不自动重发；资讯按任务和发布回执恢复最近一次。同步 RPC 断连不等于取消或接受失败，先重新读取，不自动重提。
+
+验收包括禁止 GUI 导入、实际认证 WS、跨进程配置并发、生产后台/旧桌面双实例拒绝与杀进程后重新准入、存储前后替换故障、晚到回执、资讯监控故障及既有资讯工作流。真实模型、真实飞书写入/通知、完整 GUI 实机和发布包另行验收；本批不发布。见 [#134](https://github.com/liukun158959-beep/tebb/issues/134)。
+
 ## 无 GUI 的周复盘服务验收
 
 仓库根目录执行，使用临时数据、假模型、飞书 CLI 替身和实际认证 WebSocket，不向真实飞书创建文档或请求系统打开：

@@ -27,7 +27,7 @@ from .memory_editing import MemoryEditingService
 from .context_compression import ContextCompressionService
 from .notebook_service import NotebookService
 from .knowledge_service import KnowledgeService
-from .automation import AutomationScheduler
+from .automation_service import AutomationService
 from .board_workbench import BoardWorkbench
 from .board_service import BoardService
 from .weekly_review import WeeklyReviewService
@@ -76,10 +76,6 @@ PAPER = "#FFF6EC"
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWCP_ROUND = 2
 DWMWCP_DONOTROUND = 1
-MUTEX_NAME = "Local\\DeskCompanion.Kaltsit"
-ERROR_ALREADY_EXISTS = 183
-
-_mutex_handle = None
 
 
 class App(BoardWorkbench):
@@ -93,7 +89,6 @@ class App(BoardWorkbench):
             on_delta=None if headless else self.on_llm_delta,
             on_status=None if headless else self.on_stream_status)
         self.assistant_settings = AssistantSettingsService(self.conversation)
-        self.automation = AutomationScheduler(self)
         self.chat_sessions = ChatSessionService(self.conversation, mutation_guard=self._session_mutation_guard,
                                                 reservation_guard=self._session_reservation)
         self.memory_editing = MemoryEditingService(self.chat_sessions)
@@ -102,6 +97,11 @@ class App(BoardWorkbench):
         self.board_service = BoardService()
         self.weekly_review = WeeklyReviewService(self.chat_sessions, start_guard=self._review_start_guard)
         self.knowledge_service = KnowledgeService(self.chat_sessions, start_guard=self._knowledge_start_guard)
+        self._tasks = None
+        self._tasks_lock = threading.Lock()
+        self.automation = AutomationService(review=self.weekly_review, tasks=lambda: self.tasks,
+            busy=lambda: self._agent_running or bool(getattr(self.pet, 'busy', False)),
+            changed=lambda: self.ui(lambda: self._eval_board('jobs_changed')))
         self.bridge = Bridge(self, session_changed=None if headless else self._on_session_changed)
         self._queue: queue.Queue = queue.Queue()
         self.pet = None
@@ -116,6 +116,14 @@ class App(BoardWorkbench):
         self._startup_ok = threading.Event()
         self._next_nudge = time.monotonic() + random.uniform(12 * 60, 18 * 60)
         self._ui_dir = Path(__file__).resolve().parent / "ui"
+
+    @property
+    def tasks(self):
+        with self._tasks_lock:
+            if self._tasks is None:
+                from .tasks import TaskManager
+                self._tasks = TaskManager()
+            return self._tasks
 
     @property
     def agent(self):
@@ -797,6 +805,9 @@ class App(BoardWorkbench):
             self.icon = None
             threading.Thread(target=icon.stop, daemon=True).start()
         self.pet = None
+        self.automation.stop()
+        if self._tasks is not None:
+            self._tasks.shutdown()
         os._exit(0)
 
     def on_board_shown(self, *_args) -> None:
@@ -818,7 +829,8 @@ def run_app(skin_id: str) -> None:
         raise RuntimeError("desk-companion 只支持 Windows。")
     install_crash_hooks()
     log("启动 desk-companion")
-    _acquire_singleton()
+    from .runtime_instance import acquire_runtime
+    acquire_runtime()
     enable_dpi_aware()
     ui_dir = Path(__file__).resolve().parent / "ui"
     board_path = ui_dir / "board.html"
@@ -874,24 +886,6 @@ def _is_ui_fault(exc: BaseException) -> bool:
     if "Main window failed" in msg or "evaluate_js" in msg:
         return True
     return False
-
-
-def _acquire_singleton() -> None:
-    global _mutex_handle
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
-    kernel32.CreateMutexW.restype = ctypes.c_void_p
-    ctypes.set_last_error(0)
-    handle = kernel32.CreateMutexW(None, True, MUTEX_NAME)
-    if not handle:
-        raise RuntimeError("无法创建单实例锁，拒绝启动第二个桌宠。")
-    if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
-        kernel32.CloseHandle(handle)
-        raise RuntimeError(
-            "桌宠已经在运行。若桌面上还留着窗口但退不出，"
-            "打开任务管理器结束所有命令行含 desk_companion 的 python.exe 后再启动。"
-        )
-    _mutex_handle = handle
 
 
 def _prepare_form(

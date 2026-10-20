@@ -411,16 +411,16 @@ class Bridge:
         return self._host.weekly_review.write_week_review_doc(payload)
 
     def list_automation_jobs(self, seen: bool = False) -> dict:
-        return self._host.list_automation_jobs(bool(seen))
+        return self._host.automation.list_automation_jobs(bool(seen))
 
     def save_automation_job(self, payload: dict) -> dict:
-        return self._host.save_automation_job(payload)
+        return self._host.automation.save_automation_job(payload)
 
     def delete_automation_job(self, job_id: str) -> dict:
-        return self._host.delete_automation_job(job_id)
+        return self._host.automation.delete_automation_job(job_id)
 
     def run_automation_job(self, job_id: str) -> dict:
-        return self._host.run_automation_job(job_id)
+        return self._host.automation.run_automation_job(job_id)
 
     def load_news(self) -> dict:
         from .news_controller import snapshot
@@ -436,7 +436,7 @@ class Bridge:
 
     def run_news(self, publish: bool = False, run_id: str = "", send_group: bool = True) -> dict:
         from .news_controller import start
-        return start(self._host, publish=publish, run_id=run_id, send_group=send_group)
+        return start(self._host.tasks, publish=publish, run_id=run_id, send_group=send_group)
 
     def close_bubble(self) -> None:
         self._host.ui(self._host.hide_bubble)

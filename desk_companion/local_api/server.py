@@ -19,6 +19,7 @@ import threading
 from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
 
+from ..runtime_instance import InstanceInUse, INSTANCE_EXIT_CODE
 from ..sampling import parse_sampling
 from .host import HeadlessApp
 
@@ -182,6 +183,7 @@ def _dispatch(method: str, args: dict, preview=False) -> dict:
                       "add_knowledge", "delete_knowledge", "rebuild_knowledge", "ask_knowledge",
                       "load_board", "create_agenda", "delete_agenda", "delete_task",
                       "generate_week_review", "write_today_summary_doc", "write_week_review_doc",
+                      "list_automation_jobs", "save_automation_job", "delete_automation_job", "run_automation_job",
                       "load_collaboration", "collaboration_action", "project_workspace", "check_updates", "list_agent_tasks", "get_agent_task", "cancel_agent_task", "continue_agent_task", "save_agent_task_settings", "load_task_progress",
                       "list_debug_calls", "get_debug_call", "set_debug_recording", "explain_debug_call",
                       "load_model_network", "save_model_network",
@@ -377,6 +379,8 @@ async def main() -> None:
     TOKEN = args.token
     os.environ["DESK_TERMINAL_PORT"] = str(args.port)
     os.environ["DESK_TERMINAL_TOKEN"] = TOKEN
+    from ..runtime_instance import acquire_runtime
+    acquire_runtime()
     HOST = HeadlessApp()
     SHUTDOWN = asyncio.Event()
     asyncio.create_task(asyncio.to_thread(HOST.feishu_agent.autostart))
@@ -385,6 +389,7 @@ async def main() -> None:
         async with serve(_handler, "127.0.0.1", args.port, process_request=_health):
             print(f"local_api ready on 127.0.0.1:{args.port}", flush=True)
             await SHUTDOWN.wait()
+            HOST.automation.stop()
             from ..local_sources import cancel_all
             cancel_all()
     finally:
@@ -405,3 +410,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+    except InstanceInUse as exc:
+        print(str(exc), flush=True)
+        raise SystemExit(INSTANCE_EXIT_CODE)
