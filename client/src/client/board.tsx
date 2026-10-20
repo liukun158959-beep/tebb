@@ -143,6 +143,7 @@ export function BoardPane(props: {
   data: BoardPayload | null;
   nowIso: string | null;
   loading: boolean;
+  loadError?: string;
   debug: boolean;
   onRefresh: () => void;
   statuses: StatusView[];
@@ -161,7 +162,18 @@ export function BoardPane(props: {
   if (!props.data) {
     return (
       <div data-board data-board-fetches={props.fetches}>
-        <div className="mb-6"><h1 className="text-xl font-semibold">今日看板</h1><p className="text-sm text-muted-foreground">{props.loading ? "正在读取今日看板…" : "打开看板页时再拉今日数据。"}</p></div><div className="tebb-loading-grid" aria-busy="true" aria-label="正在读取看板内容">{["日程","待办"].map(title=><section key={title}><h2>{title}</h2><div className="tebb-skeleton"/><div className="tebb-skeleton"/><div className="tebb-skeleton"/></section>)}</div>
+        <div className="mb-6 flex items-end justify-between gap-4">
+          <div><h1 className="text-xl font-semibold">今日看板</h1>
+            <p className="text-sm text-muted-foreground">{props.loading ? "正在读取今日看板…" : "打开看板页时再拉今日数据。"}</p>
+          </div>
+          <Button type="button" variant="secondary" size="sm" disabled={props.debug || props.loading} onClick={props.onRefresh}>
+            {props.loading ? "读取中…" : "刷新"}
+          </Button>
+        </div>
+        {props.loading ? <div className="tebb-loading-grid" aria-busy="true" aria-label="正在读取看板内容">
+          {["日程", "待办"].map(title => <section key={title}><h2>{title}</h2><div className="tebb-skeleton"/><div className="tebb-skeleton"/><div className="tebb-skeleton"/></section>)}
+        </div> : null}
+        {props.loadError ? <p role="alert" className="text-sm text-destructive">{props.loadError}</p> : null}
         <StatusGrid cards={props.statuses} onOpenFeishu={props.onOpenFeishu} />
       </div>
     );
@@ -179,6 +191,7 @@ export function BoardPane(props: {
           {props.loading ? "读取中…" : "刷新"}
         </Button>
       </div>
+      {props.loadError ? <p role="alert" className="mb-4 text-sm text-destructive">{props.loadError}</p> : null}
       {props.debug ? <div className="mb-4 text-xs text-muted-foreground">调试样本，未连接后端</div> : null}
       {model.fatal ? (
         <div data-board-error className="bg-card p-5 text-sm text-destructive">

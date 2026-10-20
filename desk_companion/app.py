@@ -29,6 +29,7 @@ from .notebook_service import NotebookService
 from .knowledge_service import KnowledgeService
 from .automation import AutomationScheduler
 from .board_workbench import BoardWorkbench
+from .board_service import BoardService
 from .bridge import Bridge
 from .layered import enable_dpi_aware, work_area
 from .logutil import crash, install_crash_hooks, log, mark_ready, start_os_watchdog
@@ -100,6 +101,7 @@ class App(BoardWorkbench):
         self.memory_editing = MemoryEditingService(self.chat_sessions)
         self.context_compression = ContextCompressionService(self.chat_sessions, start_guard=self._compression_start_guard)
         self.notebooks = NotebookService(self.chat_sessions, start_guard=self._notebook_start_guard)
+        self.board_service = BoardService()
         self.knowledge_service = KnowledgeService(self.chat_sessions, start_guard=self._knowledge_start_guard)
         self.bridge = Bridge(self, session_changed=None if headless else self._on_session_changed)
         self._queue: queue.Queue = queue.Queue()
@@ -458,12 +460,7 @@ class App(BoardWorkbench):
         return self.memory_editing.delete_fact(fact_id)
 
     def load_today_board(self, refresh: bool = False) -> dict:
-        from .board_data import load_today_snapshot
-
-        try:
-            return {"ok": True, **load_today_snapshot(refresh=bool(refresh))}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return self.board_service.load_board(refresh)
 
     def board_log_errors(self) -> dict:
         from .log_inspect import inspect_today_errors

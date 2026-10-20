@@ -5,7 +5,9 @@ from .paths import data_root
 
 import json
 import re
-import threading
+from contextlib import contextmanager
+from functools import wraps
+from .resource_lock import ResourceLock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -21,7 +23,51 @@ TODAY_KEYS = (
     "summary_at",
     "doc_url",
 )
-_LOCK = threading.Lock()
+_STORE = ResourceLock('today-board-store')
+_OPERATION = ResourceLock('today-board-operation')
+
+
+class BoardChangeError(RuntimeError):
+    def __init__(self, message, **details):
+        super().__init__(message)
+        self.details = details
+
+
+@contextmanager
+def _operation():
+    if not _OPERATION.acquire(blocking=False):
+        raise BoardChangeError('看板正在更新，完成后再操作；已有当天缓存仍可读取。',
+            change_state='not_changed', stage='admission', remote_state='not_started', cache_state='not_started')
+    try:
+        yield
+    finally:
+        _OPERATION.__exit__()
+
+
+def _synced(fn):
+    @wraps(fn)
+    def run(*args, **kwargs):
+        with _operation():
+            return fn(*args, **kwargs)
+    return run
+
+
+def _assert_day(day):
+    if day != today_date():
+        raise BoardChangeError('操作期间已跨日，未将旧查询写入今日缓存。请重新加载核对，不要重复远端修改。',
+            change_state='not_changed', stage='day_change', cache_state='not_changed')
+
+
+def _merge_sections(day, sections):
+    with _STORE:
+        _assert_day(day)
+        latest = _read_today_file()
+        if latest is None or latest['date'] != day:
+            latest = dict(date=day, fetched_at='', agenda=dict(ok=True, items=[]),
+                          tasks=dict(ok=True, items=[]), summary='', summary_at='', doc_url='')
+        snap = dict(latest, **sections, fetched_at=datetime.now(TZ).isoformat(timespec='seconds'))
+        _write_today_file(snap)
+        return snap
 
 
 def today_path() -> Path:
@@ -74,76 +120,61 @@ def _open_tasks_due_today() -> dict:
 
 
 def load_today_snapshot(*, refresh: bool) -> dict:
-    """按自然日读缓存；换天或 refresh 才打飞书。"""
+    """当天缓存立即可读，远端刷新单独非阻塞准入。"""
     day = today_date()
     cached = _read_today_file()
-    if not refresh and cached is not None and cached["date"] == day:
+    if not refresh and cached is not None and cached['date'] == day:
         return cached
-    board = fetch_board()
-    summary = ""
-    summary_at = ""
-    doc_url = ""
-    if cached is not None and cached["date"] == day:
-        summary = cached["summary"]
-        summary_at = cached["summary_at"]
-        doc_url = cached["doc_url"]
-    snap = {
-        "date": day,
-        "fetched_at": datetime.now(TZ).isoformat(timespec="seconds"),
-        "agenda": board["agenda"],
-        "tasks": board["tasks"],
-        "summary": summary,
-        "summary_at": summary_at,
-        "doc_url": doc_url,
-    }
-    _write_today_file(snap)
-    return snap
+    with _operation():
+        # Recheck after admission; never return yesterday as today's snapshot.
+        day = today_date()
+        cached = _read_today_file()
+        if not refresh and cached is not None and cached['date'] == day:
+            return cached
+        board = fetch_board()
+        return _merge_sections(day, board)
 
 
 def save_today_fields(**fields) -> dict:
-    """在当天快照上改总结或文档链接。没有当天文件就失败。"""
-    day = today_date()
-    cached = _read_today_file()
-    if cached is None:
-        raise RuntimeError(
-            "还没有今日快照。先打开看板「今日」页或点刷新，再生成本周复盘。"
-        )
-    if cached["date"] != day:
-        raise RuntimeError(
-            f"今日快照是 {cached['date']}，今天已是 {day}。先点「刷新」拉今天的日程。"
-        )
-    allowed = {"summary", "summary_at", "doc_url"}
+    """Summary/link writers merge under a short storage lock, never the network lease."""
+    allowed = {'summary', 'summary_at', 'doc_url'}
     unknown = [key for key in fields if key not in allowed]
     if unknown:
         raise RuntimeError(f"今日快照不能改这些键：{', '.join(unknown)}。")
-    snap = dict(cached)
-    snap.update(fields)
-    _write_today_file(snap)
-    return snap
+    with _STORE:
+        day = today_date()
+        cached = _read_today_file()
+        if cached is None:
+            raise RuntimeError('还没有今日快照。先打开看板「今日」页或点刷新，再生成本周复盘。')
+        if cached['date'] != day:
+            raise RuntimeError(f"今日快照是 {cached['date']}，今天已是 {day}。先点「刷新」拉今天的日程。")
+        snap = dict(cached, **fields)
+        _assert_day(day)
+        _write_today_file(snap)
+        return snap
 
 
 def _read_today_file() -> dict | None:
-    path = today_path()
-    if not path.is_file():
-        return None
-    with _LOCK:
-        text = path.read_text(encoding="utf-8")
-    try:
-        raw = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"{path} 不是合法 JSON。删掉该文件后到看板「今日」点刷新。"
-        ) from exc
-    return _validate_today(raw, path)
+    with _STORE:
+        path = today_path()
+        if not path.is_file():
+            return None
+        try:
+            raw = json.loads(path.read_text(encoding='utf-8'))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f'{path} 不是合法 JSON。删掉该文件后到看板「今日」点刷新。') from exc
+        return _validate_today(raw, path)
 
 
 def _write_today_file(snap: dict) -> None:
-    path = today_path()
-    clean = _validate_today(snap, path)
-    text = json.dumps(clean, ensure_ascii=False, indent=2) + "\n"
-    with _LOCK:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+    from .video import atomic_write
+    clean = _validate_today(snap, today_path())
+    with _STORE:
+        try:
+            atomic_write(today_path(), clean)
+        except Exception as exc:
+            raise BoardChangeError(f'看板缓存保存结果未确认：{exc}。请重新读取核对，不要重复远端修改。',
+                change_state='unconfirmed', stage='cache_save', cache_state='unconfirmed') from exc
 
 
 def _validate_today(raw, path: Path) -> dict:
@@ -299,34 +330,77 @@ def _event_id(item: dict, summary: str) -> str:
     return raw.strip()
 
 
+@_synced
 def delete_agenda_event(event_id: object) -> dict:
-    """删掉主日历上这一条日程，再只重查今日日程。"""
-    if type(event_id) is not str or not event_id.strip():
-        raise RuntimeError("没有日程 ID，不能删除。")
-    if any(ch in event_id for ch in "\n\r"):
-        raise RuntimeError("日程 ID 不能包含换行。")
+    target = _target_id(event_id, '日程')
     day = today_date()
+    cached = _require_today(day)
+    snap, _details = _remote_update([
+        'calendar', 'events', 'delete', '--calendar-id', 'primary', '--event-id', target,
+        '--need-notification', 'true', '--as', 'user'], day, 'agenda',
+        _target_context(cached, 'agenda', 'event_id', target))
+    return dict(ok=True, **snap)
+
+
+def _target_id(value, label):
+    if type(value) is not str or not value.strip():
+        raise RuntimeError(f'没有{label} ID，不能删除。')
+    if any(ch in value for ch in '\n\r'):
+        raise RuntimeError(f'{label} ID 不能包含换行。')
+    return value.strip()
+
+
+def _require_today(day):
     cached = _read_today_file()
-    if cached is None or cached["date"] != day:
-        raise RuntimeError("还没有今天的看板。先打开今日页再删除。")
-    raw = _run_lark(
-        [
-            "calendar",
-            "events",
-            "delete",
-            "--calendar-id",
-            "primary",
-            "--event-id",
-            event_id.strip(),
-            "--need-notification",
-            "true",
-            "--as",
-            "user",
-        ]
-    )
-    _require_lark_ok(raw)
-    snap = _replace_today_agenda(cached)
-    return {"ok": True, **snap}
+    if cached is None or cached['date'] != day:
+        raise RuntimeError('还没有今天的看板。先打开今日页再删除。')
+    return cached
+
+
+def _target_context(cached, section, key, target):
+    details = {key: target}
+    row = next((row for row in cached[section]['items'] if isinstance(row, dict) and row.get(key) == target), {})
+    details.update({name: row[name] for name in ('summary', 'start', 'end', 'due_at')
+                    if isinstance(row.get(name), str) and row[name]})
+    return details
+
+
+def _remote_update(args, day, section, target, *, allow_no_cache=False):
+    details = dict(target, remote_state='unconfirmed', cache_state='not_started',
+                   change_state='unconfirmed', stage='remote')
+    try:
+        env = _require_lark_ok(_run_lark(args))
+        details.update(remote_state='confirmed', change_state='committed', stage='query')
+        data = env.get('data')
+        if allow_no_cache and isinstance(data, dict):
+            event = data.get('event') if isinstance(data.get('event'), dict) else data
+            if isinstance(event.get('event_id'), str) and event['event_id'].strip():
+                details['event_id'] = event['event_id'].strip()
+        _assert_day(day)
+        cached = _read_today_file()
+        if allow_no_cache and (cached is None or cached['date'] != day):
+            return None, details
+        result = (_section(lambda: parse_agenda(_lark_data(['calendar', '+agenda'])))
+                  if section == 'agenda' else _open_tasks_due_today())
+        snap = _merge_sections(day, {section: result})
+        details['cache_state'] = 'confirmed'
+        if not result['ok']:
+            details['snapshot'] = dict(ok=True, **snap)
+            raise BoardChangeError(result['error'], stage='query', change_state='committed')
+        return snap, details
+    except Exception as exc:
+        if isinstance(exc, BoardChangeError):
+            details.update(exc.details)
+        # A cache/day failure cannot erase the confirmed remote side effect.
+        if details['remote_state'] == 'confirmed':
+            if details['stage'] == 'day_change':
+                details['change_state'] = 'committed'
+            prefix = '飞书操作已成功，但后续处理未完整完成'
+        else:
+            prefix = '飞书修改结果未确认'
+        identity = ' '.join(f'{key}={details[key]}' for key in ('event_id', 'guid', 'summary', 'start', 'end', 'due_at') if details.get(key))
+        raise BoardChangeError(f'{prefix}（{details["stage"]}）：{exc}。{identity} 请先核对结果，不要直接重复提交。',
+                               **details) from exc
 
 
 _EVENT_TIME = re.compile(
@@ -347,98 +421,50 @@ def _parse_event_time(value: object, label: str) -> datetime:
     return parsed
 
 
+@_synced
 def create_board_event(summary: object, start: object, end: object) -> dict:
-    """在主日历建一条日程。按钮或对话已经给出标题和起止，这里不再确认。"""
+    """Create once; report remote/query/cache stages without automatically retrying."""
     if type(summary) is not str or not summary.strip():
-        raise RuntimeError("要填写日程标题。")
-    if any(ch in summary for ch in "\n\r"):
-        raise RuntimeError("标题不能换行。")
-    start_at = _parse_event_time(start, "开始时间")
-    end_at = _parse_event_time(end, "结束时间")
+        raise RuntimeError('要填写日程标题。')
+    if any(ch in summary for ch in '\n\r'):
+        raise RuntimeError('标题不能换行。')
+    start_at = _parse_event_time(start, '开始时间')
+    end_at = _parse_event_time(end, '结束时间')
     if start_at >= end_at:
-        raise RuntimeError("开始时间必须早于结束时间。")
+        raise RuntimeError('开始时间必须早于结束时间。')
     title = summary.strip()
-    raw = _run_lark(
-        [
-            "calendar",
-            "+create",
-            "--summary",
-            title,
-            "--start",
-            str(start),
-            "--end",
-            str(end),
-            "--calendar-id",
-            "primary",
-            "--as",
-            "user",
-        ]
-    )
-    _require_lark_ok(raw)
     day = today_date()
+    target = dict(summary=title, start=str(start), end=str(end))
+    snap, details = _remote_update(['calendar', '+create', '--summary', title, '--start', str(start),
+        '--end', str(end), '--calendar-id', 'primary', '--as', 'user'], day, 'agenda', target,
+        allow_no_cache=True)
     on_today = start_at.astimezone(TZ).date().isoformat() == day
-    notice = "" if on_today else "已创建。今天的看板只显示今天。"
-    cached = _read_today_file()
-    snapshot = None
-    if cached is not None and cached["date"] == day:
-        snapshot = {"ok": True, **_replace_today_agenda(cached)}
-    return {
-        "ok": True,
-        "summary": title,
-        "start": str(start),
-        "end": str(end),
-        "on_today": on_today,
-        "notice": notice,
-        "snapshot": snapshot,
-    }
+    result = dict(ok=True, **target, on_today=on_today,
+        notice='' if on_today else '已创建。今天的看板只显示今天。',
+        snapshot=dict(ok=True, **snap) if snap is not None else None)
+    if details.get('event_id'):
+        result['event_id'] = details['event_id']
+    return result
 
 
-def _replace_today_agenda(cached: dict) -> dict:
-    agenda = _section(lambda: parse_agenda(_lark_data(["calendar", "+agenda"])))
-    snap = dict(cached)
-    snap["agenda"] = agenda
-    snap["fetched_at"] = datetime.now(TZ).isoformat(timespec="seconds")
-    _write_today_file(snap)
-    return snap
-
-
+@_synced
 def delete_board_task(guid: object) -> dict:
-    """删掉这一条待办，再只重查今日待办。行内按钮就是确认，所以带 --yes。"""
-    if type(guid) is not str or not guid.strip():
-        raise RuntimeError("没有任务 ID，不能删除。")
-    if any(ch in guid for ch in "\n\r"):
-        raise RuntimeError("任务 ID 不能包含换行。")
+    target = _target_id(guid, '任务')
     day = today_date()
-    cached = _read_today_file()
-    if cached is None or cached["date"] != day:
-        raise RuntimeError("还没有今天的看板。先打开今日页再删除。")
-    raw = _run_lark(
-        [
-            "task",
-            "tasks",
-            "delete",
-            "--task-guid",
-            guid.strip(),
-            "--as",
-            "user",
-            "--yes",
-        ]
-    )
-    _require_lark_ok(raw)
-    snap = dict(cached)
-    snap["tasks"] = _open_tasks_due_today()
-    snap["fetched_at"] = datetime.now(TZ).isoformat(timespec="seconds")
-    _write_today_file(snap)
-    return {"ok": True, **snap}
+    cached = _require_today(day)
+    snap, _details = _remote_update(['task', 'tasks', 'delete', '--task-guid', target,
+        '--as', 'user', '--yes'], day, 'tasks', _target_context(cached, 'tasks', 'guid', target))
+    return dict(ok=True, **snap)
 
 
-def _require_lark_ok(raw: str) -> None:
+def _require_lark_ok(raw: str) -> dict:
     try:
         env = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"lark-cli 未返回 JSON。\n{raw}") from exc
-    if not isinstance(env, dict) or env.get("ok") is not True:
-        raise RuntimeError(f"lark-cli 返回失败信封。\n{raw}")
+        raise RuntimeError(f'lark-cli 未返回 JSON。\n{raw}') from exc
+    if not isinstance(env, dict) or env.get('ok') is not True:
+        raise RuntimeError(f'lark-cli 返回失败信封。\n{raw}')
+    return env
 
 
 def _event_time(item: dict, which: str, *, with_date: bool = False) -> str:

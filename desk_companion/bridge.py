@@ -448,22 +448,16 @@ class Bridge:
         self._host.ui(lambda: self._host.fit_card(int(width), int(height)))
 
     def load_board(self, refresh: bool = False) -> dict:
-        return self._host.load_today_board(bool(refresh))
+        return self._host.board_service.load_board(bool(refresh))
 
     def delete_agenda(self, event_id: str) -> dict:
-        from .board_data import delete_agenda_event
-
-        return delete_agenda_event(event_id)
+        return self._host.board_service.delete_agenda(event_id)
 
     def delete_task(self, guid: str) -> dict:
-        from .board_data import delete_board_task
-
-        return delete_board_task(guid)
+        return self._host.board_service.delete_task(guid)
 
     def create_agenda(self, summary: str, start: str, end: str) -> dict:
-        from .board_data import create_board_event
-
-        return create_board_event(summary, start, end)
+        return self._host.board_service.create_agenda(summary, start, end)
 
     def load_log_errors(self) -> dict:
         return self._host.board_log_errors()

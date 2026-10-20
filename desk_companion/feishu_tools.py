@@ -149,6 +149,8 @@ def create_calendar_event(args: dict) -> str:
         f"开始：{created['start']}",
         f"结束：{created['end']}",
     ]
+    if created.get('event_id'):
+        lines.append(f"日程 ID：{created['event_id']}")
     if created.get("notice"):
         lines.append(created["notice"])
     return "\n".join(lines)

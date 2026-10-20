@@ -107,7 +107,9 @@ def main():
                 if fingerprint(name, args) in request.get("completed_writes", []):
                     return "该写入在前次任务中已经尝试过，本次不再重复执行；请查询确认原结果，再下达新的操作。"
                 tool = host.agent.tools.get(name)
-                if tool.isReadOnly:
+                # Calendar writes own a cross-process board lease and short cache lock.
+                # Do not retain the global write lock across their remote IO.
+                if tool.isReadOnly or name == 'create_calendar_event':
                     output = original(name, arguments)
                     archive.record(name, output)
                     return output

@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Fragment, lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Button, Card, CardBody, GlitchText } from "reend-components";
+import { useBoardActions } from "./board-actions";
 import { BoardPane, shouldReloadBoard, type BoardPayload } from "./board";
 import {
   BOARD_FIXTURE,
@@ -154,7 +155,6 @@ export function App() {
   const [error, setError] = useState("");
   const [board, setBoard] = useState<BoardPayload | null>(boardDebug ? BOARD_FIXTURE : null);
   const [boardClock, setBoardClock] = useState<string | null>(boardDebug ? BOARD_NOW : null);
-  const [boardLoading, setBoardLoading] = useState(false);
   const [statuses, setStatuses] = useState<StatusView[]>(boardDebug ? STATUS_FIXTURE : []);
   const [chatFace, setChatFace] = useState<"thread" | "memory" | "knowledge">(
     debugKind === "memory" ? "memory" : debugKind === "knowledge" ? "knowledge" : "thread",
@@ -213,13 +213,9 @@ export function App() {
   const boardSeen = useRef(false);
   const boardFetches = useRef(0);
   const [fetchCount, setFetchCount] = useState(0);
-  const [rowDeleting, setRowDeleting] = useState(false);
-  const rowDeletingRef = useRef(false);
-  const [agendaErrors, setAgendaErrors] = useState<Record<string, string>>({});
-  const [taskErrors, setTaskErrors] = useState<Record<string, string>>({});
-  const [createError, setCreateError] = useState("");
-  const [createNotice, setCreateNotice] = useState("");
-  const [createNonce, setCreateNonce] = useState(0);
+  const { loading: boardLoading, loadError: boardLoadError, rowDeleting, agendaErrors, taskErrors,
+    createError, createNotice, createNonce, loadBoardSnapshot, deleteAgenda, deleteTask, createEvent } =
+    useBoardActions({ info, boardClock, setBoard, onLoaded: () => setBoardClock(null) });
   const openBoardRef = useRef<(refresh?: boolean) => void>(() => {});
   const [preview, setPreview] = useState<ChatItem[] | null>(debugRequested() ? DEBUG_FIXTURE : null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -670,12 +666,7 @@ export function App() {
         setBusy(false);
         await loadThread(info);
         if (notes.some((line) => line.includes("在创建日程")) && boardSeen.current && boardClock === null) {
-          try {
-            const data = await rpc<BoardPayload>(info, "load_board", {});
-            setBoard(data);
-          } catch (err) {
-            setError(`日程已创建，今日页没有换上新快照。${String(err)} 恢复：在今日页点刷新。`);
-          }
+          await loadBoardSnapshot(false);
         }
         if (!notes.length && !thinking) return;
         setThread((cur) => {
@@ -1176,157 +1167,8 @@ export function App() {
     }
     boardFetches.current += 1;
     setFetchCount(boardFetches.current);
-    setBoardLoading(true);
     loadStatuses(info);
     void loadBoardSnapshot(refresh);
-  }
-
-  async function loadBoardSnapshot(refresh: boolean) {
-    if (!info) return;
-    try {
-      const data = await rpc<BoardPayload>(info, "load_board", refresh ? { refresh: true } : {});
-      setBoardClock(null);
-      setBoard(data);
-      setAgendaErrors({});
-      setTaskErrors({});
-      setCreateError("");
-      setCreateNotice("");
-    } catch (err) {
-      setBoard({ ok: false, error: String(err) });
-    } finally {
-      setBoardLoading(false);
-    }
-  }
-
-  async function deleteAgenda(eventId: string) {
-    if (!eventId || rowDeletingRef.current) return;
-    rowDeletingRef.current = true;
-    setRowDeleting(true);
-    setAgendaErrors((cur) => {
-      const next = { ...cur };
-      delete next[eventId];
-      return next;
-    });
-    try {
-      if (boardClock !== null) {
-        setBoard((cur) => {
-          if (!cur?.agenda?.items) return cur;
-          return {
-            ...cur,
-            agenda: {
-              ...cur.agenda,
-              items: cur.agenda.items.filter((item) => item.event_id !== eventId),
-            },
-          };
-        });
-        return;
-      }
-      if (!info) {
-        setAgendaErrors((cur) => ({ ...cur, [eventId]: "还没有连上本地后端。恢复：重启客户端。" }));
-        return;
-      }
-      const data = await rpc<BoardPayload>(info, "delete_agenda", { event_id: eventId });
-      setBoard(data);
-    } catch (err) {
-      setAgendaErrors((cur) => ({ ...cur, [eventId]: String(err) }));
-    } finally {
-      rowDeletingRef.current = false;
-      setRowDeleting(false);
-    }
-  }
-
-  async function deleteTask(guid: string) {
-    if (!guid || rowDeletingRef.current) return;
-    rowDeletingRef.current = true;
-    setRowDeleting(true);
-    setTaskErrors((cur) => {
-      const next = { ...cur };
-      delete next[guid];
-      return next;
-    });
-    try {
-      if (boardClock !== null) {
-        setBoard((cur) => {
-          if (!cur?.tasks?.items) return cur;
-          return {
-            ...cur,
-            tasks: {
-              ...cur.tasks,
-              items: cur.tasks.items.filter((item) => item.guid !== guid),
-            },
-          };
-        });
-        return;
-      }
-      if (!info) {
-        setTaskErrors((cur) => ({ ...cur, [guid]: "还没有连上本地后端。恢复：重启客户端。" }));
-        return;
-      }
-      const data = await rpc<BoardPayload>(info, "delete_task", { guid });
-      setBoard(data);
-    } catch (err) {
-      setTaskErrors((cur) => ({ ...cur, [guid]: String(err) }));
-    } finally {
-      rowDeletingRef.current = false;
-      setRowDeleting(false);
-    }
-  }
-
-  async function createEvent(summary: string, start: string, end: string) {
-    if (rowDeletingRef.current) return;
-    rowDeletingRef.current = true;
-    setRowDeleting(true);
-    setCreateError("");
-    setCreateNotice("");
-    try {
-      if (boardClock !== null) {
-        const boardDay = boardClock.slice(0, 10);
-        if (start.slice(0, 10) !== boardDay) {
-          setCreateNotice("已创建。今天的看板只显示今天。");
-          setCreateNonce((n) => n + 1);
-          return;
-        }
-        const clock = (iso: string) => iso.slice(11, 16);
-        setBoard((cur) => {
-          if (!cur?.agenda) return cur;
-          return {
-            ...cur,
-            agenda: {
-              ...cur.agenda,
-              ok: true,
-              items: [
-                ...(cur.agenda.items || []),
-                { summary, start: clock(start), end: clock(end), event_id: `evt-${start}` },
-              ],
-            },
-          };
-        });
-        setCreateNonce((n) => n + 1);
-        return;
-      }
-      if (!info) {
-        setCreateError("还没有连上本地后端。恢复：重启客户端。");
-        return;
-      }
-      const data = await rpc<{ notice?: string; snapshot?: BoardPayload | null }>(info, "create_agenda", {
-        summary,
-        start,
-        end,
-      });
-      if (data.snapshot) setBoard(data.snapshot);
-      setCreateNotice(data.notice || "");
-      setCreateNonce((n) => n + 1);
-    } catch (err) {
-      const text = String(err);
-      if (text.includes("create_agenda")) {
-        setCreateError("后端还没有创建日程。恢复：停掉当前客户端，在 desk-companion\\client 里重新运行 pnpm tauri dev。");
-      } else {
-        setCreateError(text);
-      }
-    } finally {
-      rowDeletingRef.current = false;
-      setRowDeleting(false);
-    }
   }
 
   async function openMemory() {
@@ -2556,6 +2398,7 @@ export function App() {
                 data={board}
                 nowIso={boardClock}
                 loading={boardLoading}
+                loadError={boardLoadError}
                 debug={boardClock !== null}
                 onRefresh={() => void openBoard(true)}
                 statuses={statuses}

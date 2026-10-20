@@ -527,6 +527,7 @@ test('normal App starts in core chat and keeps its draft mounted across settings
     './sampling': { DEFAULT_SAMPLING: { effort: '', temperature: 1, top_p: 1 } },
     './slash-menu': { slashQuery: () => null, filterSlash: items => items, SLASH_PARENTS: [], NEED_REPO: new Set() },
     './api': { backendInfo: () => new Promise(() => {}) },
+    './board-actions': load('board-actions', { './api': { rpc: async () => ({ ok: true }) } }),
     './side-workspace': { SideWorkspace: props => { sideProps = props; return React.createElement('div', null, props.children); } },
     './startup': { startupStatus() {}, startupReady() {}, startupFailed() {} },
     'reend-components': { Button: props => React.createElement('button', props), GlitchText: props => React.createElement('span', null, props.children) },

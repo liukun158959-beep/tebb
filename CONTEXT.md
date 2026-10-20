@@ -7,7 +7,7 @@ Windows 上常驻的个人助手，作者本机自用。凯尔希桌宠是入口
 - 主入口：client/ 的 Tauri 2 + React + TypeScript 客户端，主窗和透明 Live2D 宠物窗。
 - Rust 拉起 desk_companion.local_api.server，绑定本机随机端口；前端通过带进程 token 的 WebSocket 调用白名单 RPC，并接收对话流。
 - Python 的普通及知识问答任务直接使用 ConversationService，通过 Atlas 组装模型与业务工具，无需导入窗口模块。App / HeadlessApp 复用此服务；其余数据 RPC 正在按职责分批拆分。
-- 模型、人设配置集中在 AssistantSettingsService；普通会话与只读记忆集中在 ChatSessionService，长期事实和单句历史编辑集中在 MemoryEditingService，手动压缩集中在 ContextCompressionService，笔记基础读写、来源问答、勾选总结、导出及生成文件操作集中在 NotebookService。Bridge 直接调用共享服务，旧桌面通过兼容方法和适用的刷新回调适配。会话修改及历史删除覆盖任务排队、执行、取消和收尾写回；压缩只预留当前会话，模型等待不占全局锁。笔记读取不等待模型，写入、生成、导出、打开、定位均忙碌即拒绝，存储读改写统一跨进程保护；网络与系统请求不持笔记锁或全局写锁；知识库八入口集中在 KnowledgeService，设置和索引使用跨进程短锁及原子替换，计算后复验快照；模型使用与下载/删除以跨进程共享/排他资源锁立即准入，下载仅启动阶段占共享助手。看板仍待后续拆分，HeadlessApp 整体继承尚未移除。
+- 模型、人设配置集中在 AssistantSettingsService；普通会话与只读记忆集中在 ChatSessionService，长期事实和单句历史编辑集中在 MemoryEditingService，手动压缩集中在 ContextCompressionService，笔记基础读写、来源问答、勾选总结、导出及生成文件操作集中在 NotebookService。Bridge 直接调用共享服务，旧桌面通过兼容方法和适用的刷新回调适配。会话修改及历史删除覆盖任务排队、执行、取消和收尾写回；压缩只预留当前会话，模型等待不占全局锁。笔记读取不等待模型，写入、生成、导出、打开、定位均忙碌即拒绝，存储读改写统一跨进程保护；网络与系统请求不持笔记锁或全局写锁；知识库八入口集中在 KnowledgeService，设置和索引使用跨进程短锁及原子替换，计算后复验快照；模型使用与下载/删除以跨进程共享/排他资源锁立即准入，下载仅启动阶段占共享助手。今日看板四入口使用 BoardService，看板刷新/创建/删除与模型忙碌独立，冲突立即拒绝；缓存读改写跨进程保护，合并最新分区并拒绝跨日旧查询，远端与缓存结果分阶段报告。周复盘和自动化的宿主依赖仍待后续拆分，HeadlessApp 整体继承尚未移除。
 - python -m desk_companion 的 Electron / pywebview 旧入口仍保留。pet-ui/、Windows 窗口辅助模块、旧看板及资源仍有实际引用，不能当成无用文件删除。
 
 ## 已有能力与约束

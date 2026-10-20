@@ -19,6 +19,10 @@ def build(host):
     agent = original(host)
     def query(messages, tools):
         (data_root() / "seen.json").write_text(__import__('json').dumps(messages, ensure_ascii=False), "utf-8")
+        if "日程锁测试" in messages[-1].get("content", ""):
+            return {"role": "assistant", "content": "", "tool_calls": [{"id": "call_calendar", "type": "function",
+                "function": {"name": "create_calendar_event", "arguments": __import__('json').dumps(dict(
+                    summary='calendar fixture', start='2026-10-20T09:00:00+08:00', end='2026-10-20T10:00:00+08:00'))}}]}
         if "视频归档测试" in messages[-1].get("content", ""):
             return {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function",
                     "function": {"name": "read_video", "arguments": '{"url":"https://www.youtube.com/watch?v=abcdefghijk"}'}}]}

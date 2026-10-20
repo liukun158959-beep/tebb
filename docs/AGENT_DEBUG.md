@@ -195,6 +195,33 @@ python -m unittest discover -s tests -v
 
 试问同步返回原 trace，不写聊天/笔记历史。Atlas 验证正常完成后，产品只接受非空字符串且无工具调用，普通后台知识问答与笔记服务复用正文校验。用量仍在正常模型返回后、正文校验前记录；失败可能已有费用记录，异常携带的部分用量本批不补记。失败回执保留 `answer/answer_complete/stage`，错误文字同样包含已收到正文，供现有页面显示；`answer_complete` 只表示模型正文已校验，不能代替整体成功。同步 RPC 断连不取消后台操作，无自动重试；重新读取页面/进度核对，未落盘的试问正文无法在重连后恢复。真实权重加载、真实下载网络、GUI 实机和发布包另行验收。见 [ADR 0011](adr/0011-knowledge-service.md) 和 [#131](https://github.com/liukun158959-beep/tebb/issues/131)。
 
+## 无 GUI 的今日看板服务验收
+
+在仓库根目录执行；全部用临时数据和假飞书响应，不创建真实会议、删除待办或通知参会人：
+
+```powershell
+$env:PYTHONUTF8='1'
+python -m unittest tests.test_board_service -v
+python -m unittest tests.test_local_api.LocalApiTests.test_board_four_rpc_routes_keep_contracts_and_failure_stages tests.test_local_api.LocalApiTests.test_board_network_disconnect_keeps_cache_models_and_workers_independent -v
+# client/ 下运行实际表单、请求顺序和完整前端检查
+node --test tests/board-actions.test.cjs
+pnpm test
+pnpm exec tsc --noEmit
+pnpm build
+```
+
+服务入口为 `BoardService().load_board(refresh=False)`、`create_agenda(summary,start,end)`、`delete_agenda(event_id)`、`delete_task(guid)`；RPC 沿用同名参数、外层派发和内层业务两层 `ok`。调试时指定临时 `DESK_COMPANION_DATA_DIR`，替换 `board_data._run_lark/fetch_board`，不能直接运行真实飞书修改。时间沿用带时区的 ISO 字符串及东八区今日规则。新建写当前用户的主日历；删除日程仍真实删除并通知参会人，删除待办仍真实删除，均非隐藏或标记完成。创建不要求已有今日缓存；无缓存时正常返回 `snapshot=null`，非今日日程仍可创建并提示今日页可能不显示。远端可提供的 event_id 会保留，但不要求 CLI 一定返回该字段。
+
+当天缓存命中立即可读；刷新、缺少当天缓存的加载、创建与删除共同取得跨进程看板操作资源，冲突即 `stage=admission`，不排队。共享助手回复、笔记生成、压缩及其他任务仍可继续，看板不修改 conversation.running。飞书等待不持 HOST.turn_lock、WRITES 或缓存存储锁；真实 worker 的 create_calendar_event 继续是写工具，保留 completed_writes 指纹检查，但由看板资源保护，不再额外持全局写锁。其他写工具的全局保护不变。桌宠、自动化首次/跨日加载也可能立即返回看板忙碌；当天缓存命中不受影响。
+
+today.json 所有读改写复用 ResourceLock 与原子替换。刷新仅合并日程/待办，日程变更仅合并日程，待办变更仅合并待办；提交时读取最新摘要、摘要时间、文档链接和无关分区。save_today_fields 只占短时存储锁，可与远端等待并行。单侧查询失败保留该侧明确错误，另一侧照常保留；失败不会被当成“没有安排”，也不拿旧列表冒充新查询。换日创建新快照不继承昨天的摘要/链接；跨午夜旧响应不落盘，远端修改已完成仍明确报告，重新加载核对。共同保护仅约束这些应用入口，不承诺串行化用户在飞书或其他应用中独立进行的修改。
+
+失败回执包含 `stage/change_state/remote_state/cache_state` 和可取得的目标 ID、标题、时间，以及查询已落盘时的 snapshot。`remote_state=unconfirmed` 指修改请求已进入调用但无明确成功回执；`confirmed` 表示飞书已确认成功。`cache_state=unconfirmed` 指缓存保存进入但结果未确认，可能已经替换；`confirmed` 说明已落盘。`change_state=not_changed` 是准入/校验或未提交的旧日查询，`unconfirmed` 是远端或缓存写入未确认，`committed` 是远端已完成但后续查询或跨日处理失败。结合两个阶段状态判断，不能据总错误盲重试；错误文字同样说明已成功或未确认，并包含可得目标信息，供旧工具字符串和现有页面显示。
+
+正常返回结构兼容；远端已成功但查询失败会返回业务 `ok=false`、`stage=query`，同时保留失败分区的快照。前端保留原列表和输入、显示真实失败，只有业务成功才清空创建表单。读取失败保留当前页面并允许刷新；无初始缓存时也能刷新恢复。useBoardActions 集中管理请求与行内错误，旧读取响应、修改期间发起的读取均不能覆盖后续操作结果或清掉新的失败提示。调试样本操作不发送 RPC。
+
+沿用 CLI 单次 60 秒超时及同步 RPC，不新增操作 ID、取消、持久化任务、自动重试或远端幂等协议。断连只结束前端等待，后台可能继续创建/删除和写缓存；先重新连接并用 `load_board(refresh=true)` 查询远端，必要时去飞书按事件 ID/标题/时间核对，不能只凭未刷新的本地缓存判定未执行。跨日或没有 event_id 时，需在对应日期核对；不自动重建同一日程。真实飞书服务/通知、GUI 实机、真实沙箱与发布包另行验收。见 [ADR 0012](adr/0012-board-service.md) 和 [#132](https://github.com/liukun158959-beep/tebb/issues/132)。
+
 ## 无 GUI 的手动压缩服务验收
 
 仓库根目录执行，使用临时数据、真实 OpenAI SDK 的 MockTransport、脚本 worker 和文件故障，不请求真实模型或发送外部消息：

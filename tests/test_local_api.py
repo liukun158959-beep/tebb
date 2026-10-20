@@ -68,6 +68,96 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
                 if frame['type'] in ('done', 'error'):
                     return frame
 
+    async def test_board_four_rpc_routes_keep_contracts_and_failure_stages(self):
+        from desk_companion import board_data as b
+        from tests.test_board_service import DAY, START, END, AGENDA, TASKS
+        from websockets.exceptions import ConnectionClosed
+        with patch.object(b, 'today_date', return_value=DAY), \
+                patch.object(b, 'fetch_board', return_value=dict(agenda=AGENDA, tasks=TASKS)), \
+                patch.object(b, '_open_tasks_due_today', return_value=TASKS), \
+                patch.object(self.host, 'load_today_board', side_effect=AssertionError('legacy board')):
+            def remote(args):
+                if args[:2] == ['calendar', '+agenda']:
+                    return json.dumps(dict(ok=True, data=[]))
+                return json.dumps(dict(ok=True, data=dict(event_id='created')))
+            with patch.object(b, '_run_lark', side_effect=remote) as lark:
+                loaded = await self.notebook_rpc('load_board')
+                self.assertTrue(loaded['ok'], loaded)
+                self.assertTrue((await self.notebook_rpc('create_agenda', summary='title', start=START, end=END))['ok'])
+                self.assertTrue((await self.notebook_rpc('delete_agenda', event_id='event'))['ok'])
+                self.assertTrue((await self.notebook_rpc('delete_task', guid='task'))['ok'])
+                with patch('desk_companion.video.atomic_write', side_effect=OSError('disk')):
+                    failed = await self.notebook_rpc('create_agenda', summary='retained', start=START, end=END)
+                self.assertEqual((failed['remote_state'], failed['cache_state']), ('confirmed', 'unconfirmed'), failed)
+                self.assertEqual(failed['summary'], 'retained')
+                self.assertEqual(failed['stage'], 'cache_save')
+                lark.reset_mock()
+                lark.side_effect = RuntimeError('timeout')
+                failed = await self.notebook_rpc('create_agenda', summary='title', start=START, end=END)
+                self.assertEqual(failed['remote_state'], 'unconfirmed')
+                self.assertEqual(lark.call_count, 1)
+                with self.assertRaises(ConnectionClosed):
+                    async with connect(self.url.replace('test-token', 'wrong'), proxy=None) as ws:
+                        await ws.send(json.dumps(dict(type='rpc', method='delete_task', args=dict(guid='task'))))
+                        await ws.recv()
+                self.assertEqual(lark.call_count, 1)
+
+    async def test_board_network_disconnect_keeps_cache_models_and_workers_independent(self):
+        import threading
+        from desk_companion import board_data as b
+        from tests.test_board_service import DAY, START, END, AGENDA, TASKS
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        with patch.object(b, 'today_date', return_value=DAY), \
+                patch.object(b, 'fetch_board', return_value=dict(agenda=AGENDA, tasks=TASKS)):
+            self.assertTrue((await self.notebook_rpc('load_board'))['ok'])
+            b.save_today_fields(summary='old', doc_url='old url')
+            calls = []
+            def remote(args):
+                calls.append(args)
+                if args[:2] == ['calendar', '+create']:
+                    entered.set()
+                    if not release.wait(45):
+                        raise RuntimeError('not released')
+                    return json.dumps(dict(ok=True, data=dict(event_id='new-id')))
+                return json.dumps(dict(ok=True, data=[]))
+            create = b.create_board_event
+            def tracked(*args):
+                try:
+                    return create(*args)
+                finally:
+                    finished.set()
+            self.host.conversation.running = True
+            with patch.object(b, '_run_lark', side_effect=remote), patch.object(b, 'create_board_event', side_effect=tracked):
+                async with connect(self.url, proxy=None) as ws:
+                    await ws.send(json.dumps(dict(type='rpc', method='create_agenda',
+                        args=dict(summary='title', start=START, end=END))))
+                    try:
+                        self.assertTrue(await asyncio.to_thread(entered.wait, 5))
+                        self.assertTrue((await self.notebook_rpc('load_board'))['ok'])
+                        for method, args in [('load_board', dict(refresh=True)),
+                                ('delete_agenda', dict(event_id='event')), ('delete_task', dict(guid='task'))]:
+                            self.assertEqual((await self.notebook_rpc(method, **args))['stage'], 'admission')
+                        acquired = self.host.turn_lock.acquire(blocking=False)
+                        self.assertTrue(acquired)
+                        if acquired:
+                            self.host.turn_lock.release()
+                        await asyncio.wait_for(asyncio.to_thread(b.save_today_fields,
+                            summary='concurrent summary', doc_url='concurrent url'), 5)
+                        task = await asyncio.to_thread(self.host.tasks.submit, '写入测试', 'other')
+                        done = await asyncio.wait_for(asyncio.to_thread(self.host.tasks.wait, task), 20)
+                        self.assertEqual(done['state'], 'succeeded', done)
+                        await ws.close()
+                    finally:
+                        release.set()
+                    self.assertTrue(await asyncio.to_thread(finished.wait, 5))
+                self.assertTrue(self.host.conversation.running)  # Never took ownership of model busy state.
+                self.assertEqual(sum(a[:2] == ['calendar', '+create'] for a in calls), 1)
+                loaded = await self.notebook_rpc('load_board')
+                self.assertEqual((loaded['summary'], loaded['doc_url']), ('concurrent summary', 'concurrent url'))
+                self.assertEqual(loaded['agenda']['items'], [])
+            self.host.conversation.running = False
+
     async def test_knowledge_eight_service_routes_and_authenticated_failure_receipts(self):
         from contextlib import ExitStack
         import io
