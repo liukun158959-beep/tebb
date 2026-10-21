@@ -48,6 +48,12 @@ class Bridge:
     def change_schedule(self, action: dict) -> dict:
         return self._host.scheduling.change(action)
 
+    def load_schedule_week(self, day, refresh=False, request_id='') -> dict:
+        return self._host.scheduling.load_week(day, refresh, request_id)
+
+    def inspect_schedule_event(self, calendar_id, event_id) -> dict:
+        return self._host.scheduling.inspect_event(calendar_id, event_id)
+
     def collaboration_action(self, action: dict) -> dict:
         return self._host.collaboration.action(action)
 

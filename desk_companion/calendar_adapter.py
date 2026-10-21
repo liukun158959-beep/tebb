@@ -1,9 +1,10 @@
 """Typed primary-calendar IO through the existing CLI transport; no implicit writes."""
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 import re
+import time
 
-from .calendar_time import TZ, parse_event_time
+from .calendar_time import TZ, parse_event_time, day_range
 
 
 class CalendarError(RuntimeError):
@@ -16,13 +17,6 @@ def identifier(value):
     if not isinstance(value, str) or not value.strip() or len(value) > 256 or any(c.isspace() for c in value):
         raise ValueError('日历或日程标识无效，请重新读取。')
     return value
-
-
-def day_range(day):
-    if not isinstance(day, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', day):
-        raise ValueError('日期须为 YYYY-MM-DD。')
-    start = datetime.fromisoformat(day).replace(tzinfo=TZ)
-    return start, start + timedelta(days=1)
 
 
 def event_view(raw, calendar_id):
@@ -68,9 +62,9 @@ class CalendarAdapter:
             run = _run_lark
         self.run = run
 
-    def _call(self, args):
+    def _call(self, args, timeout=20):
         try:
-            raw = self.run(['calendar', *args, '--as', 'user'], timeout=20)
+            raw = self.run(['calendar', *args, '--as', 'user'], timeout=timeout)
             env = json.loads(raw)
             if env.get('ok') is True and isinstance(env.get('data'), dict):
                 return env['data']
@@ -100,14 +94,86 @@ class CalendarAdapter:
         raise CalendarError(label + (f'（错误码 {", ".join(map(str, sorted(codes)))}）' if codes else ''), status)
 
     def primary(self):
-        rows = self._call(['calendars', 'primary']).get('calendars', [])
-        primary = [r.get('calendar', {}) for r in rows if isinstance(r, dict)
+        rows = self._call(['calendars', 'primary', '--user-id-type', 'open_id']).get('calendars', [])
+        primary = [r for r in rows if isinstance(r, dict)
                    and r.get('calendar', {}).get('type') == 'primary']
         if len(primary) != 1:
             raise CalendarError('未取得唯一的当前用户主日历，请核对飞书登录身份。')
-        calendar = primary[0]
+        calendar = primary[0]['calendar']
         return dict(id=identifier(calendar.get('calendar_id')), summary=str(calendar.get('summary', '主日历')),
-                    writable=calendar.get('role') in {'owner', 'writer'} and not calendar.get('is_deleted') and not calendar.get('is_third_party'))
+                    writable=calendar.get('role') in {'owner', 'writer'} and not calendar.get('is_deleted') and not calendar.get('is_third_party'),
+                    owner_id=primary[0].get('user_id', ''),
+                    identity_verified=calendar.get('is_deleted') is False and calendar.get('is_third_party') is False)
+
+    def week(self, calendar_id, day):
+        from .schedule_domain import week_range
+        a, b = week_range(day)
+        data = self._call(['events', 'instance_view', '--calendar-id', identifier(calendar_id),
+                          '--user-id-type', 'open_id', '--start-time', str(int(a.timestamp())),
+                          '--end-time', str(int(b.timestamp()))])
+        if not isinstance(data.get('items'), list):
+            raise CalendarError('飞书周日程列表缺失，不能当作本周没有安排。')
+        rows = [event_view(row, calendar_id) for row in data['items']]
+        for row in rows:
+            row.update(editable=False, edit_reason='选择后核对编辑权限及完整参与人')
+        return sorted(rows, key=lambda row: (row['start'], row['event_id']))
+
+    def inspect(self, calendar, event_id):
+        """Prove organizer + complete personal attendance, never infer it from a week list."""
+        from .schedule_domain import personal_time_reason
+        deadline = time.monotonic() + 35
+        data = self._call(['events', 'get', '--calendar-id', identifier(calendar['id']),
+                          '--event-id', identifier(event_id), '--user-id-type', 'open_id'])
+        raw = data.get('event')
+        if not isinstance(raw, dict) or raw.get('event_id') != event_id:
+            raise CalendarError('日程详情或事件身份未确认，请重新读取。')
+        view = event_view(raw, calendar['id'])
+        reason = personal_time_reason(raw, view, calendar)
+        if not reason:
+            token, seen = '', set()
+            try:
+                for _ in range(20):
+                    remaining = deadline - time.monotonic()
+                    if remaining < 1:
+                        raise CalendarError('参与人核对达到时限，名单未完整确认。')
+                    args = ['event.attendees', 'list', '--calendar-id', calendar['id'],
+                            '--event-id', event_id, '--user-id-type', 'open_id', '--page-size', '100']
+                    if token: args += ['--page-token', token]
+                    page = self._call(args, timeout=min(20, remaining))
+                    if not isinstance(page.get('items'), list) or type(page.get('has_more')) is not bool:
+                        raise CalendarError('参与人列表不完整，不能认作无人。')
+                    for row in page['items']:
+                        if (not isinstance(row, dict) or row.get('type') != 'user'
+                            or row.get('user_id') != calendar['owner_id'] or row.get('is_organizer') is not True
+                            or any(row.get(k) for k in ('room_id', 'chat_id', 'third_party_email'))
+                            or row.get('is_external') is True):
+                            reason = '存在其他参与人、会议室或未识别项，本批只读'
+                            break
+                    if reason or not page['has_more']: break
+                    token = page.get('page_token')
+                    if not isinstance(token, str) or not token or token in seen:
+                        raise CalendarError('参与人分页标记缺失或循环，名单未完整确认。')
+                    seen.add(token)
+                else:
+                    raise CalendarError('参与人分页超过核对上限，名单未完整确认。')
+            except Exception as exc:
+                reason = str(exc)
+        view.update(editable=not bool(reason), edit_reason=reason,
+                    edit_checked_at=datetime.now(TZ).isoformat())
+        return view
+
+    def patch_time(self, calendar_id, event_id, start, end):
+        a, b = parse_event_time(start, '开始时间'), parse_event_time(end, '结束时间')
+        body = dict(start_time=dict(timestamp=str(int(a.timestamp())), timezone='Asia/Shanghai'),
+                    end_time=dict(timestamp=str(int(b.timestamp())), timezone='Asia/Shanghai'),
+                    need_notification=False)
+        data = self._call(['events', 'patch', '--calendar-id', identifier(calendar_id),
+                          '--event-id', identifier(event_id), '--user-id-type', 'open_id',
+                          '--data', json.dumps(body, ensure_ascii=False)])
+        raw = data.get('event')
+        if not isinstance(raw, dict) or raw.get('event_id') != event_id:
+            raise CalendarError('飞书修改回执缺少原事件身份，结果未确认。')
+        return event_view(raw, calendar_id)
 
     def day(self, calendar_id, day):
         a, b = day_range(day)

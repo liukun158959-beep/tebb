@@ -217,7 +217,7 @@ class Collaboration:
         with self.lock, transaction(self.path) as (state, _):
             result = copy.deepcopy(state)
         # Business items and calendar receipts have their own authenticated services.
-        for key in ("work_items", "schedule_links", "schedule_operations", "schedule_days", "schedule_reads", "schedule_read_version"):
+        for key in ("work_items", "schedule_links", "schedule_operations", "schedule_days", "schedule_weeks", "schedule_reads", "schedule_read_version"):
             result.pop(key, None)
         # Internal snapshots/keys/worker requests never cross the browser boundary.
         for run in result["runs"]:

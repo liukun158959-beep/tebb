@@ -42,3 +42,31 @@ class FakeCalendar:
         result['summary'] = fields['summary']
         self.events[result['event_id']] = copy.deepcopy(result)
         return result
+
+
+class TimeCalendar(FakeCalendar):
+    """Fake remote clock edits; the real adapter's identity/pagination is tested separately."""
+    def __init__(self):
+        super().__init__()
+        self.patches = []
+
+    def primary(self):
+        return dict(super().primary(), owner_id='fixture-self', identity_verified=True)
+
+    def week(self, calendar_id, day):
+        from desk_companion.schedule_domain import week_range
+        a, b = week_range(day)
+        if self.fail: raise self.fail
+        return [copy.deepcopy(e) for e in self.events.values()
+                if datetime.fromisoformat(e['start']) < b and datetime.fromisoformat(e['end']) > a]
+
+    def inspect(self, calendar, event_id):
+        return dict(self.get(calendar['id'], event_id), editable=True, edit_reason='',
+                    edit_checked_at=datetime.now(TZ).isoformat())
+
+    def patch_time(self, calendar_id, event_id, start, end):
+        self.patches.append(dict(calendar_id=calendar_id, event_id=event_id, start=start, end=end))
+        old = self.get(calendar_id, event_id)
+        current = dict(old, start=start, end=end, checked_at=datetime.now(TZ).isoformat())
+        self.events[event_id] = copy.deepcopy(current)
+        return current

@@ -8,11 +8,11 @@ import './schedule.css';
 
 export type ScheduleTarget={item_id?:string;calendar_id?:string;event_id?:string;day?:string};
 type Draft={summary:string;start:string;end:string};
-type Props={info:BackendInfo|null;debug?:boolean;transport?:ScheduleTransport;target:ScheduleTarget;onClose:()=>void;onReturn:(id:string)=>void;onChange:()=>void};
+type Props={info:BackendInfo|null;debug?:boolean;transport?:ScheduleTransport;target:ScheduleTarget;onClose:()=>void;onReturn:(id:string)=>void;onWeek?:(target:ScheduleTarget)=>void;onChange:()=>void};
 const blank=(title:string,day:string):Draft=>{const start=day===beijingDay()?beijingStamp(new Date(Math.ceil((Date.now()+30*60000)/300000)*300000).toISOString()):day+'T09:00';return {summary:title,start,end:beijingStamp(new Date(new Date(absoluteTime(start)).getTime()+3600000).toISOString())};};
 const key=(event:CalendarEvent)=>event.calendar_id+'/'+event.event_id;
 
-export function SchedulePane({info,debug=false,transport,target,onClose,onReturn,onChange}:Props){
+export function SchedulePane({info,debug=false,transport,target,onClose,onReturn,onWeek,onChange}:Props){
   const active=usePageActive();const root=useRef<HTMLElement|null>(null),leaveRoot=useRef<HTMLDivElement|null>(null);
   const [day,setDay]=useState(target.day||beijingDay()),[draft,setDraft]=useState<Draft|null>(null),[picker,setPicker]=useState<'start'|'end'|null>(null);
   const [selection,setSelection]=useState(target.event_id?`${target.calendar_id}/${target.event_id}`:''),[formError,setFormError]=useState('');
@@ -64,6 +64,7 @@ export function SchedulePane({info,debug=false,transport,target,onClose,onReturn
       if(event.key==='Tab'){const scope=leaveRoot.current||root.current;const nodes=[...(scope?.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),select:not([disabled]),a[href]')||[])];const first=nodes[0],last=nodes[nodes.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}}}>
     <header className="sc-header"><div><span className="sc-eyebrow">时间安排 · 北京时间 UTC+8</span><h2>{item?item.title:'日程安排'}</h2></div><button type="button" aria-label="关闭日程安排" disabled={controller.pending} onClick={()=>guard(onClose)}>×</button></header>
     <p className="sc-caption">{controller.page.calendar?.summary||'当前飞书用户主日历'}{debug?' · 演示数据，未连接飞书':''}</p>
+    {onWeek&&<button type="button" onClick={()=>guard(()=>onWeek({day,item_id:target.item_id,...(selected?{calendar_id:selected.calendar_id,event_id:selected.event_id}:{})}))}>打开周视图</button>}
     <div className="sc-date"><label>查看日期<input type="date" aria-label="查看日程日期" value={day} disabled={controller.pending} onChange={e=>{if(e.target.value)chooseDate(e.target.value);}}/></label><button type="button" disabled={controller.loading||controller.pending} onClick={()=>void refresh()}>{controller.loading?'核对中…':'读取核对'}</button></div>
     {controller.error&&<p role="alert" className="sc-error">{controller.error}</p>}
     {controller.unknown&&<div className="sc-warning" role="alert"><strong>请求结果未确认</strong><p>操作编号：{controller.unknown.request_id}</p><p>保留输入，先读取核对。原请求可能仍在后台执行。</p><button type="button" disabled={controller.loading||controller.pending} onClick={()=>void refresh()}>按原编号核对</button></div>}

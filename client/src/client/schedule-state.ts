@@ -1,14 +1,20 @@
 import type { WorkPage } from './work-board-state';
 
-export type CalendarEvent={calendar_id:string;event_id:string;summary:string;start:string;end:string;status:string;eligible:boolean;reason:string;verification:string;error:string;checked_at:string};
+export type CalendarEvent={calendar_id:string;event_id:string;summary:string;start:string;end:string;status:string;eligible:boolean;reason:string;verification:string;error:string;checked_at:string;editable?:boolean;edit_reason?:string;edit_checked_at?:string};
 export type ScheduleLink={item_id:string;event:CalendarEvent};
-export type ScheduleOperation={id:string;item_id:string;type:string;state:string;stage:string;error:string;event?:CalendarEvent;summary?:string;start?:string;end?:string};
+export type ScheduleOperation={id:string;item_id:string;type:string;state:string;stage:string;error:string;event?:CalendarEvent;summary?:string;start?:string;end?:string;calendar_id?:string;event_id?:string;original_start?:string;original_end?:string;current_event?:CalendarEvent;notice?:string;execution_result?:string};
 export type SchedulePage={ok:boolean;day:string;item_id:string;calendar?:{id:string;summary:string;writable:boolean};events:CalendarEvent[];events_valid:boolean;events_error:string;checked_at:string;links:ScheduleLink[];items:{id:string;title:string;version:number;archived:boolean}[];operations:ScheduleOperation[];operation?:ScheduleOperation|null;error?:string;change_state?:string;stage?:string};
 export type ScheduleAction={type:'create'|'link'|'unlink'|'resolve';request_id:string;item_id:string;version:number;day:string;summary?:string;start?:string;end?:string;calendar_id?:string;event_id?:string;operation_id?:string;resolution?:'link'|'absent';confirmed?:boolean};
 export type ScheduleTransport=(method:string,args:Record<string,unknown>)=>Promise<SchedulePage>;
+export type ScheduleTimeAction={type:'retime'|'reconcile_time';request_id:string;day:string;calendar_id:string;event_id:string;
+  original_start:string;original_end:string;start?:string;end?:string;operation_id?:string;confirmed?:boolean;verification?:string};
+export type ScheduleWeekPage=SchedulePage&{week:true;week_start:string;week_end:string;event?:CalendarEvent};
+export const calendarKey=(event:Pick<CalendarEvent,'calendar_id'|'event_id'>)=>event.calendar_id+'/'+event.event_id;
+export function addCalendarDays(day:string,count:number){return new Date(Date.parse(day+'T00:00:00Z')+count*86400000).toISOString().slice(0,10);}
+export function calendarWeekStart(day:string){const date=new Date(day+'T00:00:00Z');if(!Number.isFinite(date.getTime()))throw Error('请选择日期。');return addCalendarDays(day,-((date.getUTCDay()+6)%7));}
 type Pending=Pick<ScheduleAction,'request_id'|'item_id'|'day'|'type'>;
 type StorageLike=Pick<Storage,'getItem'|'setItem'|'removeItem'>;
-export const unresolved=(operation:ScheduleOperation)=>['prepared','calling','remote_created','unconfirmed'].includes(operation.state);
+export const unresolved=(operation:ScheduleOperation)=>['prepared','calling','remote_created','remote_changed','unconfirmed'].includes(operation.state);
 export const finished=(operation?:ScheduleOperation|null)=>!!operation&&['linked','unlinked','resolved_absent','resolved'].includes(operation.state);
 const parts=(iso:string)=>Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(iso)).map(part=>[part.type,part.value]));
 export function beijingStamp(iso=new Date().toISOString()){const p=parts(iso);return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;}
@@ -73,14 +79,47 @@ export class ScheduleController {
 
 export function createScheduleDemo(work:()=>WorkPage):ScheduleTransport {
   let number=0;const operations=new Map<string,ScheduleOperation>();const day=beijingDay();
-  const make=(id:string,title:string,start:string,end:string,eligible=true):CalendarEvent=>({calendar_id:'demo-calendar',event_id:id,summary:title,start,end,status:'confirmed',eligible,reason:eligible?'':'全天日程先只读展示',verification:'confirmed',error:'',checked_at:new Date().toISOString()});
+  const make=(id:string,title:string,start:string,end:string,eligible=true):CalendarEvent=>({calendar_id:'demo-calendar',event_id:id,summary:title,start,end,status:'confirmed',eligible,reason:eligible?'':'全天日程先只读展示',verification:'confirmed',error:'',checked_at:new Date().toISOString(),editable:eligible&&start.slice(0,10)===end.slice(0,10),edit_reason:eligible?'':'全天日程先只读展示',edit_checked_at:new Date().toISOString()});
   const events=[make('demo-focus_0','专注完善连接体验',day+'T14:00:00+08:00',day+'T15:00:00+08:00'),make('demo-reading_0','阅读与笔记',day+'T16:00:00+08:00',day+'T17:00:00+08:00'),make('demo-all_0','全天事项',day,day,false)];
   let links:ScheduleLink[]=[{item_id:'demo-model',event:events[0]}];
   function sync(){const page=work();for(const item of page.items){const rows=links.filter(l=>l.item_id===item.id).map(l=>l.event);item.schedules={events:rows,next:rows.filter(e=>e.eligible&&new Date(e.end).getTime()>Date.now()).sort((a,b)=>a.start.localeCompare(b.start))[0]||null,unchecked:false,previous:null};}}
   function snapshot(date:string,item_id:string,request_id=''):SchedulePage{sync();return structuredClone({ok:true,day:date,item_id,calendar:{id:'demo-calendar',summary:'演示主日历',writable:true},events:events.filter(e=>e.start.slice(0,10)<=date&&e.end.slice(0,10)>=date),events_valid:true,events_error:'',checked_at:new Date().toISOString(),links,items:work().items.map(({id,title,version,archived})=>({id,title,version,archived})),operations:[],operation:operations.get(request_id)||null});}
+  function weekSnapshot(date:string,request_id=''):ScheduleWeekPage{
+    const monday=calendarWeekStart(date),end=addCalendarDays(monday,7);
+    return {...snapshot(date,'',request_id),week:true,week_start:monday,week_end:end,
+      events:structuredClone(events.filter(e=>e.start.slice(0,10)<end&&e.end.slice(0,10)>=monday)),
+      operations:[...operations.values()].filter(op=>op.type==='retime'&&unresolved(op))};
+  }
+  const timeFingerprints=new Map<string,string>();
   sync();
   return async(method,args)=>{
+    if(method==='load_schedule_week')return weekSnapshot(String(args.day),String(args.request_id||''));
+    if(method==='inspect_schedule_event'){
+      const event=events.find(e=>e.calendar_id===args.calendar_id&&e.event_id===args.event_id);
+      const owner=work().items.find(i=>links.some(l=>l.item_id===i.id&&l.event.event_id===event?.event_id));
+      return {...weekSnapshot(event?.start.slice(0,10)||day),ok:!!event,event:event?{...event,
+        editable:!!event.editable&&!owner?.archived,edit_reason:owner?.archived?'关联事项已归档，请先恢复':event.edit_reason,
+        edit_checked_at:new Date().toISOString()}:undefined};
+    }
     if(method==='load_schedule')return snapshot(String(args.day),String(args.item_id||''),String(args.request_id||''));
+    const kind=(args.action as {type:string}).type;
+    if(kind==='retime'||kind==='reconcile_time'){
+      const action=args.action as ScheduleTimeAction,event=events.find(e=>e.event_id===action.event_id&&e.calendar_id===action.calendar_id);
+      const page=()=>weekSnapshot(action.day,action.request_id);
+      if(operations.has(action.request_id))return timeFingerprints.get(action.request_id)===JSON.stringify(action)?page():{...page(),ok:false,change_state:'not_changed',error:'此编号已使用。'};
+      const owner=work().items.find(i=>links.some(l=>l.item_id===i.id&&l.event.event_id===event?.event_id));
+      if(!event||owner?.archived||(kind==='retime'&&!event.editable))return {...page(),ok:false,change_state:'not_changed',error:'日程只读或不可用。'};
+      if(Date.parse(event.start)!==Date.parse(action.original_start)||Date.parse(event.end)!==Date.parse(action.original_end))return {...page(),ok:false,change_state:'not_changed',error:'远端时间已变化，请读取后重新调整。'};
+      if(kind==='retime'){
+        if(!action.start||!action.end||Date.parse(action.end)<=Date.parse(action.start)||beijingDay(action.start)!==beijingDay(action.end))return {...page(),ok:false,change_state:'not_changed',error:'请选择同日的有效起止。'};
+        Object.assign(event,{start:action.start,end:action.end,checked_at:new Date().toISOString(),edit_checked_at:new Date().toISOString()});
+      }else if(action.operation_id){const original=operations.get(action.operation_id);if(original)original.state='observed';}
+      if(owner)owner.version++;work().revision++;
+      operations.set(action.request_id,{id:action.request_id,type:kind,item_id:owner?.id||'',state:kind==='retime'?'retimed':'observed',
+        calendar_id:event.calendar_id,event_id:event.event_id,event:structuredClone(event),stage:'committed',error:''});
+      timeFingerprints.set(action.request_id,JSON.stringify(action));
+      return {...page(),change_state:'committed',stage:'committed'};
+    }
     const action=args.action as ScheduleAction, item=work().items.find(i=>i.id===action.item_id)!;
     if(operations.has(action.request_id))return snapshot(action.day,item.id,action.request_id);
     if(item.archived||item.version!==action.version)return {...snapshot(action.day,item.id),ok:false,error:'演示事项已变化，请刷新。'};

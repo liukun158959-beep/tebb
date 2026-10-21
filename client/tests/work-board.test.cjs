@@ -86,7 +86,7 @@ test('plan execution success does not disguise unfinished delivery',()=>{
 
 test('real component creates, moves, archives, restores and preserves its edit form',async()=>{
   global.crypto=require('node:crypto').webcrypto;global.window={setInterval:()=>1,clearInterval(){}};global.document={activeElement:null};
-  let dragProps,scheduleProps;
+  let dragProps,scheduleProps,weekProps;
   const wrapper=tag=>React.forwardRef((props,ref)=>React.createElement(tag,{...props,ref},props.children));
   const dnd={DndContext:props=>{dragProps=props;return React.createElement('div',{},props.children);},DragOverlay:()=>null,
     KeyboardSensor(){},PointerSensor(){},closestCenter(){},pointerWithin:()=>[],useDraggable:()=>({setNodeRef(){},setActivatorNodeRef(){},attributes:{},listeners:{},isDragging:false}),useDroppable:()=>({setNodeRef(){},isOver:false}),useSensor(){},useSensors:()=>[]};
@@ -95,6 +95,7 @@ test('real component creates, moves, archives, restores and preserves its edit f
     constructor(transport){super(async(method,args)=>{const page=await transport(method,args);return projectRemoved?{...page,projects:[],items:page.items.map(item=>({...item,project_id:'',project_name:'',version:item.version+1}))}:page;});}
   }};
   const {WorkBoardPane}=load('work-board.tsx',{'./api':{},'./page-stack':{usePageActive:()=>true},'./work-board-state':componentState,'./schedule-state':scheduleState,'./schedule':{SchedulePane:props=>{scheduleProps=props;return null;}},
+    './schedule-week':{ScheduleWeekPane:props=>{weekProps=props;return null;}},
     './Markdown':{Markdown:({text})=>React.createElement('p',{},text)},'./work-board.css':{},'@dnd-kit/core':dnd,'framer-motion':{motion:{article:wrapper('article')},useReducedMotion:()=>true}});
   let view;await act(async()=>{view=create(React.createElement(WorkBoardPane,{info:null,debug:true,onOpen(){throw Error('real navigation forbidden');}}));});
   const button=label=>view.root.findAllByType('button').find(b=>(b.children||[]).join('')===label);
@@ -115,8 +116,12 @@ test('real component creates, moves, archives, restores and preserves its edit f
   act(()=>view.root.findByProps({'aria-label':'关闭事项详情'}).props.onClick());
   act(()=>view.root.findByProps({'aria-label':'搜索事项'}).props.onChange({target:{value:'挡住目标的搜索'}}));
   act(()=>view.root.findByProps({'aria-label':'筛选项目'}).props.onChange({target:{value:'Atlas'}}));
-  act(()=>button('日程安排').props.onClick());
-  await act(async()=>scheduleProps.onReturn(id));
+  await act(async()=>button('日程安排').props.onClick());
+  assert(weekProps);
+  await act(async()=>weekProps.onDay({day:'2026-11-03'}));assert(scheduleProps);
+  await act(async()=>scheduleProps.onWeek({day:'2026-11-04',calendar_id:'cal',event_id:'event_0'}));
+  assert.equal(weekProps.target.day,'2026-11-04');
+  await act(async()=>weekProps.onReturn(id));
   assert.equal(view.root.findByProps({'aria-label':'搜索事项'}).props.value,'');
   assert.equal(view.root.findByProps({'aria-label':'筛选项目'}).props.value,'all');
   assert(rendered().includes('已归档事项'));assert(rendered().includes('真实组件新事项'));

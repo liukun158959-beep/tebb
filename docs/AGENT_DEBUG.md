@@ -419,3 +419,49 @@ Remove-Item Env:DESK_TEST_ATLAS_SOURCE
 新增阶段记录只包含固定阶段名和耗时；不持久化任意 worker stderr、凭证或原始堆栈。进程在收到请求前崩溃时仍需本地受控栈采样，不能仅凭缺少模型调用记录断言网络故障。测试日志可重定向到工作区 `output/` 留存，失败时先保留实际结果，再核对任务阶段，不自动重发有副作用的任务。
 
 2026-10-22 修复验收：Atlas 完整 pytest 为 57 项及 11 个子测试通过；原四项超时用例原阈值独立运行通过，并在最终 Python 全量中通过。最终 `DESK_TEST_ATLAS_SOURCE` 开启后的全量为 616 项：603 通过、13 跳过、无失败，740.961 秒，包含正式固定源及两套适配器契约、认证 RPC、真实离线 worker、任务超时分类与无 GUI 检查。跳过为 12 项真实沙箱开关和 1 项 Windows 符号链接权限；没有调用真实模型或飞书，没有发布版本。原始诊断及最终日志保留于工作区 `output/worker-timeout-2026-10-21/`，最终结果见 `tebb-final.log`，此前非全绿记录保持可追溯。
+
+### 周日程与个人改期验收（#138）
+
+以下命令复用现有公开服务，临时数据和 TimeCalendar，不运行真实 lark-cli。预期同一编号只修改一次、事件身份不变、事项进度不变；原编号再次调用只返回原回执。
+
+```powershell
+@'
+import os, tempfile, uuid
+from desk_companion.scheduling import SchedulingService
+from desk_companion.work_board import WorkBoardService
+from tests.schedule_fixture import DAY, START, END, TimeCalendar
+with tempfile.TemporaryDirectory() as data:
+    os.environ['DESK_COMPANION_DATA_DIR'] = data
+    board, remote = WorkBoardService(), TimeCalendar()
+    service = SchedulingService(board, remote)
+    page = service.load_week(DAY, refresh=True)
+    checked = service.inspect_event('calendar-one', 'existing_0')
+    assert page['events_valid'] and checked['event']['editable']
+    action = dict(type='retime', request_id=uuid.uuid4().hex, day=DAY,
+        calendar_id='calendar-one', event_id='existing_0', original_start=START, original_end=END,
+        start=DAY+'T11:00:00+08:00', end=DAY+'T12:00:00+08:00')
+    result = service.change(action)
+    assert result['ok'] and result['operation']['state'] == 'retimed', result
+    assert service.change(action)['ok'] and len(remote.patches) == 1
+    receipt = service.load_week(DAY, request_id=action['request_id'])['operation']
+    print(receipt['id'], receipt['stage'], receipt['event']['event_id'])
+'@ | python -
+
+python -m unittest tests.test_schedule_week tests.test_scheduling -v
+python -m unittest tests.test_local_api.LocalApiTests.test_week_retime_auth_disconnect_and_reconcile_do_not_replay_external_edit tests.test_headless_host -v
+pnpm --dir client test
+pnpm --dir client exec tsc --noEmit
+pnpm --dir client build
+```
+
+本地认证 WebSocket 输入保持原格式，例如 `{"type":"rpc","id":"week-read","method":"load_schedule_week","args":{"day":"2026-10-22","refresh":false,"request_id":"<原操作编号>"}}`；资格读取用 `inspect_schedule_event` 和 `calendar_id,event_id`，改期与明确核对用 `change_schedule` 的 `retime/reconcile_time`。字段见 [功能文档](WORK_BOARD.md#周日程与个人时间调整138)，必须检查外层派发和内层业务 `ok`。周接口已在无 GUI 真后台启动和共享助手忙碌期间验证；没有绕过认证或新增任意执行接口。
+
+排查顺序：先读原 `operation.id/state/stage`、原/拟调整时间和 `current_event/event`，再读事件和关联；不要仅根据周缓存判断写入是否执行。`remote_changed/verify` 表示取得修改回执但读回/本地提交未完整确认，不等于未执行。`observed` 表示明确登记当前状态，原执行仍可能 `execution_result=unconfirmed`，不会重发 PATCH。服务和本机标记都保留原编号；本机 `tebb.schedule.week.pending.v1` 损坏时不覆盖它，暂停新改期并先核对原回执。只读查询不会触发写入，网络期间可读取其他事项和执行 AI。
+
+`/client.html?debug=work` 的“日程安排”运行真实周组件；单日和周视图共享同一内存演示数据，可从侧栏先创建未来安排再回周视图拖动。选中后核对资格，再拖动正文或上下边缘；检验 Escape、无效位置、键盘抓取/调整、完整 24 小时、窄窗口七天选择、跨周表单与事项定位。实际浏览器用本地假运输层记录请求次数，覆盖回执丢失后只读恢复；另外把真实组件接入 `tests.headless_backend_fixture` 的认证 WebSocket，验证拖动、上下缩放、跨周 DateTimeField 表单及本地提交回执。后台仍注入 TimeCalendar，未连接真实飞书。独立浏览器若因本地网络权限拦截 WebSocket，只在该隔离测试 origin 授予 loopback-network 权限，保留后台 token 认证；不修改产品白名单或全局浏览器设置。
+
+本批每次参与人核对显式分页至 has_more=false，最多 20 页和约 35 秒，超限保持只读；普通 CLI 超时 20 秒，前端同步等待 120 秒，断连不自动取消后台。真实飞书没有条件版本，不承诺和外部改期原子互斥。实际飞书写入、安装包与实机尚未验证，未发布版本。
+
+2026-10-22 最终验收：开启 DESK_TEST_ATLAS_SOURCE 的 Python 全量 640 项，627 通过、13 跳过，无超时或失败，582.449 秒；跳过为 12 项需显式启用的真实沙箱和 1 项 Windows 符号链接权限。前端 161 项通过，tsc 和生产构建通过。真实浏览器验证正文跨日拖动、上下边缘、15 分钟吸附（含原有不对齐短日程）、Escape 零写入、键盘、丢回执只读核对、24 小时及窄屏、跨周表单、单日/周定位、卡片时间更新及筛选清除；认证后台链路使用假飞书，原事件身份保持。清理重复侧栏组装、缓存刷新和未使用导入，周组件按需加载，未新增平行日历或任意执行接口。
+
+本机验收材料在 `output/week-planner-2026-10-22/`：`python-final-verified.log`、`client-final-pass.log`、`types-final-pass.log`、`build-final-pass.log`，以及 `production-qa-delivery.log`、`auth-browser-final.log`、`workboard-week-qa-final.log`；浏览器脚本与截图同目录。较早运行的编译错误、测试断言修正和手势修复记录保留，以上述最终文件为准，不把中间结果当最终验收。

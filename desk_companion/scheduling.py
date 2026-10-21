@@ -1,5 +1,6 @@
-"""Work-item scheduling: durable local receipts around a single explicit remote create."""
+"""Work-item scheduling: durable receipts around explicit remote creation and time edits."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager
 import copy
 from datetime import datetime
 import hashlib
@@ -10,15 +11,265 @@ from . import schedule_domain as domain, work_items
 from .board_data import calendar_operation
 from .calendar_adapter import CalendarAdapter, CalendarError, creation_fields, day_range, identifier
 from .calendar_time import TZ
+from .resource_lock import ResourceLock
 
-UNRESOLVED = {'prepared', 'calling', 'remote_created', 'unconfirmed'}
-SUCCESS = {'linked', 'unlinked', 'resolved_absent'}
+UNRESOLVED = {'prepared', 'calling', 'remote_created', 'remote_changed', 'unconfirmed'}
+SUCCESS = {'linked', 'unlinked', 'resolved_absent', 'retimed', 'observed', 'unchanged'}
 
 
 class SchedulingService:
     def __init__(self, work_board, calendar=None):
         self.board = work_board
         self.calendar = calendar or CalendarAdapter()
+
+    @contextmanager
+    def hold_event(self, calendar_id, event_id):
+        lock = ResourceLock(f'schedule-event:{self.board.path.resolve()}:{calendar_id}/{event_id}')
+        if not lock.acquire(blocking=False):
+            raise ValueError('此日程正在调整或核对，请稍后操作。')
+        try:
+            yield
+        finally:
+            lock.__exit__()
+
+    @staticmethod
+    def _known_event(state, calendar_id, event_id):
+        key = calendar_id+'/'+event_id
+        rows = [link['event'] for link in state.get('schedule_links', [])]
+        for store in ('schedule_weeks', 'schedule_days'):
+            for cached in state.get(store, {}).values(): rows.extend(cached.get('events', []))
+        rows.extend(op['event'] for op in state.get('schedule_operations', {}).values() if op.get('event'))
+        return copy.deepcopy(next((row for row in rows if domain.event_key(row) == key), None))
+
+    def _week_page(self, state, day, request_id=''):
+        a, b = domain.week_range(day)
+        monday = a.date().isoformat()
+        page = self._page(state, monday, request_id=request_id)
+        cached = state.get('schedule_weeks', {}).get(monday, {})
+        page.update(week=True, week_start=monday, week_end=b.date().isoformat(),
+            calendar=cached.get('calendar'), events=copy.deepcopy(cached.get('events', [])),
+            events_valid=cached.get('valid', False), events_error=cached.get('error', ''),
+            checked_at=cached.get('checked_at', ''),
+            operations=[self._public_operation(op) for op in state.get('schedule_operations', {}).values()
+                        if op['type'] == 'retime' and op['state'] in UNRESOLVED])
+        return page
+
+    def load_week(self, day, refresh=False, request_id=''):
+        try:
+            a, _ = domain.week_range(day); monday = a.date().isoformat()
+            if request_id: self.board.validate_request_id(request_id)
+            if refresh:
+                token = uuid.uuid4().hex
+                with self.board.workspace_transaction() as (state, _):
+                    version = state['schedule_read_version'] = state.get('schedule_read_version', 0)+1
+                    state.setdefault('schedule_reads', {})['week:'+monday] = token
+                calendar, events, error = None, [], ''
+                try:
+                    calendar = self.calendar.primary()
+                    events = self.calendar.week(calendar['id'], monday)
+                except Exception as exc:
+                    error = str(exc)
+                with self.board.workspace_transaction() as (state, _):
+                    if state.get('schedule_reads', {}).get('week:'+monday) == token:
+                        store = state.setdefault('schedule_weeks', {})
+                        old = store.get(monday, {})
+                        store[monday] = (dict(old, valid=False, error=error) if error else
+                            dict(calendar=calendar, events=events, valid=True, error='', checked_at=datetime.now(TZ).isoformat()))
+                        if not error:
+                            for event in events: domain.update_event(state, event, version)
+                    return self._week_page(state, monday, request_id)
+            with self.board.workspace_transaction() as (state, _):
+                return self._week_page(state, monday, request_id)
+        except Exception as exc:
+            return dict(ok=False, stage='read', error=f'周日程读取失败：{exc}。请重新核对。')
+
+    def inspect_event(self, calendar_id, event_id):
+        event = None
+        try:
+            identifier(calendar_id); identifier(event_id)
+            token, key = uuid.uuid4().hex, calendar_id+'/'+event_id
+            with self.board.workspace_transaction() as (state, _):
+                version = state['schedule_read_version'] = state.get('schedule_read_version', 0)+1
+                state.setdefault('schedule_reads', {})['event:'+key] = token
+                state['schedule_reads']['event-version:'+key] = version
+                previous = self._known_event(state, calendar_id, event_id)
+            calendar = self.calendar.primary()
+            if calendar['id'] != calendar_id:
+                raise CalendarError('当前主日历已变化，请重新读取，未自动换绑。', 'unavailable')
+            event = self.calendar.inspect(calendar, event_id)
+            with self.board.workspace_transaction() as (state, _):
+                link = next((r for r in state.get('schedule_links', []) if domain.event_key(r['event']) == key), None)
+                if link and work_items.require_item(state, link['item_id'])['archived']:
+                    event.update(editable=False, edit_reason='关联事项已归档，请先恢复事项。')
+                if domain.time_pending(state, calendar_id, event_id):
+                    event.update(editable=False, edit_reason='改期执行中或结果未确认，请先核对原操作。')
+                if state.get('schedule_reads', {}).get('event:'+key) == token:
+                    domain.cache_event(state, event, previous)
+                else:
+                    event = self._known_event(state, calendar_id, event_id) or event
+            return dict(ok=True, event=event)
+        except Exception as exc:
+            if 'previous' in locals() and previous:
+                event = dict(previous, editable=False, edit_reason=str(exc),
+                             verification=getattr(exc, 'status', 'read_failed'), error=str(exc))
+                try:
+                    with self.board.workspace_transaction() as (state, _):
+                        if state.get('schedule_reads', {}).get('event:'+key) == token:
+                            domain.cache_event(state, event)
+                except Exception: pass
+            return dict(ok=False, stage='inspect', event=event, error=str(exc))
+
+    def _time_result(self, operation, day):
+        page = self.load_week(day, request_id=operation['id'])
+        successful = operation['state'] in {'retimed', 'observed', 'unchanged'}
+        if not page['ok']:
+            return dict(ok=False, operation=self._public_operation(operation), request_id=operation['id'],
+                stage='refresh', change_state='committed' if successful else 'unconfirmed',
+                error='日程操作已有回执，但页面读取失败，请按原编号核对。')
+        page.update(ok=successful, operation=self._public_operation(operation), request_id=operation['id'],
+            change_state='committed' if successful else 'unconfirmed' if operation['state'] in UNRESOLVED else 'not_changed',
+            stage=operation['stage'], conflict=operation.get('conflict', False), error=operation.get('error', ''))
+        return page
+
+    def _commit_time(self, operation, event, previous=None):
+        with self.board.workspace_transaction() as (state, _):
+            domain.cache_event(state, event, previous)
+            if operation.get('item_id'):
+                work_items.touch_item(work_items.require_item(state, operation['item_id']))
+            operation.update(state='retimed', stage='committed', event=event,
+                             execution_ended_at=datetime.now(TZ).isoformat(), error='')
+            state.setdefault('schedule_operations', {})[operation['id']] = copy.deepcopy(operation)
+
+    def _change_time(self, action):
+        operation, writing, remote_started = None, False, False
+        leases = ExitStack()
+        try:
+            request_id = self.board.validate_request_id(action.get('request_id'))
+            calendar_id, event_id = identifier(action.get('calendar_id')), identifier(action.get('event_id'))
+            day = action.get('day'); domain.week_range(day)
+            fingerprint = hashlib.sha256(json.dumps(action, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            leases.enter_context(self.hold_event(calendar_id, event_id))
+            with self.board.workspace_transaction() as (state, _):
+                existing = copy.deepcopy(state.get('schedule_operations', {}).get(request_id))
+                link = next((r for r in state.get('schedule_links', [])
+                             if domain.event_key(r['event']) == calendar_id+'/'+event_id), None)
+                item_id = link['item_id'] if link else ''
+            if existing:
+                if existing['fingerprint'] != fingerprint:
+                    raise ValueError('此操作编号已用于其他日程请求，未再次修改。')
+                return self._time_result(existing, day)
+            if item_id: leases.enter_context(self.board.hold_item(item_id))
+            with self.board.workspace_transaction() as (state, _):
+                if item_id and work_items.require_item(state, item_id)['archived'] and action['type'] != 'reconcile_time':
+                    raise ValueError('请先恢复归档事项，再调整日程。')
+                if action['type'] == 'retime': domain.require_time_idle(state, calendar_id, event_id)
+            if action['type'] == 'reconcile_time':
+                return self._reconcile_time(action, fingerprint, item_id)
+            fields = domain.time_fields(action)
+            with calendar_operation():
+                operation = dict(id=request_id, fingerprint=fingerprint, type='retime', item_id=item_id,
+                    calendar_id=calendar_id, event_id=event_id, state='prepared', stage='prepare', error='',
+                    created_at=datetime.now(TZ).isoformat(), **fields)
+                writing = True; self._save_operation(operation); writing = False
+                operation['stage'] = 'preflight'
+                calendar = self.calendar.primary()
+                if calendar['id'] != calendar_id: raise ValueError('主日历已变化，请重新读取。')
+                current = self.calendar.inspect(calendar, event_id)
+                operation['event'] = current
+                if not current.get('editable'): raise ValueError(current.get('edit_reason') or '编辑权限未核实。')
+                if not domain.same_time(current, fields['original_start'], fields['original_end']):
+                    operation['conflict'] = True
+                    with self.board.workspace_transaction() as (state, _): domain.cache_event(state, current)
+                    raise ValueError('远端时间已变化，已保留最新时间，请重新调整。')
+                if domain.same_time(current, fields['start'], fields['end']):
+                    operation.update(state='unchanged', stage='committed')
+                    self._save_operation(operation)
+                    return self._time_result(operation, day)
+                identity = self.calendar.primary()
+                if (identity['id'], identity.get('owner_id')) != (calendar['id'], calendar.get('owner_id')):
+                    raise ValueError('飞书身份已变化，未发送改期，请重新读取。')
+                operation.update(state='calling', stage='remote')
+                writing = True; self._save_operation(operation); writing = False
+                remote_started = True
+                acknowledged = self.calendar.patch_time(calendar_id, event_id, fields['start'], fields['end'])
+                operation.update(state='remote_changed', stage='verify', event=acknowledged)
+                writing = True; self._save_operation(operation); writing = False
+                verified = self.calendar.get(calendar_id, event_id)
+                if not domain.same_time(verified, fields['start'], fields['end']):
+                    operation['current_event'] = verified
+                    raise ValueError('远端回执后读取到不同时间，修改结果未完整确认，请先核对。')
+                verified.update(editable=current['editable'], edit_reason='', edit_checked_at=verified['checked_at'])
+                operation['stage'] = 'commit'
+                writing = True; self._commit_time(operation, verified, current); writing = False
+                return self._time_result(operation, day)
+        except Exception as exc:
+            if operation:
+                try:
+                    with self.board.workspace_transaction() as (state, _):
+                        saved = copy.deepcopy(state.get('schedule_operations', {}).get(operation['id']))
+                    if saved and saved['state'] in SUCCESS: return self._time_result(saved, day)
+                except Exception: pass
+                operation.update(state='unconfirmed' if remote_started or writing else 'not_started',
+                    error=str(exc), execution_ended_at=datetime.now(TZ).isoformat())
+                try: self._save_operation(operation)
+                except Exception: pass
+                return self._time_result(operation, day)
+            return dict(ok=False, stage='admission', change_state='not_changed', error=str(exc))
+        finally:
+            leases.close()
+
+    def _reconcile_time(self, action, fingerprint, item_id):
+        """Explicitly adopt a newly observed time; never claim an unknown request did not execute."""
+        if action.get('confirmed') is not True:
+            raise ValueError('请明确确认以当前核对时间结束本轮等待；不会重发改期。')
+        original_id = self.board.validate_request_id(action.get('operation_id'))
+        if original_id == action['request_id']: raise ValueError('核对须使用新的操作编号。')
+        with self.board.workspace_transaction() as (state, _):
+            original = copy.deepcopy(state.get('schedule_operations', {}).get(original_id))
+        if original and (original['type'] != 'retime' or original['calendar_id'] != action['calendar_id']
+                         or original['event_id'] != action['event_id']):
+            raise ValueError('原操作与当前日程不匹配。')
+        calendar = self.calendar.primary()
+        if calendar['id'] != action['calendar_id']: raise ValueError('当前主日历已变化，请核对原身份。')
+        try:
+            event = self.calendar.get(action['calendar_id'], action['event_id'])
+        except CalendarError as exc:
+            if exc.status not in {'missing', 'deleted'} or action.get('verification') != exc.status:
+                raise
+            with self.board.workspace_transaction() as (state, _):
+                previous = self._known_event(state, action['calendar_id'], action['event_id'])
+            event = dict(previous or dict(calendar_id=action['calendar_id'], event_id=action['event_id'],
+                summary='已失效日程', start=action.get('original_start', ''), end=action.get('original_end', ''),
+                status='', eligible=False, reason='日程已失效'),
+                verification=exc.status, checked_at=datetime.now(TZ).isoformat(), editable=False,
+                edit_reason=str(exc), error=str(exc))
+        if (event['verification'] not in {'missing', 'deleted'} and
+            not domain.same_time(event, action.get('original_start'), action.get('original_end'))):
+            raise ValueError('核对期间远端时间又有变化，请重新读取后确认。')
+        operation = dict(id=action['request_id'], fingerprint=fingerprint, type='reconcile_time', item_id=item_id,
+            calendar_id=action['calendar_id'], event_id=action['event_id'], state='observed', stage='committed',
+            original_id=original_id, event=event, error='', created_at=datetime.now(TZ).isoformat(),
+            notice='当前时间已核对；这不证明原修改未执行，不会重发改期。')
+        try:
+            with self.board.workspace_transaction() as (state, _):
+                domain.cache_event(state, event)
+                operations = state.setdefault('schedule_operations', {})
+                old = operations.get(original_id) or dict(id=original_id, fingerprint='', type='retime', item_id=item_id,
+                    calendar_id=action['calendar_id'], event_id=action['event_id'])
+                if old.get('state') != 'retimed':
+                    old.update(state='observed', stage='committed', event=event, resolved_by=operation['id'],
+                               execution_result='unconfirmed', error='当前时间已核对，原执行结果未确认，不会重放。')
+                    operations[original_id] = old
+                operations[operation['id']] = copy.deepcopy(operation)
+        except Exception as exc:
+            try:
+                with self.board.workspace_transaction() as (state, _):
+                    saved = state.get('schedule_operations', {}).get(operation['id'])
+                if saved and saved['state'] == 'observed': return self._time_result(saved, action['day'])
+            except Exception: pass
+            return dict(ok=False, stage='commit', change_state='unconfirmed', request_id=operation['id'],
+                        operation=self._public_operation(operation), error='核对登记结果未确认，请按原编号读取。'+str(exc))
+        return self._time_result(operation, action['day'])
 
     @staticmethod
     def _public_operation(operation):
@@ -107,20 +358,7 @@ class SchedulingService:
                 domain.attach(state, item['id'], event)
                 work_items.touch_item(item)
                 operation.update(state='linked', event=event)
-                # A confirmed event belongs in already loaded dates immediately. Invalidate
-                # overlapping reads started before this commit so they cannot hide it again.
-                for day, cached in state.get('schedule_days', {}).items():
-                    if (cached.get('calendar') or {}).get('id') != event['calendar_id']:
-                        continue
-                    a, b = day_range(day)
-                    rows = cached.get('events', [])
-                    previous = any(domain.event_key(e) == domain.event_key(event) for e in rows)
-                    belongs = datetime.fromisoformat(event['start']) < b and datetime.fromisoformat(event['end']) > a
-                    if previous or belongs:
-                        rows = [e for e in rows if domain.event_key(e) != domain.event_key(event)]
-                        if belongs: rows.append(copy.deepcopy(event))
-                        cached['events'] = sorted(rows, key=lambda e: (e['start'], e['event_id']))
-                        state.get('schedule_reads', {}).pop('day:'+day, None)
+                domain.cache_event(state, event)
             elif kind == 'unlink':
                 domain.detach(state, item['id'], operation['calendar_id'], operation['event_id'])
                 work_items.touch_item(item)
@@ -146,6 +384,8 @@ class SchedulingService:
         return page
 
     def change(self, action):
+        if isinstance(action, dict) and action.get('type') in {'retime', 'reconcile_time'}:
+            return self._change_time(action)
         operation, remote_started, event, local_commit, local_write = None, False, None, False, False
         day = datetime.now(TZ).date().isoformat()
         try:
@@ -156,7 +396,12 @@ class SchedulingService:
             if kind not in {'create', 'link', 'unlink', 'resolve'}: raise ValueError('不支持的日程操作。')
             day = action.get('day', day); day_range(day)
             fingerprint = hashlib.sha256(json.dumps(action, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-            with self.board.hold_item(item_id):
+            with self.board.hold_item(item_id), ExitStack() as event_leases:
+                if kind in {'link', 'unlink'} or (kind == 'resolve' and action.get('event_id')):
+                    calendar_id, event_id = identifier(action.get('calendar_id')), identifier(action.get('event_id'))
+                    event_leases.enter_context(self.hold_event(calendar_id, event_id))
+                    with self.board.workspace_transaction() as (state, _):
+                        domain.require_time_idle(state, calendar_id, event_id)
                 with self.board.workspace_transaction() as (state, _):
                     ops = state.setdefault('schedule_operations', {})
                     existing = ops.get(request_id)

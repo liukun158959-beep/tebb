@@ -11,6 +11,21 @@ importers:
       '@dnd-kit/core':
         specifier: 6.3.1
         version: 6.3.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@fullcalendar/core':
+        specifier: 6.1.22
+        version: 6.1.22
+      '@fullcalendar/interaction':
+        specifier: 6.1.22
+        version: 6.1.22(@fullcalendar/core@6.1.22)
+      '@fullcalendar/luxon3':
+        specifier: 6.1.22
+        version: 6.1.22(@fullcalendar/core@6.1.22)(luxon@3.7.2)
+      '@fullcalendar/react':
+        specifier: 6.1.22
+        version: 6.1.22(@fullcalendar/core@6.1.22)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@fullcalendar/timegrid':
+        specifier: 6.1.22
+        version: 6.1.22(@fullcalendar/core@6.1.22)
       '@tauri-apps/api':
         specifier: ^2
         version: 2.11.1
@@ -23,6 +38,9 @@ importers:
       framer-motion:
         specifier: ^11.11.0
         version: 11.18.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      luxon:
+        specifier: 3.7.2
+        version: 3.7.2
       pixi-live2d-display:
         specifier: 0.4.0
         version: 0.4.0(0736f5bd67d2e4de7e9fff36ad63fa2e)
@@ -333,6 +351,37 @@ packages:
 
   '@floating-ui/utils@0.2.12':
     resolution: {integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==}
+
+  '@fullcalendar/core@6.1.22':
+    resolution: {integrity: sha512-ju5PJUE++zr8XXCGtlXlrodF6doUy9BDfzx+VmE0B+XDBM2A5cUi/aU3M1ANfw/StmKhwqew7Ps7bXMiv/JREg==}
+
+  '@fullcalendar/daygrid@6.1.22':
+    resolution: {integrity: sha512-cpom5+bAvsGG5nX+snsCtpMIyyhAr+QlseD9mhz5Vq7rMBTzx43mSkz6IBvQ3vz5h2idbDmT1cggEn/dzZwt9Q==}
+    peerDependencies:
+      '@fullcalendar/core': ~6.1.22
+
+  '@fullcalendar/interaction@6.1.22':
+    resolution: {integrity: sha512-r8Njw8aPNFGRwDjVAh9NTh3ZJib5tcUoLi/BM4uYJt5Cs9tDiirmImaqxhx56hclVFX7ktd5CdaMX0+ArSbm5A==}
+    peerDependencies:
+      '@fullcalendar/core': ~6.1.22
+
+  '@fullcalendar/luxon3@6.1.22':
+    resolution: {integrity: sha512-or43T5SQAzb3d8U6Th6Q3vclas8rGEYSsJsUohC+jySJyJuqCLcqgW+NnbrSYIYXx3MUUk32h8au+BEjfjuo1A==}
+    peerDependencies:
+      '@fullcalendar/core': ~6.1.22
+      luxon: ^3.0.0
+
+  '@fullcalendar/react@6.1.22':
+    resolution: {integrity: sha512-H7woM4nhvXjyM4Up2D3iSp5f8o3pRPGkiHRixvxxvIMdSMBxboGTqCI7T/vjnAfz5TCxXdeX5HxmSHeANsa6gg==}
+    peerDependencies:
+      '@fullcalendar/core': ~6.1.22
+      react: ^16.7.0 || ^17 || ^18 || ^19
+      react-dom: ^16.7.0 || ^17 || ^18 || ^19
+
+  '@fullcalendar/timegrid@6.1.22':
+    resolution: {integrity: sha512-gNMtkXrkfN3iszXty+pYbJwGxcozL0xBVKYmEd1lm0DMEbrffpVJyV+vifmtl/eIbWCNRWrMWUtGLbYy/ukykA==}
+    peerDependencies:
+      '@fullcalendar/core': ~6.1.22
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -1809,6 +1858,10 @@ packages:
     peerDependencies:
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0-rc
 
+  luxon@3.7.2:
+    resolution: {integrity: sha512-vtEhXh/gNjI9Yg1u4jX/0YVPMvxzHuGgCm6tC5kZyb08yjGWGnqAjGJvcXbqQR2P3MyMEFnRbpcdFS6PBcLqew==}
+    engines: {node: '>=12'}
+
   make-dir@3.1.0:
     resolution: {integrity: sha512-g3FeP20LNwhALb/6Cz6Dd4F2ngze0jz7tbzrD2wAV+o9FeNHe4rL+yK2md0J/fiSf1sa1ADhXqi5+oVwOM/eGw==}
     engines: {node: '>=8'}
@@ -2125,6 +2178,9 @@ packages:
   postcss@8.5.28:
     resolution: {integrity: sha512-RRuzqDtt5Y9h3quz5hWhK+TPnsmVs6WwSU6LkJMeY4HstUEDuYTG8UJSdawMRzmzAtV+KEoG8N3Qg2qLy5vM/A==}
     engines: {node: ^10 || ^12 || >=14}
+
+  preact@10.12.1:
+    resolution: {integrity: sha512-l8386ixSsBdbreOAkqtrwqHwdvR35ID8c3rKPa8lCWuO86dBi32QWHV4vfsZK1utLLFMvw+Z5Ad4XLkZzchscg==}
 
   promise-polyfill@8.3.0:
     resolution: {integrity: sha512-H5oELycFml5yto/atYqmjyigJoAo3+OXwolYiH7OfQuYlAqhxNvTfiNMbV9hsC6Yp83yE5r2KTVmtrG6R9i6Pg==}
@@ -2688,6 +2744,34 @@ snapshots:
       react-dom: 18.3.1(react@18.3.1)
 
   '@floating-ui/utils@0.2.12': {}
+
+  '@fullcalendar/core@6.1.22':
+    dependencies:
+      preact: 10.12.1
+
+  '@fullcalendar/daygrid@6.1.22(@fullcalendar/core@6.1.22)':
+    dependencies:
+      '@fullcalendar/core': 6.1.22
+
+  '@fullcalendar/interaction@6.1.22(@fullcalendar/core@6.1.22)':
+    dependencies:
+      '@fullcalendar/core': 6.1.22
+
+  '@fullcalendar/luxon3@6.1.22(@fullcalendar/core@6.1.22)(luxon@3.7.2)':
+    dependencies:
+      '@fullcalendar/core': 6.1.22
+      luxon: 3.7.2
+
+  '@fullcalendar/react@6.1.22(@fullcalendar/core@6.1.22)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
+    dependencies:
+      '@fullcalendar/core': 6.1.22
+      react: 18.3.1
+      react-dom: 18.3.1(react@18.3.1)
+
+  '@fullcalendar/timegrid@6.1.22(@fullcalendar/core@6.1.22)':
+    dependencies:
+      '@fullcalendar/core': 6.1.22
+      '@fullcalendar/daygrid': 6.1.22(@fullcalendar/core@6.1.22)
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
@@ -4054,6 +4138,8 @@ snapshots:
     dependencies:
       react: 18.3.1
 
+  luxon@3.7.2: {}
+
   make-dir@3.1.0:
     dependencies:
       semver: 6.3.1
@@ -4592,6 +4678,8 @@ snapshots:
       nanoid: 3.3.19
       picocolors: 1.1.1
       source-map-js: 1.2.1
+
+  preact@10.12.1: {}
 
   promise-polyfill@8.3.0: {}
 

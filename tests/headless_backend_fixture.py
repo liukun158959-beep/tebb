@@ -10,7 +10,7 @@ sys.meta_path.insert(0, NoGui(BACKEND_FORBIDDEN))
 
 from desk_companion.local_api import server
 from desk_companion.tasks import TaskManager
-from tests.schedule_fixture import FakeCalendar
+from tests.schedule_fixture import TimeCalendar
 
 
 def manager():
@@ -19,7 +19,7 @@ def manager():
 
 
 with ExitStack() as stack:
-    stack.enter_context(patch('desk_companion.scheduling.CalendarAdapter',return_value=FakeCalendar()))
+    stack.enter_context(patch('desk_companion.scheduling.CalendarAdapter',return_value=TimeCalendar()))
     stack.enter_context(patch('desk_companion.feishu_agent.FeishuAgent.autostart'))
     stack.enter_context(patch('desk_companion.tasks.TaskManager', side_effect=manager))
     stack.enter_context(patch('desk_companion.github.list_owned_repos', return_value=[dict(full_name='test/repo')]))

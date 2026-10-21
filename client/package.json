@@ -6,15 +6,21 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test tests/board-actions.test.cjs tests/startup.test.cjs tests/onboarding.test.cjs tests/pet-assets.test.cjs tests/pet-menu.test.cjs tests/feishu-agent.test.cjs tests/agent-monitor.test.cjs tests/agent-debug.test.cjs tests/automation.test.cjs tests/release.test.cjs tests/video.test.cjs tests/local-sources.test.cjs tests/workspace.test.cjs tests/terminal.test.cjs tests/chat-prototype.test.cjs tests/live-collaboration.test.cjs tests/project-panel.test.cjs tests/pet-settings.test.cjs tests/pet-chat.test.cjs tests/work-board.test.cjs tests/schedule.test.cjs",
+    "test": "node --test tests/board-actions.test.cjs tests/startup.test.cjs tests/onboarding.test.cjs tests/pet-assets.test.cjs tests/pet-menu.test.cjs tests/feishu-agent.test.cjs tests/agent-monitor.test.cjs tests/agent-debug.test.cjs tests/automation.test.cjs tests/release.test.cjs tests/video.test.cjs tests/local-sources.test.cjs tests/workspace.test.cjs tests/terminal.test.cjs tests/chat-prototype.test.cjs tests/live-collaboration.test.cjs tests/project-panel.test.cjs tests/pet-settings.test.cjs tests/pet-chat.test.cjs tests/work-board.test.cjs tests/schedule.test.cjs tests/schedule-week.test.cjs",
     "tauri": "tauri"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",
+    "@fullcalendar/core": "6.1.22",
+    "@fullcalendar/interaction": "6.1.22",
+    "@fullcalendar/luxon3": "6.1.22",
+    "@fullcalendar/react": "6.1.22",
+    "@fullcalendar/timegrid": "6.1.22",
     "@tauri-apps/api": "^2",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "framer-motion": "^11.11.0",
+    "luxon": "3.7.2",
     "pixi-live2d-display": "0.4.0",
     "pixi.js": "6.5.10",
     "react": "^18.3.1",

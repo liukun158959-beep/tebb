@@ -5,6 +5,13 @@ import re
 TZ = timezone(timedelta(hours=8))
 
 
+def day_range(day):
+    if not isinstance(day, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', day):
+        raise ValueError('日期须为 YYYY-MM-DD。')
+    start = datetime.fromisoformat(day).replace(tzinfo=TZ)
+    return start, start + timedelta(days=1)
+
+
 _EVENT_TIME = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})$"
 )

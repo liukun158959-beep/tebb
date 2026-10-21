@@ -1234,6 +1234,47 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(repaired['ok'],repaired);self.assertEqual(len(calendar.creates),1)
         self.assertIsNone(self.host._collaboration)
 
+    async def test_week_retime_auth_disconnect_and_reconcile_do_not_replay_external_edit(self):
+        import uuid, threading
+        from tests.schedule_fixture import TimeCalendar, DAY, START, END
+        from websockets.exceptions import ConnectionClosed
+        calendar=TimeCalendar();self.host.scheduling.calendar=calendar
+        self.host.conversation.running=True
+        self.assertTrue((await self.notebook_rpc('load_schedule_week',day=DAY,refresh=True))['events_valid'])
+        inspected=await self.notebook_rpc('inspect_schedule_event',calendar_id='calendar-one',event_id='existing_0')
+        self.assertTrue(inspected['event']['editable'])
+        entered,release=threading.Event(),threading.Event();original=calendar.patch_time
+        self.addCleanup(release.set)
+        request=dict(type='retime',request_id=uuid.uuid4().hex,calendar_id='calendar-one',event_id='existing_0',day=DAY,
+                     original_start=START,original_end=END,start=DAY+'T11:00:00+08:00',end=DAY+'T12:00:00+08:00')
+        def wait(*args):entered.set();release.wait(10);original(*args);raise TimeoutError('lost remote ack')
+        with patch.object(calendar,'patch_time',side_effect=wait):
+            async with connect(self.url,proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc',id='edit',method='change_schedule',args=dict(action=request))))
+                try:
+                    self.assertTrue(await asyncio.to_thread(entered.wait,5))
+                    self.assertTrue((await self.notebook_rpc('load_schedule_week',day=DAY))['ok'])
+                    self.assertFalse((await self.notebook_rpc('change_schedule',action={**request,'request_id':uuid.uuid4().hex}))['ok'])
+                    await ws.close()
+                finally:release.set()
+            for _ in range(100):
+                page=await self.notebook_rpc('load_schedule_week',day=DAY,request_id=request['request_id'])
+                if page['operation'] and page['operation']['state']=='unconfirmed':break
+                await asyncio.sleep(.02)
+        self.assertEqual(page['operation']['state'],'unconfirmed')
+        self.assertFalse((await self.notebook_rpc('change_schedule',action=request))['ok'])
+        checked=await self.notebook_rpc('inspect_schedule_event',calendar_id='calendar-one',event_id='existing_0')
+        event=checked['event']
+        result=await self.notebook_rpc('change_schedule',action=dict(type='reconcile_time',request_id=uuid.uuid4().hex,
+            operation_id=request['request_id'],calendar_id='calendar-one',event_id='existing_0',day=DAY,confirmed=True,
+            original_start=event['start'],original_end=event['end']))
+        self.assertTrue(result['ok'],result);self.assertEqual(len(calendar.patches),1)
+        with self.assertRaises(ConnectionClosed):
+            async with connect(self.url.replace('test-token','bad-token'),proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc',method='load_schedule_week',args=dict(day=DAY))))
+                await ws.recv()
+        self.host.conversation.running=False
+
     async def test_scheduling_rpc_wait_allows_other_items_reads_and_global_write_lock(self):
         import uuid, threading
         from tests.schedule_fixture import FakeCalendar, DAY, START, END

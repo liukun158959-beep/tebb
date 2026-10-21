@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { DndContext, DragOverlay, KeyboardSensor, PointerSensor, closestCenter, pointerWithin,
   useDraggable, useDroppable, useSensor, useSensors, type CollisionDetection } from '@dnd-kit/core';
 import { motion, useReducedMotion } from 'framer-motion';
@@ -10,6 +10,7 @@ import { beijingStamp } from './schedule-state';
 import { WorkBoardController, WORK_STATES, demoWorkTransport, workStateLabel, runStateLabel,
   type WorkFields, type WorkItem, type WorkState, type WorkRun, type WorkPage } from './work-board-state';
 import './work-board.css';
+const ScheduleWeekPane=lazy(()=>import('./schedule-week').then(module=>({default:module.ScheduleWeekPane})));
 
 type Props={info:BackendInfo|null;debug?:boolean;onOpen:(conversation:string)=>Promise<void>|void};
 const priorities={high:'高',normal:'中',low:'低'};
@@ -60,6 +61,7 @@ export function WorkBoardPane({info,debug=false,onOpen}:Props) {
   const [formError,setFormError]=useState(''),[detailError,setDetailError]=useState(''),[runId,setRunId]=useState(''),[linking,setLinking]=useState(false);
   const [dragging,setDragging]=useState<string|null>(null);
   const [scheduleTarget,setScheduleTarget]=useState<ScheduleTarget|null>(null),[leaveWork,setLeaveWork]=useState<null|(()=>void)>(null);
+  const [weekTarget,setWeekTarget]=useState<ScheduleTarget|null>(null);
   const leaveRoot=useRef<HTMLDivElement|null>(null);
   const draftRef=useRef(draft);draftRef.current=draft;
   const draftBase=useRef('');
@@ -71,7 +73,7 @@ export function WorkBoardPane({info,debug=false,onOpen}:Props) {
   useEffect(()=>controller.subscribe(redraw),[controller]);
   useEffect(()=>{if(!active||(!info&&!debug))return;void controller.load();const timer=window.setInterval(()=>{if(!controller.loading)void controller.load();},5000);return()=>window.clearInterval(timer);},[active,controller,info,debug]);
   const item=controller.items.find(i=>i.id===selected);
-  const drawer=!scheduleTarget&&(!!draft||!!item);
+  const drawer=!weekTarget&&!scheduleTarget&&(!!draft||!!item);
   useEffect(()=>{if(!drawer)return;const previous=document.activeElement as HTMLElement|null;formRoot.current?.querySelector<HTMLElement>('button,input')?.focus();return()=>{if(previous?.isConnected)previous.focus();};},[drawer,!!draft,selected]);
   useEffect(()=>{setRunId('');setLinking(false);setDetailError('');},[selected]);
   useEffect(()=>{if(leaveWork)leaveRoot.current?.querySelector<HTMLElement>('button')?.focus();},[!!leaveWork]);
@@ -80,7 +82,8 @@ export function WorkBoardPane({info,debug=false,onOpen}:Props) {
   function guardDraft(next:()=>void){if(draft&&JSON.stringify(draft)!==draftBase.current)setLeaveWork(()=>next);else next();}
   function close(){guardDraft(()=>{setDraft(null);setSelected('');setFormError('');formRequest.current='';});}
   function openSchedule(targetItem?:WorkItem){guardDraft(()=>{const event=targetItem?.schedules?.next||targetItem?.schedules?.previous||targetItem?.schedules?.events[0];setDraft(null);setScheduleTarget({item_id:targetItem?.id,...(event?{calendar_id:event.calendar_id,event_id:event.event_id,day:event.start.slice(0,10)}:{})});});}
-  function returnToItem(id:string){const targetItem=controller.items.find(i=>i.id===id);if(!targetItem){setDetailError('事项已不可用，请重新读取核对。');return;}setScheduleTarget(null);setProject('all');setQuery('');setArchived(targetItem.archived);setDraft(null);setSelected(id);void controller.load();}
+  function openWeek(target:ScheduleTarget={}){guardDraft(()=>{setDraft(null);setScheduleTarget(null);setWeekTarget(target);});}
+  function returnToItem(id:string){const targetItem=controller.items.find(i=>i.id===id);if(!targetItem){setDetailError('事项已不可用，请重新读取核对。');return;}setWeekTarget(null);setScheduleTarget(null);setProject('all');setQuery('');setArchived(targetItem.archived);setDraft(null);setSelected(id);void controller.load();}
   function recoverForm(){const key=draftRef.current?.id||'create',receipt=controller.completed.get(key);if(formRequest.current&&receipt?.request_id===formRequest.current&&!controller.uncertain.has(key)){setDraft(null);setSelected(receipt.item_id);setFormError('');formRequest.current='';}}
   async function refresh(){await controller.load(true);recoverForm();}
   async function retry(key:string){await controller.retry(key);recoverForm();}
@@ -98,13 +101,20 @@ export function WorkBoardPane({info,debug=false,onOpen}:Props) {
   const candidates=controller.page.runs.filter(run=>!item?.links.some(link=>link.id===run.id))
     .slice().sort((a,b)=>Number(b.project_id===item?.project_id)-Number(a.project_id===item?.project_id)||b.created-a.created);
   const fieldBusy=controller.pending.has(draft?.id||'create')||controller.uncertain.has(draft?.id||'create');
+  const schedulePane=scheduleTarget&&<SchedulePane key={scheduleTarget.item_id||'all'} info={info} debug={debug} transport={demo?.schedule}
+    target={scheduleTarget} onClose={()=>setScheduleTarget(null)} onReturn={returnToItem} onWeek={openWeek} onChange={()=>void controller.load()}/>;
+  if(weekTarget)return <div className="work-board" data-work-board data-demo={debug?'true':'false'}>
+    <Suspense fallback={<p role="status">正在打开周日程…</p>}><ScheduleWeekPane key={`${weekTarget.calendar_id||''}/${weekTarget.event_id||''}/${weekTarget.day||''}`} info={info} debug={debug} transport={demo?.schedule} target={weekTarget} revision={controller.page.revision}
+      onClose={()=>setWeekTarget(null)} onReturn={returnToItem} onDay={setScheduleTarget} onChange={()=>void controller.load()}/></Suspense>
+    {schedulePane}
+  </div>;
   return <div className="work-board" data-work-board data-demo={debug?'true':'false'}>
     <header className="wb-heading"><div><span className="wb-eyebrow">工作区 / 工作看板</span><h1>把事情一步步做完。</h1><p>研究、动手、验收，都有自己的位置。{debug&&' · 演示数据，未连接后端'}</p></div>
       <button type="button" className="wb-primary" onClick={create}>＋ 新增事项</button></header>
     <div className="wb-toolbar"><label className="wb-search"><span aria-hidden="true">⌕</span><input aria-label="搜索事项" placeholder="搜索事项" value={query} onChange={e=>setQuery(e.target.value)}/></label>
       <select aria-label="筛选项目" value={project} onChange={e=>setProject(e.target.value)}><option value="all">所有项目</option><option value="none">未归属项目</option>{controller.page.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select>
       <button type="button" aria-pressed={archived} onClick={()=>setArchived(value=>!value)}>{archived?'查看日常事项':'已归档'}</button>
-      <button type="button" onClick={()=>openSchedule()}>日程安排</button>
+      <button type="button" onClick={()=>openWeek()}>日程安排</button>
       <button type="button" disabled={controller.loading} onClick={()=>void refresh()}>{controller.loading?'读取中…':'刷新核对'}</button><span className="wb-sort">优先级 · 截止日期</span></div>
     {(controller.error||formError)&&<p className="wb-error" role="alert">{controller.error||formError}</p>}
     {[...controller.uncertain].map(([key,record])=><div className="wb-uncertain" role="alert" key={key}><div><strong>保存结果未确认</strong><p>{record.message}</p><small>操作编号：{record.action.request_id}</small></div><div><button type="button" onClick={()=>void refresh()} disabled={controller.loading}>重新读取核对</button><button type="button" onClick={()=>void retry(key)} disabled={controller.pending.has(key)}>手动重试原操作</button></div></div>)}
@@ -149,6 +159,6 @@ export function WorkBoardPane({info,debug=false,onOpen}:Props) {
       </>}
       {leaveWork&&<div className="sc-leave" role="alertdialog" aria-modal="true" aria-label="未保存的事项" ref={leaveRoot}><h3>事项有未保存修改</h3><button type="button" disabled={fieldBusy} onClick={()=>void save({preventDefault(){}} as React.FormEvent).then(ok=>{if(ok){const next=leaveWork;setLeaveWork(null);next();}})}>保存并继续</button><button type="button" disabled={controller.pending.has(draft?.id||'create')} onClick={()=>{const next=leaveWork;setDraft(null);setLeaveWork(null);next();}}>放弃修改并继续</button><button type="button" onClick={()=>setLeaveWork(null)}>继续编辑</button></div>}
     </aside></>}
-    {scheduleTarget&&<SchedulePane key={scheduleTarget.item_id||'all'} info={info} debug={debug} transport={demo?.schedule} target={scheduleTarget} onClose={()=>setScheduleTarget(null)} onReturn={returnToItem} onChange={()=>void controller.load()}/>}
+    {schedulePane}
   </div>;
 }
