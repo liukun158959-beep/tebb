@@ -354,4 +354,51 @@ pnpm --dir client build
 
 界面隔离演示：运行 `pnpm --dir client dev --host 127.0.0.1`，打开所输出端口的 `/client.html?debug=work`。该入口运行真实 WorkBoardPane 与控制器，但注入内存数据，明确显示“演示数据，未连接后端”；刷新恢复初始数据。可检查跨列拖拽、移至菜单/键盘、编辑、筛选、归档/恢复、关联与详情。界面复用全局主题和减少动效偏好。前端行为测试额外用延迟/乱序/断连替身验证连续拖动、失败恢复、旧草稿版本、逐卡核对与手动原编号重试。
 
-遇到 `conflict` 保留输入并重新读取；`unconfirmed` / `committed` 或调用超时保留操作编号，先查回执，不自动重发。找不到回执不代表后台肯定没执行；只有用户明确手动重试时复用原编号和内容。新移动不会覆盖其它事项，项目删除后旧版本必须冲突，归档或完成均不能改变 AI 运行状态。本批未调用真实模型/飞书写入，未验证打包后的 Tauri 实机，未发布版本；日程创建、双向定位和时间轴拖动属于 #123 后续批次。
+遇到 `conflict` 保留输入并重新读取；`unconfirmed` / `committed` 或调用超时保留操作编号，先查回执，不自动重发。找不到回执不代表后台肯定没执行；只有用户明确手动重试时复用原编号和内容。新移动不会覆盖其它事项，项目删除后旧版本必须冲突，归档或完成均不能改变 AI 运行状态。本批未调用真实模型/飞书写入，未验证打包后的 Tauri 实机，未发布版本；日程首批见下文，时间轴拖动仍属 #123 后续批次。
+
+## 事项日程联动验收
+
+完整规则与状态见 [日程首批](WORK_BOARD.md#日程联动首批136当前源码)。下列命令只使用临时数据和 FakeCalendar，不运行真实飞书 CLI，也不发通知：
+
+```powershell
+$env:PYTHONUTF8 = '1'
+@'
+import os, tempfile, uuid
+with tempfile.TemporaryDirectory() as root:
+    os.environ['DESK_COMPANION_DATA_DIR'] = root
+    from desk_companion.work_board import WorkBoardService
+    from desk_companion.scheduling import SchedulingService
+    from tests.schedule_fixture import FakeCalendar, DAY, START, END
+    board = WorkBoardService()
+    item = board.change(dict(type='create', request_id=uuid.uuid4().hex,
+                            fields=dict(title='离线日程验收')))['items'][0]
+    calendar = FakeCalendar()
+    service = SchedulingService(board, calendar)
+    service.load(DAY, item['id'], refresh=True)
+    action = dict(type='create', request_id=uuid.uuid4().hex, item_id=item['id'],
+                  version=item['version'], day=DAY, summary='隔离安排', start=START, end=END)
+    result = service.change(action)
+    assert result['ok'] and len(calendar.creates) == 1, result
+    assert service.change(action)['ok'] and len(calendar.creates) == 1
+    receipt = service.load(DAY, item['id'], request_id=action['request_id'])
+    assert receipt['operation']['state'] == 'linked' and len(receipt['links']) == 1
+    assert board.load()['items'][0]['state'] == 'todo'
+    print('schedule verified:', receipt['operation']['id'], receipt['links'][0]['event']['event_id'])
+'@ | python -
+
+python -m unittest tests.test_scheduling -v
+python -m unittest tests.test_local_api tests.test_headless_host -v
+pnpm --dir client test
+pnpm --dir client exec tsc --noEmit
+pnpm --dir client build
+```
+
+认证连接沿用现有 WebSocket token。读取例：`{"type":"rpc","id":"schedule-read","method":"load_schedule","args":{"day":"2026-10-22","item_id":"<真实事项ID>","refresh":false,"request_id":"<原操作编号>"}}`。修改用 `method=change_schedule, args.action`；操作字段见功能文档。必须同时检查派发 `ok` 与内层业务 `ok`，读取事项最新版本后再提交。调试服务注入 `SchedulingService(board, FakeCalendar())`，认证测试直接替换宿主的日程适配器；不要在真实用户目录造测试卡片，也不要为调试放开白名单。
+
+服务测试覆盖：原生 CLI 参数、UTC+8 绝对时间、单事件归属、保留原文/执行状态、按事项并发和旧日历资源竞争、网络期间数据库及 WRITES 可用、迟到读取、账号变化、远端回执丢失、已创建但本地登记失败、准备和提交确认丢失、刷新失败、重启只读核对，以及未登记原编号的封存。`test_local_api` 验证真实认证 RPC、断连核对和其他事项并行；`test_headless_host` 在 GUI 导入拦截下实际启动后台、注入假飞书并调用创建/读取链。服务不构造任务队列。
+
+浏览器 `/client.html?debug=work` 复用真实事项和日程组件，所有安排仅内存保存，刷新恢复初始值。可验收日期和起止时间选择、跨日、时长、全天只读、解除/重新关联、双向定位、归档列表自动揭示、筛选清除、未保存表单提示及键盘焦点。前端测试另外覆盖乱序读取、断连编号跨组件保留、不自动重发、未登记编号的明确核对和失败输入保留。
+
+排查先查 `operation.id/state/stage/event`，再查关联；未确认时不要再次创建。已知事件保留原 ID 和时间，读取错误不能解释为删除；“已保存但页面读取失败”先读本地关系。`refresh=false` 不连飞书，`true` 使用当前用户主日历的原生 `calendars primary / events instance_view / events get`，创建使用 `events create`，需要支持这些命令及 `--idempotency-key` 的现有 lark-cli；单命令超时 20 秒，RPC 等待 120 秒，后台可在连接中断后继续。本轮只验证假飞书和浏览器，真实 Feishu 写入、打包 Tauri 与实机另行验收；未发布版本。
+
+2026-10-21 验收记录：本批日程、看板、无 GUI 和新增认证 RPC 共 55 项检查、前端 149 项、类型与构建通过。Python 全量 615 项有 2 项等待超时，串行扩展组 96 项有 3 项等待超时；修改前 `016d56c` 的隔离归档也复现知识库、压缩与笔记的相同计时失败，未修改阈值或跳过断言。保留非全绿记录，独立诊断跟踪于 [#137](https://github.com/liukun158959-beep/tebb/issues/137)。

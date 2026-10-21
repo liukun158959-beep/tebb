@@ -1208,6 +1208,55 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         checked=await self.notebook_rpc('load_work_board',request_id=request['request_id'])
         self.assertTrue(checked['items'][0]['archived']);self.assertIsNotNone(checked['receipt'])
 
+    async def test_scheduling_authenticated_rpc_and_explicit_remote_create_recovery(self):
+        from tests.schedule_fixture import FakeCalendar, DAY, START, END
+        import uuid
+        calendar = FakeCalendar(); self.host.scheduling.calendar = calendar
+        item = (await self.notebook_rpc('change_work_item',action=dict(type='create',request_id=uuid.uuid4().hex,fields=dict(title='RPC schedule'))))['items'][0]
+        request=dict(type='create',request_id=uuid.uuid4().hex,item_id=item['id'],version=item['version'],day=DAY,
+                     summary='RPC arrangement',start=START,end=END)
+        original=calendar.create
+        def lose(*args): original(*args); raise TimeoutError('response lost')
+        calendar.create=lose
+        failure=await self.notebook_rpc('change_schedule',action=request)
+        self.assertEqual(failure['change_state'],'unconfirmed')
+        self.assertFalse((await self.notebook_rpc('change_schedule',action=request))['ok'])
+        self.assertEqual(len(calendar.creates),1)
+        page=await self.notebook_rpc('load_schedule',day=DAY,item_id=item['id'],refresh=True,request_id=request['request_id'])
+        self.assertTrue(page['events_valid']);self.assertEqual(page['operation']['state'],'unconfirmed')
+        repaired=await self.notebook_rpc('change_schedule',action=dict(type='resolve',request_id=uuid.uuid4().hex,
+            operation_id=request['request_id'],resolution='link',calendar_id='calendar-one',event_id='created-1_0',
+            item_id=item['id'],version=item['version'],day=DAY))
+        self.assertTrue(repaired['ok'],repaired);self.assertEqual(len(calendar.creates),1)
+        self.assertIsNone(self.host._collaboration)
+
+    async def test_scheduling_rpc_wait_allows_other_items_reads_and_global_write_lock(self):
+        import uuid, threading
+        from tests.schedule_fixture import FakeCalendar, DAY, START, END
+        from desk_companion.resource_lock import WRITES
+        calendar=FakeCalendar();self.host.scheduling.calendar=calendar
+        items=[]
+        for title in ('reserved','other'):
+            result=await self.notebook_rpc('change_work_item',action=dict(type='create',request_id=uuid.uuid4().hex,fields=dict(title=title)))
+            items.append(next(i for i in result['items'] if i['id']==result['receipt']['item_id']))
+        entered,release=threading.Event(),threading.Event();original=calendar.create
+        def wait(*args): entered.set();release.wait(10);return original(*args)
+        calendar.create=wait
+        self.host.conversation.running=True
+        pending=asyncio.create_task(self.notebook_rpc('change_schedule',_timeout=15,action=dict(type='create',
+            request_id=uuid.uuid4().hex,item_id=items[0]['id'],version=items[0]['version'],day=DAY,
+            summary='wait',start=START,end=END)))
+        try:
+            self.assertTrue(await asyncio.to_thread(entered.wait,5))
+            self.assertTrue((await self.notebook_rpc('load_schedule',day=DAY))['ok'])
+            for item,expected in ((items[0],False),(items[1],True)):
+                moved=await self.notebook_rpc('change_work_item',action=dict(type='move',request_id=uuid.uuid4().hex,id=item['id'],version=item['version'],state='doing'))
+                self.assertEqual(moved['ok'],expected,moved)
+            with WRITES.hold(blocking=False): pass
+        finally:
+            release.set();self.host.conversation.running=False
+        self.assertTrue((await pending)['ok'])
+
     async def test_headless_sessions_clear_and_isolate_data_without_gui_methods(self):
         from contextlib import ExitStack
         memory.append_chat('user', 'selected question', self.host.state.session_id)

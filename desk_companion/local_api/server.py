@@ -27,6 +27,7 @@ from .host import HeadlessApp
 # open_url/ask_today/ask_logs/close_board/send_chat）与流式（send_board_chat）不在此。
 RPC_METHODS = frozenset({
     "load_work_board", "change_work_item",
+    "load_schedule", "change_schedule",
     "load_collaboration", "collaboration_action", "project_workspace", "save_collaboration_note", "prepare_notebook_source",
     "terminal_status", "terminal_start", "terminal_list", "terminal_read", "terminal_input", "terminal_cancel",
     "terminal_files", "terminal_import_files", "terminal_preview_file",
@@ -175,7 +176,7 @@ def _dispatch(method: str, args: dict, preview=False) -> dict:
             from ..agent_debug import context
             with context(session=HOST.state.session_id, channel="backend"):
                 return target(**kwargs)
-        if method.startswith("terminal_") or method in {"load_work_board", "change_work_item", "compress_context", "load_chat_log", "load_memory",
+        if method.startswith("terminal_") or method in {"load_schedule", "change_schedule", "load_work_board", "change_work_item", "compress_context", "load_chat_log", "load_memory",
                       "load_notebook", "new_notebook", "save_notebook_note", "delete_notebook_note",
                       "export_notebook_markdown", "export_notebook_feishu", "open_notebook_file",
                       "reveal_notebook_file", "delete_notebook_file",

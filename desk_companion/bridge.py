@@ -42,6 +42,12 @@ class Bridge:
     def change_work_item(self, action: dict) -> dict:
         return self._host.work_board.change(action)
 
+    def load_schedule(self, day, item_id='', refresh=False, request_id='') -> dict:
+        return self._host.scheduling.load(day, item_id, refresh, request_id)
+
+    def change_schedule(self, action: dict) -> dict:
+        return self._host.scheduling.change(action)
+
     def collaboration_action(self, action: dict) -> dict:
         return self._host.collaboration.action(action)
 

@@ -1,14 +1,9 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const fs=require('node:fs');const path=require('node:path');const Module=require('node:module');const ts=require('typescript');
 const React=require('react');const {act,create}=require('react-test-renderer');
-function load(name,mocks={}){
-  const filename=path.resolve(__dirname,'../src/client',name);
-  const code=ts.transpileModule(fs.readFileSync(filename,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,target:ts.ScriptTarget.ES2022}}).outputText;
-  const mod=new Module(filename,module);mod.filename=filename;mod.paths=Module._nodeModulePaths(path.dirname(filename));
-  const original=mod.require.bind(mod);mod.require=id=>Object.hasOwn(mocks,id)?mocks[id]:original(id);mod._compile(code,filename);return mod.exports;
-}
-const state=load('work-board-state.ts');
+const load=require('./load-client.cjs');
+const scheduleState=load('schedule-state.ts');
+const state=load('work-board-state.ts',{'./schedule-state':scheduleState});
 const clone=value=>structuredClone(value);
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function fixture(){const page=state.workBoardFixture();page.items=page.items.slice(0,2);return page;}
@@ -91,7 +86,7 @@ test('plan execution success does not disguise unfinished delivery',()=>{
 
 test('real component creates, moves, archives, restores and preserves its edit form',async()=>{
   global.crypto=require('node:crypto').webcrypto;global.window={setInterval:()=>1,clearInterval(){}};global.document={activeElement:null};
-  let dragProps;
+  let dragProps,scheduleProps;
   const wrapper=tag=>React.forwardRef((props,ref)=>React.createElement(tag,{...props,ref},props.children));
   const dnd={DndContext:props=>{dragProps=props;return React.createElement('div',{},props.children);},DragOverlay:()=>null,
     KeyboardSensor(){},PointerSensor(){},closestCenter(){},pointerWithin:()=>[],useDraggable:()=>({setNodeRef(){},setActivatorNodeRef(){},attributes:{},listeners:{},isDragging:false}),useDroppable:()=>({setNodeRef(){},isOver:false}),useSensor(){},useSensors:()=>[]};
@@ -99,7 +94,7 @@ test('real component creates, moves, archives, restores and preserves its edit f
   const componentState={...state,WorkBoardController:class extends state.WorkBoardController {
     constructor(transport){super(async(method,args)=>{const page=await transport(method,args);return projectRemoved?{...page,projects:[],items:page.items.map(item=>({...item,project_id:'',project_name:'',version:item.version+1}))}:page;});}
   }};
-  const {WorkBoardPane}=load('work-board.tsx',{'./api':{},'./page-stack':{usePageActive:()=>true},'./work-board-state':componentState,
+  const {WorkBoardPane}=load('work-board.tsx',{'./api':{},'./page-stack':{usePageActive:()=>true},'./work-board-state':componentState,'./schedule-state':scheduleState,'./schedule':{SchedulePane:props=>{scheduleProps=props;return null;}},
     './Markdown':{Markdown:({text})=>React.createElement('p',{},text)},'./work-board.css':{},'@dnd-kit/core':dnd,'framer-motion':{motion:{article:wrapper('article')},useReducedMotion:()=>true}});
   let view;await act(async()=>{view=create(React.createElement(WorkBoardPane,{info:null,debug:true,onOpen(){throw Error('real navigation forbidden');}}));});
   const button=label=>view.root.findAllByType('button').find(b=>(b.children||[]).join('')===label);
@@ -115,6 +110,18 @@ test('real component creates, moves, archives, restores and preserves its edit f
   await act(async()=>button('恢复事项').props.onClick());assert.equal(article().props['data-state'],'review');
   act(()=>button('编辑事项').props.onClick());assert.equal(view.root.findByProps({'aria-label':'事项标题'}).props.value,'真实组件新事项');
   act(()=>view.root.findByProps({'aria-label':'关闭事项详情'}).props.onClick());
+  act(()=>button('真实组件新事项').props.onClick());
+  await act(async()=>button('归档事项').props.onClick());
+  act(()=>view.root.findByProps({'aria-label':'关闭事项详情'}).props.onClick());
+  act(()=>view.root.findByProps({'aria-label':'搜索事项'}).props.onChange({target:{value:'挡住目标的搜索'}}));
+  act(()=>view.root.findByProps({'aria-label':'筛选项目'}).props.onChange({target:{value:'Atlas'}}));
+  act(()=>button('日程安排').props.onClick());
+  await act(async()=>scheduleProps.onReturn(id));
+  assert.equal(view.root.findByProps({'aria-label':'搜索事项'}).props.value,'');
+  assert.equal(view.root.findByProps({'aria-label':'筛选项目'}).props.value,'all');
+  assert(rendered().includes('已归档事项'));assert(rendered().includes('真实组件新事项'));
+  act(()=>view.root.findByProps({'aria-label':'关闭事项详情'}).props.onClick());
+  act(()=>button('查看日常事项').props.onClick());
   act(()=>view.root.findByProps({'aria-label':'筛选项目'}).props.onChange({target:{value:'tebb'}}));
   projectRemoved=true;await act(async()=>button('刷新核对').props.onClick());
   assert.equal(view.root.findByProps({'aria-label':'筛选项目'}).props.value,'none');

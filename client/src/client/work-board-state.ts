@@ -1,8 +1,9 @@
+import { createScheduleDemo, type ScheduleTransport, type CalendarEvent } from './schedule-state';
 export const WORK_STATES = [['todo','待办'],['doing','进行中'],['review','待验收'],['done','已完成']] as const;
 export type WorkState = typeof WORK_STATES[number][0];
 export type WorkFields = { title: string; description: string; project_id: string; priority: 'high'|'normal'|'low'; due: string };
 export type WorkLink = { id: string; title: string; conversation: string; project_name: string };
-export type WorkItem = WorkFields & { id: string; state: WorkState; archived: boolean; version: number; created: number; updated: number; links: WorkLink[]; project_name: string; removed_project: string };
+export type WorkItem = WorkFields & { id: string; state: WorkState; archived: boolean; version: number; created: number; updated: number; links: WorkLink[]; project_name: string; removed_project: string; schedules?:{events:CalendarEvent[];next:CalendarEvent|null;unchecked:boolean;previous:CalendarEvent|null} };
 export type WorkRun = { id: string; title: string; conversation: string; conversation_title: string; project_id: string; project_name: string; agent: string; state: string; delivery_state: string; kind: string; status: string; error: string; answer: string; created: number };
 export type WorkReceipt = { request_id: string; item_id: string; version: number; operation: string };
 export type WorkPage = { ok: boolean; revision: number; items: WorkItem[]; projects: { id: string; name: string }[]; runs: WorkRun[]; receipt?: WorkReceipt|null; error?: string; conflict?: boolean; change_state?: string };
@@ -121,9 +122,9 @@ export function workBoardFixture():WorkPage {
   ];
   return {ok:true,revision:1,projects:[{id:'tebb',name:'tebb'},{id:'atlas',name:'Atlas'}],items:cards,runs:[{id:'demo-run',title:'模型连接处理',conversation:'demo-chat',conversation_title:'码可私聊',project_id:'tebb',project_name:'tebb',agent:'码可',state:'running',delivery_state:'',kind:'task',status:'演示：正在检查错误回执',error:'',answer:'',created:1}]};
 }
-export function demoWorkTransport():WorkTransport {
+export function demoWorkTransport():WorkTransport&{schedule:ScheduleTransport} {
   let page=workBoardFixture();const receipts=new Map<string,WorkReceipt>();let count=0;
-  return async(method,args={})=>{
+  const transport:WorkTransport=async(method,args={})=>{
     if(method==='load_work_board')return structuredClone({...page,receipt:receipts.get(String(args.request_id))||null});
     const action=args.action as WorkAction;
     if(receipts.has(action.request_id))return structuredClone({...page,receipt:receipts.get(action.request_id)});
@@ -139,4 +140,5 @@ export function demoWorkTransport():WorkTransport {
     const receipt={request_id:action.request_id,item_id:item!.id,version:item!.version,operation:action.type};receipts.set(action.request_id,receipt);
     return structuredClone({...page,receipt});
   };
+  return Object.assign(transport,{schedule:createScheduleDemo(()=>page)});
 }

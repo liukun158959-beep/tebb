@@ -8,12 +8,12 @@ import re
 from contextlib import contextmanager
 from functools import wraps
 from .resource_lock import ResourceLock
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .feishu_tools import AUTH_HINT, _run_lark
 
-TZ = timezone(timedelta(hours=8))
+from .calendar_time import TZ, parse_event_time as _parse_event_time
 TODAY_KEYS = (
     "date",
     "fetched_at",
@@ -34,7 +34,7 @@ class BoardChangeError(RuntimeError):
 
 
 @contextmanager
-def _operation():
+def calendar_operation():
     if not _OPERATION.acquire(blocking=False):
         raise BoardChangeError('看板正在更新，完成后再操作；已有当天缓存仍可读取。',
             change_state='not_changed', stage='admission', remote_state='not_started', cache_state='not_started')
@@ -42,6 +42,10 @@ def _operation():
         yield
     finally:
         _OPERATION.__exit__()
+
+
+# Kept for existing worker/test callers; public consumers use calendar_operation.
+_operation = calendar_operation
 
 
 def _synced(fn):
@@ -408,24 +412,6 @@ def _remote_update(args, day, section, target, *, allow_no_cache=False):
         identity = ' '.join(f'{key}={details[key]}' for key in ('event_id', 'guid', 'summary', 'start', 'end', 'due_at') if details.get(key))
         raise BoardChangeError(f'{prefix}（{details["stage"]}）：{exc}。{identity} 请先核对结果，不要直接重复提交。',
                                **details) from exc
-
-
-_EVENT_TIME = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})$"
-)
-
-
-def _parse_event_time(value: object, label: str) -> datetime:
-    if type(value) is not str or not _EVENT_TIME.match(value):
-        raise RuntimeError(f"{label}必须是带时区的时间，例如 2026-10-06T15:00:00+08:00。")
-    text = value[:-1] + "+00:00" if value.endswith("Z") else value
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError as exc:
-        raise RuntimeError(f"{label}无法解析：{value}") from exc
-    if parsed.tzinfo is None:
-        raise RuntimeError(f"{label}必须带时区。")
-    return parsed
 
 
 @_synced

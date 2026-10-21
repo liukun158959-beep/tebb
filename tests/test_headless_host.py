@@ -202,6 +202,16 @@ assert_no_gui()
             result = json.loads(await asyncio.wait_for(ws.recv(), 10))['result']['result']
             self.assertTrue(result['ok'], result)
             self.assertEqual(result['items'][0]['state'], 'review')
+            from tests.schedule_fixture import DAY, START, END
+            item=result['items'][0]
+            action=dict(type='create',request_id='headless-schedule',item_id=item['id'],version=item['version'],
+                        day=DAY,summary='offline schedule',start=START,end=END)
+            await ws.send(json.dumps(dict(type='rpc',id='schedule-create',method='change_schedule',args=dict(action=action))))
+            result=json.loads(await asyncio.wait_for(ws.recv(),10))['result']['result']
+            self.assertTrue(result['ok'],result)
+            await ws.send(json.dumps(dict(type='rpc',id='schedule-read',method='load_schedule',args=dict(day=DAY,item_id=item['id'],refresh=True))))
+            result=json.loads(await asyncio.wait_for(ws.recv(),10))['result']['result']
+            self.assertTrue(result['events_valid']);self.assertEqual(len(result['links']),1)
             for method in ('close_board','send_chat','does_not_exist'):
                 await ws.send(json.dumps(dict(type='rpc', id=method, method=method)))
                 self.assertFalse(json.loads(await ws.recv())['result']['ok'])

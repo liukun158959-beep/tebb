@@ -45,10 +45,12 @@ def _catalog(state):
 
 
 def public_page(state):
+    from .schedule_domain import item_schedule_view
     projects, runs = _catalog(state)
     names = {p['id']: p['name'] for p in projects}
     items = copy.deepcopy(state.get('work_items', []))
     for item in items:
+        item['schedules'] = item_schedule_view(state, item['id'])
         item['project_name'] = names.get(item['project_id'], '')
         # Handle data restored from a snapshot without its original project too.
         if item['project_id'] and item['project_id'] not in names:
@@ -83,6 +85,23 @@ def _fields(payload, state):
                 project_name_snapshot=name, removed_project='', priority=priority, due=due)
 
 
+def require_item(state, item_id):
+    item = next((i for i in state.get('work_items', []) if i['id'] == item_id), None)
+    if item is None:
+        raise BoardRuleError('事项不存在，请重新读取。')
+    return item
+
+
+def check_version(item, version):
+    if type(version) is not int or version != item['version']:
+        raise BoardRuleError('事项已被其他操作更新，请重新读取后再操作。', conflict=True)
+
+
+def touch_item(item):
+    item['version'] += 1
+    item['updated'] = time.time()
+
+
 def apply_change(state, action):
     kind = action.get('type')
     items = state.setdefault('work_items', [])
@@ -94,11 +113,8 @@ def apply_change(state, action):
                     version=1, created=time.time(), updated=time.time(), links=[])
         items.append(item)
         return item
-    item = next((i for i in items if i['id'] == action.get('id')), None)
-    if item is None:
-        raise BoardRuleError('事项不存在，请重新读取。')
-    if type(action.get('version')) is not int or action['version'] != item['version']:
-        raise BoardRuleError('事项已被其他操作更新，请重新读取后再操作。', conflict=True)
+    item = require_item(state, action.get('id'))
+    check_version(item, action.get('version'))
     if kind == 'save':
         item.update(_fields(action.get('fields'), state))
     elif kind == 'move':
@@ -124,6 +140,5 @@ def apply_change(state, action):
         item['links'] = [link for link in item['links'] if link['id'] != action.get('run_id')]
     else:
         raise BoardRuleError('不支持的事项操作。')
-    item['version'] += 1
-    item['updated'] = time.time()
+    touch_item(item)
     return item

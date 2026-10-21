@@ -37,6 +37,7 @@
 .wb-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--wb-muted);margin-top:17px}
 .wb-high{color:hsl(var(--destructive,0 65% 55%))}
 .wb-ai{display:flex;align-items:center;gap:6px;border-top:1px solid var(--wb-line);padding-top:10px;margin-top:12px;font-size:11px;color:var(--wb-muted);overflow-wrap:anywhere}
+.work-board .wb-schedule-summary{display:block;text-align:left;font-size:11px!important;background:var(--wb-soft)!important;border:0!important;margin-top:10px;max-width:100%;overflow-wrap:anywhere}
 .wb-avatar{display:inline-flex;align-items:center;justify-content:center;flex:none;width:21px;height:21px;border-radius:5px;background:var(--wb-soft);color:var(--wb-accent);font-size:11px}
 .wb-card-bottom{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:5px;margin-top:9px;color:var(--wb-muted);font-size:11px}
 .work-board .wb-card-bottom select{background:transparent;border:0;font-size:11px;padding:3px 0;max-width:100%}

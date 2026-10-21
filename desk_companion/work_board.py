@@ -1,5 +1,5 @@
 """User-owned work items; execution state and scheduling remain in their domains."""
-from contextlib import closing
+from contextlib import closing, contextmanager, nullcontext
 import hashlib
 import json
 from pathlib import Path
@@ -9,6 +9,7 @@ import threading
 
 from . import work_items
 from .work_items import BoardRuleError
+from .resource_lock import ResourceLock
 
 
 class WorkBoardService:
@@ -31,15 +32,34 @@ class WorkBoardService:
             self._ready = True
 
     @staticmethod
-    def _request_id(value):
+    def validate_request_id(value):
         if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,100}', value):
             raise BoardRuleError('缺少有效的事项操作编号，请刷新后重试。')
         return value
 
+    @contextmanager
+    def workspace_transaction(self):
+        """Shared short durable transaction; callers must keep network IO outside."""
+        self._ensure()
+        from .collaboration import transaction
+        with transaction(self.path) as result:
+            yield result
+
+    @contextmanager
+    def hold_item(self, item_id):
+        """Per-item admission, shared with scheduling across threads/processes."""
+        lock = ResourceLock(f'work-item:{self.path.resolve()}:{item_id}')
+        if not lock.acquire(blocking=False):
+            raise BoardRuleError('此事项正在保存或安排时间，请稍后操作。')
+        try:
+            yield
+        finally:
+            lock.__exit__()
+
     def load(self, request_id=''):
         try:
             if request_id:
-                self._request_id(request_id)
+                self.validate_request_id(request_id)
             self._ensure()
             from .collaboration import transaction
             with transaction(self.path) as (state, db):
@@ -54,13 +74,13 @@ class WorkBoardService:
         request_id = action.get('request_id', '') if isinstance(action, dict) else ''
         attempted, receipt = False, None
         try:
-            self._request_id(request_id)
+            self.validate_request_id(request_id)
             if not isinstance(action.get('type'), str):
                 raise BoardRuleError('事项操作无效。')
             fingerprint = hashlib.sha256(json.dumps(action, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
             self._ensure()
             from .collaboration import transaction
-            with transaction(self.path) as (state, db):
+            with (self.hold_item(action.get('id')) if action.get('type') != 'create' else nullcontext()), transaction(self.path) as (state, db):
                 row = db.execute('SELECT fingerprint,result FROM work_receipts WHERE id=?', (request_id,)).fetchone()
                 if row:
                     if row[0] != fingerprint:

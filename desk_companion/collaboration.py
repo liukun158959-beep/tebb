@@ -216,7 +216,9 @@ class Collaboration:
         from .model_catalog import public_catalog
         with self.lock, transaction(self.path) as (state, _):
             result = copy.deepcopy(state)
-        result.pop("work_items", None)  # Business cards have their own authenticated service.
+        # Business items and calendar receipts have their own authenticated services.
+        for key in ("work_items", "schedule_links", "schedule_operations", "schedule_days", "schedule_reads", "schedule_read_version"):
+            result.pop(key, None)
         # Internal snapshots/keys/worker requests never cross the browser boundary.
         for run in result["runs"]:
             for key in ("input", "agent_config", "members", "context", "cursor", "task", "attempt", "parent_draft", "source_evidence", "selection", "compress_ids", "public_answer"):

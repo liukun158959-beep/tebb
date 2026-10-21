@@ -50,6 +50,7 @@ function shiftMonth(year: number, month: number, delta: number): { y: number; m:
 }
 
 export function DateTimeField(props: {
+  portalRoot?: HTMLElement | null;
   marker: "start" | "end";
   placeholder: string;
   value: string;
@@ -81,7 +82,8 @@ export function DateTimeField(props: {
     setClock({ h: next?.h ?? base.h, min: next?.min ?? base.min });
     const rect = buttonRef.current?.getBoundingClientRect();
     if (rect) {
-      setBox({ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, window.innerWidth - 296)) });
+      const height=panelRef.current?.getBoundingClientRect().height||520;
+      setBox({ top: Math.max(8,Math.min(rect.bottom+6,window.innerHeight-height-8)), left: Math.max(8, Math.min(rect.left, window.innerWidth - 296)) });
     }
     function onDoc(ev: MouseEvent) {
       const target = ev.target as Node;
@@ -127,7 +129,7 @@ export function DateTimeField(props: {
             <div
               ref={panelRef}
               data-datetime-panel={props.marker}
-              className="fixed z-[80] w-[280px] border border-border bg-card p-3 text-foreground"
+              className="fixed z-[80] max-h-[calc(100vh-16px)] w-[280px] overflow-y-auto border border-border bg-card p-3 text-foreground"
               style={{ top: box.top, left: box.left }}
             >
               <div className="mb-2 flex items-center justify-between">
@@ -195,7 +197,7 @@ export function DateTimeField(props: {
                 ))}
               </div>
             </div>,
-            document.body,
+            props.portalRoot || document.body,
           )
         : null}
     </>
