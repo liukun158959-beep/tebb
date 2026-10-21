@@ -313,3 +313,45 @@ python -m unittest discover -s tests -v
 直接服务调试可在隔离目录构造 `HeadlessApp()`，通过 `bridge` 或各业务服务调用；独立构造不替代生产入口的数据目录运行权，也不要在正在运行的真实数据目录构造第二个 TaskManager。正式后台仍运行 `python -m desk_companion.local_api.server --port <空闲端口> --token <临时令牌>`；该入口会使用真实配置与飞书自动连接，离线验收优先运行上述测试，不要将令牌或用户数据写入报告。
 
 本批保留系统文件选择、打开/定位、Windows 平台约束与现有退出顺序，不新增任意执行接口或后台重试。真实模型、飞书写入/消息、完整 GUI 实机、沙箱与发布包需分别验收；本批不发布，也不启动 Gugu 产品需求。见 [#135](https://github.com/liukun158959-beep/tebb/issues/135)。
+
+## 业务工作看板验收
+
+范围与协议见 [业务看板](WORK_BOARD.md)；直接服务不构造 GUI 或任务管理器，不连接模型或飞书。以下命令从仓库根目录运行，自动使用临时数据，禁止指向正在运行的用户目录：
+
+```powershell
+$env:PYTHONUTF8 = '1'
+@'
+import os, tempfile, uuid
+with tempfile.TemporaryDirectory() as root:
+    os.environ['DESK_COMPANION_DATA_DIR'] = root
+    from desk_companion.work_board import WorkBoardService
+    service = WorkBoardService()
+    request = dict(type='create', request_id=uuid.uuid4().hex,
+                   fields=dict(title='隔离验收事项', priority='high', due='2026-10-25'))
+    page = service.change(request)
+    assert page['ok'], page
+    item = next(i for i in page['items'] if i['id'] == page['receipt']['item_id'])
+    moved = service.change(dict(type='move', request_id=uuid.uuid4().hex,
+                               id=item['id'], version=item['version'], state='review'))
+    assert moved['ok'], moved
+    checked = service.load(request['request_id'])
+    assert len(checked['items']) == 1 and checked['items'][0]['state'] == 'review'
+    assert service.change(request)['receipt'] == checked['receipt']
+    print('work board verified:', checked['receipt']['item_id'])
+'@ | python -
+
+python -m unittest tests.test_work_board -v
+python -m unittest tests.test_local_api.LocalApiTests.test_work_board_authenticated_contract_dedup_and_busy_independence tests.test_local_api.LocalApiTests.test_work_board_rpc_preserves_conflicts_and_committed_refresh_failure tests.test_headless_host -v
+
+pnpm --dir client test
+pnpm --dir client exec tsc --noEmit
+pnpm --dir client build
+```
+
+认证 WebSocket 沿用 `ws://127.0.0.1:<port>/ws?token=<该进程临时 token>`。发送 `{"type":"rpc","id":"board-read","method":"load_work_board","args":{}}` 获取事项版本与执行目录；写入示例为 `{"type":"rpc","id":"board-create","method":"change_work_item","args":{"action":{"type":"create","request_id":"debug-create-0001","fields":{"title":"隔离事项"}}}}`。读取回执时传 `args.request_id`。外层 `result.ok` 是派发结果，内层 `result.result.ok` 才是业务结果。使用上述测试的临时后端即可验证真实认证链，不要在用户目录人工重发写入。
+
+`tests.test_work_board` 覆盖持久化、归档恢复、跨项目关联、删除项目的原子解除归属、重复请求、版本竞争、执行状态保留、提交确认丢失及刷新失败；禁止 GUI 导入的新进程还验证不构造 TaskManager。`test_local_api` 通过实际本地 WebSocket 检查错误 token、共享助手忙碌/宿主锁期间仍可操作、去重回执及业务失败；`test_headless_host` 在导入拦截器下实际启动完整后台并调用新建/移动 RPC。执行目录只暴露展示字段，不包含模型密钥、执行输入和任务内部载荷。
+
+界面隔离演示：运行 `pnpm --dir client dev --host 127.0.0.1`，打开所输出端口的 `/client.html?debug=work`。该入口运行真实 WorkBoardPane 与控制器，但注入内存数据，明确显示“演示数据，未连接后端”；刷新恢复初始数据。可检查跨列拖拽、移至菜单/键盘、编辑、筛选、归档/恢复、关联与详情。界面复用全局主题和减少动效偏好。前端行为测试额外用延迟/乱序/断连替身验证连续拖动、失败恢复、旧草稿版本、逐卡核对与手动原编号重试。
+
+遇到 `conflict` 保留输入并重新读取；`unconfirmed` / `committed` 或调用超时保留操作编号，先查回执，不自动重发。找不到回执不代表后台肯定没执行；只有用户明确手动重试时复用原编号和内容。新移动不会覆盖其它事项，项目删除后旧版本必须冲突，归档或完成均不能改变 AI 运行状态。本批未调用真实模型/飞书写入，未验证打包后的 Tauri 实机，未发布版本；日程创建、双向定位和时间轴拖动属于 #123 后续批次。

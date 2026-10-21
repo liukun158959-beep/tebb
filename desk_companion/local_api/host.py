@@ -25,6 +25,7 @@ from ..memory_editing import MemoryEditingService
 from ..notebook_service import NotebookService
 from ..state import load_state
 from ..weekly_review import WeeklyReviewService
+from ..work_board import WorkBoardService
 
 
 class HeadlessApp:
@@ -50,6 +51,7 @@ class HeadlessApp:
         self.automation = AutomationService(review=self.weekly_review, tasks=lambda: self.tasks,
             busy=lambda: self.conversation.running)
         self.bridge = Bridge(self)
+        self.work_board = WorkBoardService()
         from ..feishu_agent import FeishuAgent
         self.feishu_agent = FeishuAgent(self, task_backed=True)
         self._collaboration = None

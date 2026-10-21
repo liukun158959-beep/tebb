@@ -1168,6 +1168,46 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(message["result"]["ok"])
         self.assertTrue(message["result"]["result"]["ok"])
 
+    async def test_work_board_authenticated_contract_dedup_and_busy_independence(self):
+        import uuid
+        from websockets.exceptions import ConnectionClosed
+        action=dict(type='create',request_id=uuid.uuid4().hex,fields=dict(title='RPC work item'))
+        self.host.conversation.running=True
+        with self.host.turn_lock:
+            first=await self.notebook_rpc('change_work_item',action=action)
+            second=await self.notebook_rpc('change_work_item',action=action)
+            self.assertEqual(first['receipt'],second['receipt'])
+            self.assertEqual(len(second['items']),1)
+        item=second['items'][0]
+        moved=await self.notebook_rpc('change_work_item',action=dict(type='move',request_id=uuid.uuid4().hex,
+            id=item['id'],version=item['version'],state='review'))
+        self.assertTrue(moved['ok']);self.assertEqual(moved['items'][0]['state'],'review')
+        self.assertIsNone(self.host._collaboration)  # Read/write did not start collaboration queues.
+        recovered=await self.notebook_rpc('load_work_board',request_id=action['request_id'])
+        self.assertEqual(recovered['receipt']['item_id'],item['id'])
+        with self.assertRaises(ConnectionClosed):
+            async with connect(self.url.replace('test-token','wrong'),proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc',method='change_work_item',args=dict(action=action))))
+                await ws.recv()
+        self.assertEqual(len((await self.notebook_rpc('load_work_board'))['items']),1)
+        self.host.conversation.running=False
+
+    async def test_work_board_rpc_preserves_conflicts_and_committed_refresh_failure(self):
+        import uuid
+        result=await self.notebook_rpc('change_work_item',action=dict(type='create',request_id=uuid.uuid4().hex,fields=dict(title='versioned')))
+        item=result['items'][0]
+        args=dict(type='move',id=item['id'],version=item['version'],state='doing')
+        self.assertTrue((await self.notebook_rpc('change_work_item',action={**args,'request_id':uuid.uuid4().hex}))['ok'])
+        conflict=await self.notebook_rpc('change_work_item',action={**args,'state':'done','request_id':uuid.uuid4().hex})
+        self.assertFalse(conflict['ok']);self.assertTrue(conflict['conflict'])
+        latest=(await self.notebook_rpc('load_work_board'))['items'][0]
+        request=dict(type='archive',id=item['id'],version=latest['version'],archived=True,request_id=uuid.uuid4().hex)
+        with patch.object(self.host.work_board,'load',return_value=dict(ok=False,error='refresh failed')):
+            failure=await self.notebook_rpc('change_work_item',action=request)
+        self.assertEqual(failure['change_state'],'committed')
+        checked=await self.notebook_rpc('load_work_board',request_id=request['request_id'])
+        self.assertTrue(checked['items'][0]['archived']);self.assertIsNotNone(checked['receipt'])
+
     async def test_headless_sessions_clear_and_isolate_data_without_gui_methods(self):
         from contextlib import ExitStack
         memory.append_chat('user', 'selected question', self.host.state.session_id)

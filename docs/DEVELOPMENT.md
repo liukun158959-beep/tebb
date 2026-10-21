@@ -52,6 +52,7 @@ flowchart TD
 | 自动化配置与调度 | `automation_service.py`、`automation.py`、`runtime_instance.py` | 四 RPC、队列与活跃生命周期、执行快照及本地回执补写，配置原子事务；进程启动运行权覆盖收尾 |
 | 周复盘服务 | `weekly_review.py` | 生成、三种飞书发布路径、共享忙碌准入、材料日期固定与发布快照核对；RPC 和自动化共用，无 GUI 依赖 |
 | 今日看板服务 | `board_service.py`、`board_data.py`、`client/src/client/board-actions.ts` | 四入口业务回执、独立远端操作资源、分区合并与跨日保护；前端保留失败输入、读取顺序及行内错误 |
+| 业务工作看板 | `work_items.py`、`work_board.py`、`client/src/client/work-board-state.ts`、`work-board.tsx` | 纯事项规则与持久回执分工；四阶段事项、归档和伙伴执行关联，版本事务、操作去重与按事项保存/核对，不改写 AI 执行状态 |
 | 任务可靠性 | `tasks.py`、`task_worker.py`、`task_process.py` | 排队、独立执行、超时、进程回收与恢复 |
 | 知识与记忆 | `knowledge.py`、`context_pack.py`、`facts.py` | 文档切分、检索重排、上下文压缩与可追溯事实 |
 | 视频分析 | `video.py`、`video_analysis.py`、`video_archive.py` | 字幕、分段检查点、学习笔记及归档回执 |
@@ -77,6 +78,8 @@ flowchart TD
 无 GUI 指后台不加载旧窗口框架，不代表跨平台或禁止系统交互：文件选择继续使用独立系统选择器进程，打开/定位仍经既有系统适配，失败按原协议返回。生产启动仍先取得数据目录运行权，退出顺序和有限收尾保持原状。详见 [ADR 0015](adr/0015-headless-composition.md) 与 [完整后台验收](AGENT_DEBUG.md#无-gui-的完整后台验收)。
 
 ## 开发与验证
+
+业务工作看板通过 `load_work_board` / `change_work_item` 直接调用独立服务，与今日看板分开。复用协作 SQLite 事务以原子解除已移除项目的事项归属，不构造 TaskManager、不占模型忙碌；客户端以事项版本合并乱序回执，结果不明时保留原操作编号并显式核对。详见 [功能与接口](WORK_BOARD.md)、[ADR 0016](adr/0016-business-work-board.md) 和 [调试验收](AGENT_DEBUG.md#业务工作看板验收)。
 
 笔记 RPC 与流式问答由 `NotebookService(chat_sessions, start_guard=...)` 提供，Bridge/传输层直接调用，旧 App 有薄兼容方法。读取不取得宿主执行锁、不占共享助手；写入、问答、总结、导出和文件操作在短准入阶段固定共享忙碌状态，宿主被占用时立即拒绝，独立后台任务继续。所有 notebook.json 写入者共用独立 ResourceLock 与原子替换，模型等待不持笔记存储锁。失败按 partial、unconfirmed、committed 报告，不自动重试；协议和验收见 [ADR 0008](adr/0008-notebook-service.md)、[笔记服务调试](AGENT_DEBUG.md#无-gui-的笔记基础服务验收)。
 

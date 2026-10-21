@@ -297,11 +297,12 @@ function knowledgeStepSnap(root: ParentNode): { step: string; open: string; labe
   }));
 }
 
-export function debugPane(): "chat" | "board" | "feishu" | "settings" | "memory" | "knowledge" | "note" | "automation" | "monitor" | "video" | null {
+export function debugPane(): "work" | "chat" | "board" | "feishu" | "settings" | "memory" | "knowledge" | "note" | "automation" | "monitor" | "video" | null {
   if (!import.meta.env.DEV) return null;
   const value = new URLSearchParams(location.search).get("debug");
   if (value === "1" || value === "chat") return "chat";
   if (value === "note") return "note";
+  if (value === "work") return "work";
   if (value === "board") return "board";
   if (value === "feishu") return "feishu";
   if (value === "automation") return "automation";

@@ -186,12 +186,22 @@ assert_no_gui()
                 await ws.recv()
         async with connect(url, proxy=None) as ws:
             for method in ('load_composer_options','list_mcp_tools','list_feishu_docs','load_log_errors',
-                           'load_skills','load_usage','load_github','load_persona','clear_chat'):
+                           'load_skills','load_usage','load_github','load_persona','clear_chat','load_work_board'):
                 await ws.send(json.dumps(dict(type='rpc', id=method, method=method)))
                 frame = json.loads(await asyncio.wait_for(ws.recv(), 10))
                 self.assertEqual(frame['id'], method)
                 self.assertTrue(frame['result']['ok'], frame)
                 self.assertTrue(frame['result']['result']['ok'], frame)
+            action = dict(type='create', request_id='headless-board-create', fields=dict(title='offline business item'))
+            await ws.send(json.dumps(dict(type='rpc', id='create-work', method='change_work_item', args=dict(action=action))))
+            result = json.loads(await asyncio.wait_for(ws.recv(), 10))['result']['result']
+            self.assertTrue(result['ok'], result)
+            item = result['items'][0]
+            action = dict(type='move', request_id='headless-board-move', id=item['id'], version=item['version'], state='review')
+            await ws.send(json.dumps(dict(type='rpc', id='move-work', method='change_work_item', args=dict(action=action))))
+            result = json.loads(await asyncio.wait_for(ws.recv(), 10))['result']['result']
+            self.assertTrue(result['ok'], result)
+            self.assertEqual(result['items'][0]['state'], 'review')
             for method in ('close_board','send_chat','does_not_exist'):
                 await ws.send(json.dumps(dict(type='rpc', id=method, method=method)))
                 self.assertFalse(json.loads(await ws.recv())['result']['ok'])

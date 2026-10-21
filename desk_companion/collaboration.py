@@ -169,29 +169,37 @@ def parse_plan(text, members):
     return rows
 
 
-class Collaboration:
-    def __init__(self, path=None, managers=None, start=True):
-        self.path = Path(path or workspace_path())
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self.path)) as db:
+def initialize_workspace(path=None):
+    """Initialize durable workspace data without constructing task managers."""
+    path = Path(path or workspace_path())
+    from .resource_lock import ResourceLock
+    with ResourceLock("collaboration-bootstrap"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(path)) as db:
             db.execute("CREATE TABLE IF NOT EXISTS workspace(id INTEGER PRIMARY KEY, data TEXT NOT NULL)")
             db.execute("INSERT OR IGNORE INTO workspace VALUES(1,?)", (json.dumps(seed(), ensure_ascii=False),))
             db.execute("CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL)")
             db.commit()
             if json.loads(db.execute("SELECT data FROM workspace WHERE id=1").fetchone()[0]).get("companion_version", 0) < 1:
-                backup = self.path.with_name("workspace.before-companions.sqlite3")
+                backup = path.with_name("workspace.before-companions.sqlite3")
                 if not backup.exists():
                     with closing(sqlite3.connect(backup)) as target:
                         db.backup(target)
-        self.lock = threading.RLock()
-        with closing(sqlite3.connect(self.path)) as source:
+        with closing(sqlite3.connect(path)) as source:
             if not json.loads(source.execute('SELECT data FROM workspace WHERE id=1').fetchone()[0]).get('legacy_imported'):
-                backup = self.path.with_name('workspace.before-unified.sqlite3')
+                backup = path.with_name('workspace.before-unified.sqlite3')
                 if not backup.exists():
                     with closing(sqlite3.connect(backup)) as target: source.backup(target)
-        with transaction(self.path) as (state, _):
+        with transaction(path) as (state, _):
             migrate_companions(state)
             import_legacy(state)
+
+
+class Collaboration:
+    def __init__(self, path=None, managers=None, start=True):
+        self.path = Path(path or workspace_path())
+        self.lock = threading.RLock()
+        initialize_workspace(self.path)
         self.stop = threading.Event()
         self.managers = managers or {
             "work": TaskManager(path=self.path.parent / "work" / "tasks.sqlite3"),
@@ -208,6 +216,7 @@ class Collaboration:
         from .model_catalog import public_catalog
         with self.lock, transaction(self.path) as (state, _):
             result = copy.deepcopy(state)
+        result.pop("work_items", None)  # Business cards have their own authenticated service.
         # Internal snapshots/keys/worker requests never cross the browser boundary.
         for run in result["runs"]:
             for key in ("input", "agent_config", "members", "context", "cursor", "task", "attempt", "parent_draft", "source_evidence", "selection", "compress_ids", "public_answer"):
@@ -336,6 +345,8 @@ class Collaboration:
             project = None if kind == "create_project" else next((p for p in state["projects"] if p["id"] == action.get("id")), None)
             if kind != "create_project" and not project: raise ValueError("项目不存在")
             if kind == "delete_project":
+                from .work_items import detach_project
+                detach_project(state, project)
                 state["projects"].remove(project)
                 for row in state["conversations"]:
                     if row.get("project_id") == project["id"]: row.pop("project_id", None)

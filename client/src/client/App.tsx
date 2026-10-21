@@ -29,6 +29,7 @@ import { FeishuAgentPane } from "./feishu-agent";
 import { AgentMonitor } from "./agent-monitor";
 import { AgentDebugDialog } from "./agent-debug";
 import { WorkspaceRuns } from "./workspace-runs";
+import { WorkBoardPane } from "./work-board";
 import { WorkspaceRail } from "./workspace-shell";
 import { PageStack } from "./page-stack";
 import { PetSettings } from "./pet-settings";
@@ -87,7 +88,7 @@ import {
 } from "./settings";
 
 const LiveCollaboration = lazy(() => import("./live-collaboration").then(module => ({ default: module.LiveCollaboration })));
-type Pane = "chat" | "board" | "feishu" | "settings" | "automation" | "monitor" | "video" | "collaboration";
+type Pane = "work" | "chat" | "board" | "feishu" | "settings" | "automation" | "monitor" | "video" | "collaboration";
 
 const debugKind = debugPane();
 const boardDebug = debugKind === "board" || debugKind === "feishu" || debugKind === "automation" || debugKind === "monitor" || debugKind === "video";
@@ -131,7 +132,7 @@ export function App() {
   const applyBgRef = useRef<(url: string) => void>(() => {});
   const clearBgRef = useRef<() => void>(() => {});
   const [pane, setPane] = useState<Pane>(
-    debugKind === "automation" || debugKind === "monitor" || debugKind === "video"
+    debugKind === "work" || debugKind === "automation" || debugKind === "monitor" || debugKind === "video"
       ? debugKind
       : debugKind === "feishu"
         ? "feishu"
@@ -1835,6 +1836,7 @@ export function App() {
   const workspaceNavigation = <>
     <RailButton icon="chat" label="伙伴聊天" active={pane === "collaboration"} onClick={() => setPane("collaboration")} />
     <RailButton icon="knowledge" label="知识库" active={pane === "chat" && chatFace === "knowledge"} onClick={() => void openKnowledge()} />
+    <RailButton icon="board" label="工作看板" active={pane === "work"} onClick={() => setPane("work")} />
     <RailButton icon="board" label="今日看板" active={pane === "board"} onClick={() => void openBoard()} />
     <RailButton icon="feishu" label="飞书" active={pane === "feishu"} onClick={() => void openFeishu()} />
     <RailButton icon="automation" label="定时任务" active={pane === "automation"} onClick={() => setPane("automation")} />
@@ -1909,7 +1911,7 @@ export function App() {
           <SideNav
             icon="board"
             label="看板"
-            active={pane === "board" || pane === "feishu" || pane === "automation" || pane === "monitor" || pane === "video"}
+            active={pane === "work" || pane === "board" || pane === "feishu" || pane === "automation" || pane === "monitor" || pane === "video"}
             onClick={() => void openBoard()}
           />
           <SideNav icon="settings" label="设置" active={pane === "settings"} onClick={() => setPane("settings")} />
@@ -1989,6 +1991,7 @@ export function App() {
           <div className="flex-1" />
         ) : (
           <div className="mt-4 flex-1 overflow-y-auto px-2" data-nav="board">
+            <SideLink icon="board" label="工作看板" sub="work" selected={pane === "work"} onClick={() => setPane("work")} />
             <SideLink icon="today" label="今日" sub="today" selected={pane === "board"} onClick={() => openBoard()} />
             <SideLink icon="feishu" label="飞书" sub="feishu" selected={pane === "feishu"} onClick={() => void openFeishu()} />
             <SideLink icon="today" label="定时任务" sub="automation" selected={pane === "automation"} onClick={() => setPane("automation")} />
@@ -1999,7 +2002,7 @@ export function App() {
       </aside>
       <main className="main-workspace relative z-10 flex min-w-0 flex-1 flex-col">
         <TopToolbar title={pane === "chat" ? noteSessionId ? "笔记" : ({ thread: "对话", memory: "记忆", knowledge: "知识库" })[chatFace] :
-          ({ board: "今日看板", feishu: "飞书", settings: "设置", automation: "定时任务", monitor: "执行任务", video: "视频读取", collaboration: "伙伴聊天" })[pane]}
+          ({ work: "工作看板", board: "今日看板", feishu: "飞书", settings: "设置", automation: "定时任务", monitor: "执行任务", video: "视频读取", collaboration: "伙伴聊天" })[pane]}
           model={modelItems.find(m => m.id === activeModelId)?.model ? `默认：${modelItems.find(m => m.id === activeModelId)?.model}` : ""} connected={!!info || !!debugKind} busy={busy || noteBusy} dark={dark}
           onTheme={() => setDark(!dark)} onNewChat={() => { setPane("collaboration"); window.dispatchEvent(new CustomEvent("tebb-new-chat")); }}
           onMonitor={() => setPane("monitor")} onVideo={() => setPane("video")} onDebug={() => { changeDeveloperMode(true); setAgentDebugOpen(true); }}
@@ -2009,7 +2012,7 @@ export function App() {
           onIndex={source => knowledgeCall("add_knowledge", { doc_id: `local:${source.id}`, label: source.name })} />}
         <div className="tebb-page-body">
         {!coreChat && <aside className="tebb-section-nav" aria-label="页面导航"><strong>{pane === 'settings' ? '偏好与连接' : pane === 'chat' && noteSessionId ? '笔记与成果' : pane === 'chat' && chatFace === 'knowledge' ? '知识库' : pane === 'feishu' ? '飞书空间' : pane === 'video' ? '视频资料' : '任务与工作'}</strong>
-          {(pane === 'settings') ? <><button onClick={() => setShowGuide(true)}>初始化引导</button><button onClick={releaseIntro.show}>版本介绍</button><button onClick={openProject}>工作目录与权限</button>{developerMode && <button onClick={() => setAgentDebugOpen(true)}>调用调试</button>}</> : pane === 'chat' && (chatFace === 'knowledge' || !!noteSessionId) ? <><button onClick={() => {setPane('collaboration');setNoteSessionId(null);}}>返回伙伴聊天</button><button onClick={() => void newNotebook()}>新建笔记</button><button onClick={() => void openKnowledge()}>刷新知识库</button><button onClick={() => setLocalDialog('file')}>添加本地资料</button><button onClick={openProject}>项目文件</button>{noteSessions.map(note => <button key={note.id} onClick={() => openNoteSession(note.id)}>{note.title || '笔记'}</button>)}</> : <><button onClick={() => void openBoard()}>今日看板</button><button onClick={() => setPane('monitor')}>执行任务</button><button onClick={() => setPane('automation')}>定时任务</button><button onClick={() => setPane('video')}>视频读取</button><button onClick={openProject}>项目文件</button></>}
+          {(pane === 'settings') ? <><button onClick={() => setShowGuide(true)}>初始化引导</button><button onClick={releaseIntro.show}>版本介绍</button><button onClick={openProject}>工作目录与权限</button>{developerMode && <button onClick={() => setAgentDebugOpen(true)}>调用调试</button>}</> : pane === 'chat' && (chatFace === 'knowledge' || !!noteSessionId) ? <><button onClick={() => {setPane('collaboration');setNoteSessionId(null);}}>返回伙伴聊天</button><button onClick={() => void newNotebook()}>新建笔记</button><button onClick={() => void openKnowledge()}>刷新知识库</button><button onClick={() => setLocalDialog('file')}>添加本地资料</button><button onClick={openProject}>项目文件</button>{noteSessions.map(note => <button key={note.id} onClick={() => openNoteSession(note.id)}>{note.title || '笔记'}</button>)}</> : <><button onClick={() => setPane("work")}>工作看板</button><button onClick={() => void openBoard()}>今日看板</button><button onClick={() => setPane('monitor')}>执行任务</button><button onClick={() => setPane('automation')}>定时任务</button><button onClick={() => setPane('video')}>视频读取</button><button onClick={openProject}>项目文件</button></>}
           <p>文件、引用与任务可以返回伙伴聊天继续处理。</p></aside>}
         <SideWorkspace onVisibilityChange={setSidebarState} info={info} session={noteSessionId || thread?.sessionId || ""} onTerminalDraft={text => { if (noteSessionId && pane === "chat" && chatFace === "thread") { setDraft(previous => `${previous}${previous ? "\n\n" : ""}${text}`); setComposerNotice("内容已加入笔记提问草稿，尚未发送。"); } else { setComposeRequest({ id: Date.now(), text }); setPane("collaboration"); } }} enabled={true} debug={!!debugKind}
           suspended={agentDebugOpen || showGuide || !!cropSrc || releaseIntro.open || (!!localDialog && !localDialogMinimized)}
@@ -2381,6 +2384,14 @@ export function App() {
               <h1 className="text-2xl font-semibold">视频读取</h1>
               <p className="mt-2 text-sm text-muted-foreground">从实际视频资料中提炼要点，查看出处并整理笔记。</p>
               <VideoPane info={info} debug={boardClock !== null} />
+            </section>
+          ) : pane === "work" ? (
+            <section key="work" data-page="work" className="flex min-h-0 flex-1 overflow-hidden">
+              <WorkBoardPane info={info} debug={debugKind === "work"} onOpen={async conversation => {
+                if (!info) throw new Error("后端尚未连接。");
+                await rpc(info, "collaboration_action", {action:{type:"select",id:conversation,conversation,request_id:crypto.randomUUID()}});
+                setPane("collaboration"); window.dispatchEvent(new CustomEvent("tebb-show-tasks"));
+              }} />
             </section>
           ) : pane === "monitor" ? (
             <section key="monitor" data-page="monitor" className="flex-1 overflow-y-auto px-8 py-6">

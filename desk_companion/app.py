@@ -32,6 +32,7 @@ from .automation_service import AutomationService
 from .board_workbench import BoardWorkbench
 from .board_service import BoardService
 from .weekly_review import WeeklyReviewService
+from .work_board import WorkBoardService
 from .bridge import Bridge
 from .layered import enable_dpi_aware, work_area
 from .logutil import crash, install_crash_hooks, log, mark_ready, start_os_watchdog
@@ -100,6 +101,7 @@ class App(BoardWorkbench):
             busy=lambda: self._agent_running or bool(getattr(self.pet, 'busy', False)),
             changed=lambda: self.ui(lambda: self._eval_board('jobs_changed')))
         self.bridge = Bridge(self, session_changed=self._on_session_changed)
+        self.work_board = WorkBoardService()
         self._queue: queue.Queue = queue.Queue()
         self.pet = None
         self.board = None

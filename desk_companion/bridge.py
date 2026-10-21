@@ -36,6 +36,12 @@ class Bridge:
     def load_collaboration(self, since="") -> dict:
         return self._host.collaboration.snapshot(since=since)
 
+    def load_work_board(self, request_id="") -> dict:
+        return self._host.work_board.load(request_id)
+
+    def change_work_item(self, action: dict) -> dict:
+        return self._host.work_board.change(action)
+
     def collaboration_action(self, action: dict) -> dict:
         return self._host.collaboration.action(action)
 
