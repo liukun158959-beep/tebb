@@ -170,8 +170,9 @@ def chunks(text: str) -> list[str]:
 
 
 class FeishuAgent:
-    def __init__(self, host):
+    def __init__(self, host, *, task_backed=False):
         self.host = host
+        self._task_backed = task_backed
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._closing = threading.Event()
@@ -440,9 +441,8 @@ class FeishuAgent:
         self._recover_continuations()
 
     def _recover_task_answers(self):
-        from .local_api.host import HeadlessApp
         from .tasks import TERMINAL
-        if not isinstance(self.host, HeadlessApp):
+        if not self._task_backed:
             return
         with self._inbox.connect() as db:
             rows = [dict(r) for r in db.execute("SELECT * FROM messages WHERE app=? AND state='answered' AND task_id<>''",
@@ -457,8 +457,7 @@ class FeishuAgent:
                 self._inbox.update(row["app"], row["id"], answer=answer)
 
     def _recover_continuations(self):
-        from .local_api.host import HeadlessApp
-        if not isinstance(self.host, HeadlessApp):
+        if not self._task_backed:
             return
         for task in self.host.tasks.list("feishu")["items"]:
             source = task["source"]
@@ -950,7 +949,6 @@ class FeishuAgent:
         elif command.startswith("/"):
             return HELP
         sid = self._inbox.session(row["app"], row["chat"], row["sender"])
-        from .local_api.host import HeadlessApp
-        if isinstance(self.host, HeadlessApp):
+        if self._task_backed:
             return self._run_agent(row, text, sid, chips, knowledge)
         return self.host.run_channel_chat(text, sid, chips, knowledge)

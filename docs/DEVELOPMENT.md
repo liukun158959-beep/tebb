@@ -68,13 +68,21 @@ flowchart TD
 
 源码默认使用本机项目数据，发布版沿用 `%LOCALAPPDATA%/DeskCompanion`。凭据、记忆、权重和 Live2D 资源不进 Git。备份与升级参见 [使用说明](GETTING_STARTED.md)。
 
+## 后台与旧桌面的组装边界
+
+`local_api.host.HeadlessApp` 是独立后台组合根，显式构造现有业务服务，不继承或导入 `App` / `BoardWorkbench`。Agent、共享忙碌和回调归 ConversationService，普通 TaskManager 与 Collaboration 分别按需且并发安全地创建；协作内部队列仍独立。Bridge 保留认证白名单对应的协议适配；目录、诊断与统计七个查询集中在 `workbench_queries.py`，旧桌面薄转发到相同实现。
+
+后台使用已有 UserState，保留已存坐标和配置；首次无配置时使用中性坐标 `(0, 0)`，不查询显示器。旧 App 仍自行初始化皮肤、屏幕位置、窗口与队列回调。飞书通过 `FeishuAgent(host, task_backed=True)` 明确选择后台任务恢复/投递路径，普通宿主默认沿用原通道回调，不再从飞书模块反向导入 API 宿主。
+
+无 GUI 指后台不加载旧窗口框架，不代表跨平台或禁止系统交互：文件选择继续使用独立系统选择器进程，打开/定位仍经既有系统适配，失败按原协议返回。生产启动仍先取得数据目录运行权，退出顺序和有限收尾保持原状。详见 [ADR 0015](adr/0015-headless-composition.md) 与 [完整后台验收](AGENT_DEBUG.md#无-gui-的完整后台验收)。
+
 ## 开发与验证
 
 笔记 RPC 与流式问答由 `NotebookService(chat_sessions, start_guard=...)` 提供，Bridge/传输层直接调用，旧 App 有薄兼容方法。读取不取得宿主执行锁、不占共享助手；写入、问答、总结、导出和文件操作在短准入阶段固定共享忙碌状态，宿主被占用时立即拒绝，独立后台任务继续。所有 notebook.json 写入者共用独立 ResourceLock 与原子替换，模型等待不持笔记存储锁。失败按 partial、unconfirmed、committed 报告，不自动重试；协议和验收见 [ADR 0008](adr/0008-notebook-service.md)、[笔记服务调试](AGENT_DEBUG.md#无-gui-的笔记基础服务验收)。
 
 知识库八入口由 `KnowledgeService(chat_sessions, start_guard=...)` 提供。同步修改/试问立即准入或拒绝，页面/进度读取不等模型；计算阶段使用设置与索引快照，提交前复验，修改设置不自动重建。模型加载/推理取得共享资源使用权，下载/删除取得排他修改权，跨进程冲突立即拒绝；后台下载仅启动阶段占共享助手。来源原文与笔记引用独立保留，失败按实际阶段回执。见 [ADR 0011](adr/0011-knowledge-service.md) 和 [知识库调试](AGENT_DEBUG.md#无-gui-的知识库服务验收)。
 
-今日看板的加载、创建日程、删除日程和删除待办由 `BoardService()` 提供，Bridge 直接调用，旧 App 的加载入口薄转发；共同底层也覆盖聊天工具、桌宠和自动化。当天缓存读取可继续，远端操作按看板资源跨进程非阻塞准入，不占模型 busy，长 IO 不持宿主、全局或缓存锁。所有缓存写入者短时加锁合并最新分区、原子替换，并检查自然日；周复盘摘要和链接写入可以与远端刷新并行。远端结果未确认、已完成但查询失败、缓存保存未确认分别报告；前端检查业务结果、保留失败输入和原列表，忽略旧读取响应。见 [ADR 0012](adr/0012-board-service.md) 与 [今日看板调试](AGENT_DEBUG.md#无-gui-的今日看板服务验收)。HeadlessApp 整体去继承仍待后续。
+今日看板的加载、创建日程、删除日程和删除待办由 `BoardService()` 提供，Bridge 直接调用，旧 App 的加载入口薄转发；共同底层也覆盖聊天工具、桌宠和自动化。当天缓存读取可继续，远端操作按看板资源跨进程非阻塞准入，不占模型 busy，长 IO 不持宿主、全局或缓存锁。所有缓存写入者短时加锁合并最新分区、原子替换，并检查自然日；周复盘摘要和链接写入可以与远端刷新并行。远端结果未确认、已完成但查询失败、缓存保存未确认分别报告；前端检查业务结果、保留失败输入和原列表，忽略旧读取响应。见 [ADR 0012](adr/0012-board-service.md) 与 [今日看板调试](AGENT_DEBUG.md#无-gui-的今日看板服务验收)。后台组装与去继承验收见下文。
 
 记忆页的 `add_fact`、`update_fact`、`delete_fact`、`delete_memory_turn` 由 `MemoryEditingService(chat_sessions)` 处理，旧 App 兼容方法和 Bridge 共用同一实例。事实编辑复用原有校验、来源记录及跨进程写锁；共享助手回复期间拒绝编辑，独立后台任务不阻止全局事实编辑，已运行回复可能保留旧快照。历史删除固定当前会话并使用同一任务保护，先验证存在，再失效覆盖该句的摘要、删除同角色同正文的全部重复记录。失败按阶段报告，不自动取消任务或回滚文件。见 [ADR 0006](adr/0006-memory-editing-service.md) 和 [记忆编辑验收](AGENT_DEBUG.md#无-gui-的记忆编辑服务验收)。
 
@@ -88,13 +96,13 @@ flowchart TD
 
 ### 模型调用边界
 
-普通与知识问答任务由 `task_worker` 直接使用 `ConversationService.for_session(session_id)` 执行，无需构造 `HeadlessApp`、窗口或 Bridge。服务拥有 Agent、忙碌状态及本轮回调；桌面保留窗口展示和队列派发，任务层保留权限、超时、取消与进度事件。`App` / `HeadlessApp` 通过显式门面复用服务，其他 RPC 的继承暂留。见 [ADR 0003](adr/0003-conversation-service.md)。
+普通与知识问答任务由 `task_worker` 直接使用 `ConversationService.for_session(session_id)` 执行，无需构造 `HeadlessApp`、窗口或 Bridge。服务拥有 Agent、忙碌状态及本轮回调；桌面保留窗口展示和队列派发，任务层保留权限、超时、取消与进度事件。`App` / `HeadlessApp` 分别组合已有服务：旧 App 注入 UI 回调与 pet 忙碌保护，后台注入非阻塞执行锁和任务会话保护，不共享 GUI 基类。见 [ADR 0003](adr/0003-conversation-service.md)。
 
 后台服务只读取用户配置并使用本任务会话，不保存或覆盖桌面当前选择；空白目录中也不为任务创建窗口位置配置。旧桌面仍在发送和显示完成时保存历史；后台 `run_chat` 自己保存历史与回复元数据，两条路径都只保存一次。点选规则在 `conversation_input.py` 集中维护。
 
 对话服务的离线入口及禁止 GUI 导入的子进程验证见 [AI 对话调试](AGENT_DEBUG.md#无-gui-的对话服务验收)。
 
-模型与人设的 9 个配置 RPC 由 Bridge 直接调用 `AssistantSettingsService`，旧 App 保留兼容方法；服务显式依赖同一个 `ConversationService`，从中读取 UserState、Agent 和忙碌状态，通过公开接口重建或绑定模型。模型网络配置继续复用 `model_network`，不另建状态或存储。服务可以独立于 GUI 调试，但整个 HeadlessApp 仍有 GUI 继承；决策见 [ADR 0004](adr/0004-assistant-settings-service.md)，测试入口见 [配置服务验收](AGENT_DEBUG.md#无-gui-的配置服务验收)。
+模型与人设的 9 个配置 RPC 由 Bridge 直接调用 `AssistantSettingsService`，旧 App 保留兼容方法；服务显式依赖同一个 `ConversationService`，从中读取 UserState、Agent 和忙碌状态，通过公开接口重建或绑定模型。模型网络配置继续复用 `model_network`，不另建状态或存储。后台与服务均可脱离旧 GUI 导入；决策见 [ADR 0004](adr/0004-assistant-settings-service.md)，测试入口见 [配置服务验收](AGENT_DEBUG.md#无-gui-的配置服务验收)。
 
 普通会话的 5 个入口由 `ChatSessionService` 处理：`new_chat_session`、`switch_chat_session`、`clear_chat`、`load_chat_log`、`load_memory`。后台通过 `TaskManager.session_mutation_guard` 原子保护当前会话修改，覆盖任务终态之后的收尾写回；只读快照不等待宿主模型执行锁。旧桌面在发送前固定选择并预留忙碌状态，直到 GUI 回调完成历史写入后释放；界面刷新留在 App 回调，服务不导入 Bridge 或窗口。决策见 [ADR 0005](adr/0005-chat-session-service.md)，验收见 [普通会话调试](AGENT_DEBUG.md#无-gui-的普通会话服务验收)。
 

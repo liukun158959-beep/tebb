@@ -75,7 +75,7 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         from websockets.exceptions import ConnectionClosed
         self.addCleanup(lambda: self.host.automation.stop(0))
         for name in ('list_automation_jobs','save_automation_job','delete_automation_job','run_automation_job'):
-            patch.object(self.host, name, side_effect=AssertionError('legacy automation')).start()
+            patch.object(self.host, name, side_effect=AssertionError('legacy automation'), create=True).start()
         self.host.conversation.running = True
         with self.host.turn_lock:
             saved = await self.notebook_rpc('save_automation_job', payload=payload())
@@ -175,7 +175,7 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         stack.enter_context(patch('desk_companion.feishu_docs.overwrite_markdown_doc', return_value=dict(ok=True, url=URL)))
         opened = stack.enter_context(patch.object(self.host.weekly_review, '_open_document'))
         for name in ('generate_week_review', 'write_today_summary_doc', 'write_week_review_doc'):
-            stack.enter_context(patch.object(self.host, name, side_effect=AssertionError('legacy review call')))
+            stack.enter_context(patch.object(self.host, name, side_effect=AssertionError('legacy review call'), create=True))
         b.load_today_snapshot(refresh=False)
         b.save_today_fields(summary='old review', summary_at=NOW.isoformat(timespec='seconds'), doc_url='old url')
         return create, opened
@@ -271,16 +271,16 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         create.assert_called_once()
         opened.assert_called_once_with(URL)
 
-    async def test_review_host_lock_and_old_desktop_busy_refuse_immediately(self):
-        from types import SimpleNamespace
+    async def test_review_host_lock_and_shared_assistant_busy_refuse_immediately(self):
         create, opened = self.review_setup()
         with self.host.turn_lock:
             self.assertTrue((await self.notebook_rpc('generate_week_review'))['retryable_busy'])
             self.assertTrue((await self.notebook_rpc('write_today_summary_doc'))['retryable_busy'])
             self.assertTrue((await self.notebook_rpc('load_board'))['ok'])
-        self.host.pet = SimpleNamespace(busy=True)
+        self.host.conversation.running = True
         self.assertTrue((await self.notebook_rpc('write_today_summary_doc'))['retryable_busy'])
-        self.assertFalse(self.host.conversation.running)
+        self.assertTrue(self.host.conversation.running)
+        self.host.conversation.running = False
         create.assert_not_called(); opened.assert_not_called()
 
     async def test_board_four_rpc_routes_keep_contracts_and_failure_stages(self):
@@ -290,7 +290,7 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(b, 'today_date', return_value=DAY), \
                 patch.object(b, 'fetch_board', return_value=dict(agenda=AGENDA, tasks=TASKS)), \
                 patch.object(b, '_open_tasks_due_today', return_value=TASKS), \
-                patch.object(self.host, 'load_today_board', side_effect=AssertionError('legacy board')):
+                patch.object(self.host, 'load_today_board', side_effect=AssertionError('legacy board'), create=True):
             def remote(args):
                 if args[:2] == ['calendar', '+agenda']:
                     return json.dumps(dict(ok=True, data=[]))
@@ -387,7 +387,7 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             for name in ('board_knowledge', 'board_save_knowledge', 'board_download_knowledge',
                     'board_delete_model', 'board_add_knowledge', 'board_delete_knowledge',
                     'board_rebuild_knowledge', 'board_ask_knowledge'):
-                stack.enter_context(patch.object(self.host, name, side_effect=AssertionError('legacy route')))
+                stack.enter_context(patch.object(self.host, name, side_effect=AssertionError('legacy route'), create=True))
             stack.enter_context(patch.object(k, '_JOBS', {}))
             stack.enter_context(patch.object(k, '_require_models'))
             stack.enter_context(patch.object(k, '_embed', side_effect=lambda texts: [[1., 0.] for _ in texts]))
@@ -507,10 +507,9 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse((await self.notebook_rpc('rebuild_knowledge'))['ok'])
         finally:
             release.set(); await asyncio.to_thread(thread.join, 5)
-        from types import SimpleNamespace
-        self.host.pet = SimpleNamespace(busy=True)
+        self.host.conversation.running = True
         self.assertFalse((await self.notebook_rpc('rebuild_knowledge'))['ok'])
-        self.host.pet = None
+        self.host.conversation.running = False
 
     async def test_notebook_generation_service_rpc_preserves_protocol_and_failure_phases(self):
         from contextlib import ExitStack
@@ -523,8 +522,8 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
                 dict(answer=complete('system', q), cites=cites)))
             stack.enter_context(patch.object(self.host.conversation, 'engage_model'))
             launch = stack.enter_context(patch('os.startfile', side_effect=OSError('no handler')))
-            stack.enter_context(patch.object(self.host, 'run_notebook', side_effect=AssertionError('legacy generation')))
-            stack.enter_context(patch.object(self.host, 'board_summarize_notebook', side_effect=AssertionError('legacy summary')))
+            stack.enter_context(patch.object(self.host, 'run_notebook', side_effect=AssertionError('legacy generation'), create=True))
+            stack.enter_context(patch.object(self.host, 'board_summarize_notebook', side_effect=AssertionError('legacy summary'), create=True))
             sid = (await self.notebook_rpc('new_notebook'))['session_id']
             self.host.agent.llm = FakeLLM(['complete answer [1]'])
             tokens = []
@@ -662,7 +661,7 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             stack.enter_context(patch('os.startfile'))
             for name in ('board_load_notebook', 'board_new_notebook', 'board_save_notebook_note',
                          'board_delete_notebook_note'):
-                stack.enter_context(patch.object(self.host, name, side_effect=AssertionError('legacy notebook call')))
+                stack.enter_context(patch.object(self.host, name, side_effect=AssertionError('legacy notebook call'), create=True))
             sid = (await self.notebook_rpc('new_notebook'))['session_id']
             nid = (await self.notebook_rpc('save_notebook_note', session_id=sid,
                                          question='saved question', answer='saved answer [1]', cites=cites))['note_id']
@@ -752,7 +751,7 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             # Bridge resolves services directly; inherited facades remain compatibility only.
             for method in ('export_notebook_markdown', 'export_notebook_feishu', 'open_notebook_file',
                            'reveal_notebook_file', 'delete_notebook_file'):
-                stack.enter_context(patch.object(self.host, 'board_' + method, side_effect=AssertionError('legacy call')))
+                stack.enter_context(patch.object(self.host, 'board_' + method, side_effect=AssertionError('legacy call'), create=True))
             saved = await self.notebook_rpc('export_notebook_markdown', **args)
             path = Path(saved['path'])
             self.assertTrue(saved['ok'], saved)
@@ -894,7 +893,7 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             stack.enter_context(patch.object(self.host.conversation, 'engage_model'))
             stack.enter_context(patch.object(self.host.agent.llm, 'chat', side_effect=model))
             for method in ('board_compress_context', 'prepare_context', 'board_memory'):
-                stack.enter_context(patch.object(self.host, method, side_effect=AssertionError('inherited method')))
+                stack.enter_context(patch.object(self.host, method, side_effect=AssertionError('inherited method'), create=True))
             pending = asyncio.create_task(rpc('compress_context'))
             try:
                 self.assertTrue(await asyncio.to_thread(entered.wait, 5))
@@ -1060,7 +1059,7 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         with ExitStack() as stack:
             for method in ('board_add_fact', 'board_update_fact', 'board_delete_fact',
                            'board_drop_memory_turn', 'board_memory'):
-                stack.enter_context(patch.object(self.host, method, side_effect=AssertionError('inherited method')))
+                stack.enter_context(patch.object(self.host, method, side_effect=AssertionError('inherited method'), create=True))
             result = await rpc('add_fact', text='global fact')
             self.assertTrue(result['ok'], result)
             self.assertEqual(set(result), {'ok', 'total', 'fact_limit', 'facts', 'context', 'items'})
@@ -1182,14 +1181,14 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(message['result']['ok'], message)
             return message['result']['result']
 
-        # Headless clear must work even though pet is None.
-        self.assertIsNone(self.host.pet)
+        # The backend has no legacy pet/window state.
+        self.assertFalse(hasattr(self.host, "pet"))
         self.assertTrue((await rpc('clear_chat'))['ok'])
         self.assertEqual(memory.list_chat(original), [])
         self.assertEqual(len(memory.list_chat('other-session')), 1)
         with ExitStack() as stack:
             for method in ('clear_chat_history', 'new_chat_session', 'switch_chat_session', 'board_chat', 'board_memory'):
-                stack.enter_context(patch.object(self.host, method, side_effect=AssertionError('inherited GUI method')))
+                stack.enter_context(patch.object(self.host, method, side_effect=AssertionError('inherited GUI method'), create=True))
             self.assertEqual((await rpc('new_chat_session'))['session_id'], original)
             self.assertEqual((await rpc('switch_chat_session', {'session_id': 'other-session'}))['session_id'], 'other-session')
             loaded = await rpc('load_chat_log')
@@ -1275,7 +1274,7 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             # The data RPC must no longer depend on inherited App configuration methods.
             for method in ('board_persona', 'save_persona', 'board_model', 'board_models',
                            'save_model_entry', 'delete_model_entry', 'use_model', 'save_model', 'test_model'):
-                stack.enter_context(patch.object(self.host, method, side_effect=AssertionError('inherited GUI method')))
+                stack.enter_context(patch.object(self.host, method, side_effect=AssertionError('inherited GUI method'), create=True))
             rebuild = stack.enter_context(patch.object(self.host.conversation, 'rebuild_agent'))
             binding = stack.enter_context(patch.object(self.host.conversation, 'bind_active_llm'))
             self.assertTrue((await rpc('load_persona'))['ok'])

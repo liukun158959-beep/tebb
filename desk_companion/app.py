@@ -19,6 +19,7 @@ import win32api
 import win32con
 import win32gui
 
+from . import workbench_queries
 from .assistant import spoken_answer
 from .assistant_settings import AssistantSettingsService
 from .conversation import ConversationService
@@ -44,7 +45,6 @@ from .pet_shell import BASE_PET_H, BASE_PET_W, CMD_QUIT, start_pet_thread
 from .skin import load_skin
 from .state import load_state
 from .tray import start_tray
-from .usage import summarize_usage
 from .winforms_host import (
     apply_app_window,
     apply_tool_window,
@@ -79,15 +79,12 @@ DWMWCP_DONOTROUND = 1
 
 
 class App(BoardWorkbench):
-    def __init__(self, skin_id: str, *, headless: bool = False) -> None:
-        # headless：本地 API 后端模式，不加载皮肤、不建窗口，只复用数据方法
-        self.headless = headless
-        self.skin = None if headless else load_skin(skin_id)
+    def __init__(self, skin_id: str) -> None:
+        self.skin = load_skin(skin_id)
         left, top, right, bottom = work_area()
         self.state = load_state(right - BASE_PET_W - 16, bottom - BASE_PET_H - 8)
         self.conversation = ConversationService(self.state, dispatch=self.ui,
-            on_delta=None if headless else self.on_llm_delta,
-            on_status=None if headless else self.on_stream_status)
+            on_delta=self.on_llm_delta, on_status=self.on_stream_status)
         self.assistant_settings = AssistantSettingsService(self.conversation)
         self.chat_sessions = ChatSessionService(self.conversation, mutation_guard=self._session_mutation_guard,
                                                 reservation_guard=self._session_reservation)
@@ -102,7 +99,7 @@ class App(BoardWorkbench):
         self.automation = AutomationService(review=self.weekly_review, tasks=lambda: self.tasks,
             busy=lambda: self._agent_running or bool(getattr(self.pet, 'busy', False)),
             changed=lambda: self.ui(lambda: self._eval_board('jobs_changed')))
-        self.bridge = Bridge(self, session_changed=None if headless else self._on_session_changed)
+        self.bridge = Bridge(self, session_changed=self._on_session_changed)
         self._queue: queue.Queue = queue.Queue()
         self.pet = None
         self.board = None
@@ -476,20 +473,10 @@ class App(BoardWorkbench):
         return self.board_service.load_board(refresh)
 
     def board_log_errors(self) -> dict:
-        from .log_inspect import inspect_today_errors
-
-        try:
-            return inspect_today_errors()
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return workbench_queries.load_log_errors()
 
     def board_skills(self) -> dict:
-        from .skill_catalog import list_skills
-
-        try:
-            return {"ok": True, "items": list_skills()}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return workbench_queries.load_skills()
 
     def board_persona(self) -> dict:
         return self.assistant_settings.load_persona()
@@ -522,20 +509,10 @@ class App(BoardWorkbench):
         return self.assistant_settings.test_model(payload)
 
     def board_usage(self) -> dict:
-        try:
-            data = summarize_usage()
-            data["ok"] = True
-            return data
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return workbench_queries.load_usage()
 
     def board_github(self) -> dict:
-        from .github import board_snapshot
-
-        try:
-            return board_snapshot()
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+        return workbench_queries.load_github()
 
     def _chat_visible(self) -> bool:
         return bool(self.pet and self.pet.bubble_open)

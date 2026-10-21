@@ -5,7 +5,7 @@
 手动压缩使用 ContextCompressionService；笔记读写、生成、导出及文件 RPC 使用 NotebookService。
 知识库八入口使用 KnowledgeService；今日看板四入口使用 BoardService。
 周复盘三入口使用 WeeklyReviewService；自动化配置与调度由 AutomationService 拥有。
-这里仍有 GUI 类继承，任务 worker 直接使用共享服务，不导入此模块。
+独立组装业务服务，不导入旧 App 或窗口模块。任务 worker 不导入此宿主。
 """
 from __future__ import annotations
 
@@ -13,20 +13,70 @@ import threading
 from contextlib import contextmanager
 from typing import Callable
 
-from ..app import App
+from ..assistant_settings import AssistantSettingsService
+from ..automation_service import AutomationService
+from ..board_service import BoardService
+from ..bridge import Bridge
+from ..chat_sessions import ChatSessionService
+from ..context_compression import ContextCompressionService
+from ..conversation import ConversationService
+from ..knowledge_service import KnowledgeService
+from ..memory_editing import MemoryEditingService
+from ..notebook_service import NotebookService
+from ..state import load_state
+from ..weekly_review import WeeklyReviewService
 
 
-class HeadlessApp(App):
-    """本地 API 后端用的无头 App：数据方法照用，UI 回调改道。"""
+class HeadlessApp:
+    """后台组合根；业务状态由服务拥有，任务与协作按需创建。"""
 
     def __init__(self) -> None:
-        super().__init__(skin_id="", headless=True)
         self.turn_lock = threading.RLock()
-        from ..feishu_agent import FeishuAgent
-        self.feishu_agent = FeishuAgent(self)
         self._tasks = None
+        self._tasks_lock = threading.Lock()
+        # 坐标仅供旧桌面使用；已有坐标照读，后台不读取显示器。
+        self.state = load_state(0, 0)
+        self.conversation = ConversationService(self.state)
+        self.assistant_settings = AssistantSettingsService(self.conversation)
+        self.chat_sessions = ChatSessionService(self.conversation,
+            mutation_guard=self._session_mutation_guard, reservation_guard=self._session_reservation)
+        self.memory_editing = MemoryEditingService(self.chat_sessions)
+        self.context_compression = ContextCompressionService(self.chat_sessions,
+            start_guard=self._compression_start_guard)
+        self.notebooks = NotebookService(self.chat_sessions, start_guard=self._notebook_start_guard)
+        self.knowledge_service = KnowledgeService(self.chat_sessions, start_guard=self._knowledge_start_guard)
+        self.board_service = BoardService()
+        self.weekly_review = WeeklyReviewService(self.chat_sessions, start_guard=self._review_start_guard)
+        self.automation = AutomationService(review=self.weekly_review, tasks=lambda: self.tasks,
+            busy=lambda: self.conversation.running)
+        self.bridge = Bridge(self)
+        from ..feishu_agent import FeishuAgent
+        self.feishu_agent = FeishuAgent(self, task_backed=True)
         self._collaboration = None
         self._collaboration_lock = threading.Lock()
+
+    @property
+    def tasks(self):
+        with self._tasks_lock:
+            if self._tasks is None:
+                from ..tasks import TaskManager
+                self._tasks = TaskManager()
+            return self._tasks
+
+    @property
+    def agent(self):
+        return self.conversation.agent
+
+    @agent.setter
+    def agent(self, value):
+        self.conversation.agent = value
+
+    @property
+    def _agent_running(self):
+        return self.conversation.running
+
+    def engage_model(self, model_id=""):
+        return self.conversation.engage_model(model_id)
 
     @property
     def collaboration(self):
@@ -58,8 +108,7 @@ class HeadlessApp(App):
         if not self.turn_lock.acquire(blocking=False):
             raise RuntimeError('助手正在处理其他操作，完成或停止后再修改笔记。')
         try:
-            with super()._notebook_start_guard():
-                yield
+            yield
         finally:
             self.turn_lock.release()
 
@@ -68,8 +117,7 @@ class HeadlessApp(App):
         if not self.turn_lock.acquire(blocking=False):
             raise RuntimeError('助手正在处理其他操作，完成或停止后再操作知识库。')
         try:
-            with super()._knowledge_start_guard():
-                yield
+            yield
         finally:
             self.turn_lock.release()
 
@@ -78,8 +126,7 @@ class HeadlessApp(App):
         if not self.turn_lock.acquire(blocking=False):
             raise RuntimeError('助手正在处理其他操作，完成或停止后再操作周复盘。')
         try:
-            with super()._review_start_guard():
-                yield
+            yield
         finally:
             self.turn_lock.release()
 

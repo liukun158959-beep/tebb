@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 
+from . import workbench_queries
+
 
 class Bridge:
     def __init__(self, host, *, session_changed=None) -> None:
@@ -329,10 +331,10 @@ class Bridge:
         return self._change_session('switch_chat_session', session_id=session_id)
 
     def load_composer_options(self) -> dict:
-        return self._host.board_composer_options()
+        return workbench_queries.load_composer_options()
 
     def list_feishu_docs(self) -> dict:
-        return self._host.list_feishu_docs()
+        return workbench_queries.list_feishu_docs()
 
     def load_knowledge(self) -> dict:
         return self._host.knowledge_service.load_knowledge()
@@ -405,7 +407,7 @@ class Bridge:
         return self._host.notebooks.delete_notebook_file(session_id, note_id, name)
 
     def list_mcp_tools(self) -> dict:
-        return self._host.list_mcp_tools()
+        return workbench_queries.list_mcp_tools()
 
     def write_week_review_doc(self, payload: dict) -> dict:
         return self._host.weekly_review.write_week_review_doc(payload)
@@ -460,10 +462,10 @@ class Bridge:
         return self._host.board_service.create_agenda(summary, start, end)
 
     def load_log_errors(self) -> dict:
-        return self._host.board_log_errors()
+        return workbench_queries.load_log_errors()
 
     def load_skills(self) -> dict:
-        return self._host.board_skills()
+        return workbench_queries.load_skills()
 
     def ask_today(self) -> None:
         self._host.ui(self._host.ask_today)
@@ -544,7 +546,7 @@ class Bridge:
         return self._host.assistant_settings.test_model(payload)
 
     def load_usage(self) -> dict:
-        return self._host.board_usage()
+        return workbench_queries.load_usage()
 
     def load_feishu(self) -> dict:
         from .feishu_auth import feishu_status
@@ -571,4 +573,4 @@ class Bridge:
 
 
     def load_github(self) -> dict:
-        return self._host.board_github()
+        return workbench_queries.load_github()

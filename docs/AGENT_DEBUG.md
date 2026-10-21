@@ -32,7 +32,7 @@ python -m unittest discover -s tests -p test_tasks.py -v
 
 预期：离线测试全部通过；后台任务不改变桌面选中的会话或窗口配置；模型或检索失败时不写入成功回复，临时工具清理失败时仍释放忙碌状态和回调。若失败，先看 unittest 的具体断言与子进程 stderr：`GUI import forbidden` 表示新增了窗口依赖；缺少 result 或出现 failure 则检查本轮异常、采样输入、工具回执及模型记录。
 
-已独立的范围包括普通/知识任务、共享对话业务、模型/人设配置、普通会话/只读记忆、长期事实/单句历史编辑、手动压缩及笔记读写/来源问答/勾选总结/导出/生成文件操作；本地 API 的其它数据 RPC 仍通过 HeadlessApp 继承兼容，不代表整个后端已无 GUI 依赖。GUI 实机、真实模型和完整发布包验收单独报告。
+已独立的范围包括普通/知识任务、共享对话业务、模型/人设配置、普通会话/只读记忆、长期事实/单句历史编辑、手动压缩及笔记读写/来源问答/勾选总结/导出/生成文件操作；后台现已独立组装所有既有服务，完整启动验收见下文。GUI 实机、真实模型和完整发布包验收单独报告。
 
 ## 记录范围与验证
 
@@ -66,7 +66,7 @@ python -m unittest discover -s tests -p test_persona_migration.py -v
 
 保存结果通过 `ok`、`error` / `message` 及 `save_state` 判断：`not_saved` 表示校验拒绝、未开始写入；`unconfirmed` 表示连接配置写入失败、文件结果未确认；`partial` 表示连接已写入但价格持久化未完成，内存价格恢复为原值；`saved` 表示两份配置均保存成功，即使之后助手初始化失败也不声称未保存。初始化失败仍返回 `ok: false`，错误明确提示“配置已保存，但助手初始化失败”，检查配置后重试即可。旧桌面沿用原错误展示，无需新增界面流程。此修复见 [#115](https://github.com/liukun158959-beep/tebb/issues/115)。
 
-若出现 `GUI import forbidden`，检查配置服务是否反向依赖窗口或 Host。若为 `unconfirmed` / `partial`，重新打开设置核对配置后重试；这里不提供跨文件事务，也不声称写入中断已自动回滚。回归使用临时数据和模拟文件写入故障，覆盖无 GUI 服务和真实本地 WebSocket。整个 HeadlessApp 仍有其他 GUI 继承，真实 GUI、模型和发布包验收单独报告。
+若出现 `GUI import forbidden`，检查配置服务是否反向依赖窗口或 Host。若为 `unconfirmed` / `partial`，重新打开设置核对配置后重试；这里不提供跨文件事务，也不声称写入中断已自动回滚。回归使用临时数据和模拟文件写入故障，覆盖无 GUI 服务和真实本地 WebSocket。HeadlessApp 去继承与完整后台导入边界另有专项验收，真实 GUI、模型和发布包验收单独报告。
 
 ## 无 GUI 的普通会话服务验收
 
@@ -87,7 +87,7 @@ python -m unittest discover -s tests -p test_conversation.py -v
 
 首次访问回归不预先注入任务管理器，分别以清空会话 RPC 和发送消息作为首次入口，使用脚本 worker 完成任务、写入历史并查询任务列表，确认只初始化一次。若首次操作出现 `NoneType` 的 `submit` 或 `session_mutation_guard` 错误，先检查 HeadlessApp.tasks 的延迟初始化，而非窗口状态。修复见 [#117](https://github.com/liukun158959-beep/tebb/issues/117)。
 
-失败时检查 error 与 change_state：`not_changed` 表示校验或忙碌拒绝；`unconfirmed` 表示选择/摘要持久化失败、文件结果未确认，选择失败会恢复内存 ID；`partial` 表示摘要已清理但历史未清理完成；`committed` 表示数据已更新但模型临时上下文或 GUI 刷新失败。按提示重新读取并核对后重试，不声称跨文件事务回滚。记忆编辑和手动压缩的后续拆分见下文；整个 HeadlessApp 去继承仍待后续处理。
+失败时检查 error 与 change_state：`not_changed` 表示校验或忙碌拒绝；`unconfirmed` 表示选择/摘要持久化失败、文件结果未确认，选择失败会恢复内存 ID；`partial` 表示摘要已清理但历史未清理完成；`committed` 表示数据已更新但模型临时上下文或 GUI 刷新失败。按提示重新读取并核对后重试，不声称跨文件事务回滚。记忆编辑和手动压缩的后续拆分见下文；HeadlessApp 去继承已完成，完整后台验收见下文。
 
 ## 无 GUI 的记忆编辑服务验收
 
@@ -106,7 +106,7 @@ python -m unittest tests.test_local_api.LocalApiTests.test_memory_editing_rpc_us
 
 失败查看 `error/change_state`：`not_changed` 表示校验或忙碌拒绝；`unconfirmed` 表示事实写入或摘要失效等文件操作结果未确认，摘要失败尚未删除历史；`partial` 表示包含该句的摘要已失效，但历史删除未完成；`committed` 表示编辑已完成但记忆页读取或临时上下文清理失败。后两者不能当作“未修改”重复提交；先用 `load_memory/load_chat_log` 核对，需要时检查文件并恢复后重试。原存储没有跨文件事务，此处不承诺中断回滚。
 
-服务测试的子进程拒绝 GUI 导入并实际执行编辑；真实失败 worker 在终态后暂停最终写回，验证历史删除仍被阻止，事实编辑允许。认证 WebSocket 回归令旧 App 编辑方法报错，确保 RPC 直接调用独立服务，覆盖成功快照、忙碌/隔离、摘要故障和已保存但读取失败。该服务独立不代表整个 HeadlessApp 已去除 GUI 继承；实机、真实模型及发布包验证单独报告。对应 [#118](https://github.com/liukun158959-beep/tebb/issues/118)。
+服务测试的子进程拒绝 GUI 导入并实际执行编辑；真实失败 worker 在终态后暂停最终写回，验证历史删除仍被阻止，事实编辑允许。认证 WebSocket 回归令旧 App 编辑方法报错，确保 RPC 直接调用独立服务，覆盖成功快照、忙碌/隔离、摘要故障和已保存但读取失败。服务级与完整后台级导入检查分别保留；实机、真实模型及发布包验证单独报告。对应 [#118](https://github.com/liukun158959-beep/tebb/issues/118)。
 
 ## 无 GUI 的笔记基础服务验收
 
@@ -125,7 +125,7 @@ python -m unittest tests.test_local_api.LocalApiTests.test_notebook_reads_and_bu
 
 底层 `notebook.json` 使用独立跨进程锁保护所有读改写，包括问答、收藏、导出登记及生成文件清理；复用临时文件原子替换，模型等待、飞书调用和系统打开文件不持笔记存储锁。跨进程测试竞争保存、问答写回、成果收藏及 Markdown 导出，核对每项增量均保留；操作系统锁在进程退出时释放。原子替换不等于笔记和生成文件的跨文件事务，也不承诺掉电耐久性。
 
-失败回执：`not_changed` 为准入/校验等失败；`partial` 为生成文件清理未完成、笔记记录仍保留，附 `session_id/note_id/removed_files/failed_file`；`unconfirmed` 为笔记记录保存结果未确认，附目标 ID 及已清理文件；`committed` 为记录已保存但聚合页读取失败。先重新读取目标核对；附件部分删除不会恢复，读取失败不能被解释为保存没有发生。问答与勾选总结的后续共享服务见下文；HeadlessApp 整体尚未脱离 GUI。见 [ADR 0008](adr/0008-notebook-service.md)、[#127](https://github.com/liukun158959-beep/tebb/issues/127) 及 [Windows 锁缺陷 #128](https://github.com/liukun158959-beep/tebb/issues/128)。
+失败回执：`not_changed` 为准入/校验等失败；`partial` 为生成文件清理未完成、笔记记录仍保留，附 `session_id/note_id/removed_files/failed_file`；`unconfirmed` 为笔记记录保存结果未确认，附目标 ID 及已清理文件；`committed` 为记录已保存但聚合页读取失败。先重新读取目标核对；附件部分删除不会恢复，读取失败不能被解释为保存没有发生。问答与勾选总结的后续共享服务见下文；完整后台现已另行去除 GUI 继承，见下文。见 [ADR 0008](adr/0008-notebook-service.md)、[#127](https://github.com/liukun158959-beep/tebb/issues/127) 及 [Windows 锁缺陷 #128](https://github.com/liukun158959-beep/tebb/issues/128)。
 
 ## 无 GUI 的笔记导出及生成文件验收
 
@@ -290,4 +290,26 @@ python -m unittest tests.test_local_api.LocalApiTests.test_compression_rejects_c
 
 用量沿用原顺序：正常模型回执先落账，再检查正文并保存，所以空正文、工具返回或保存失败可能已有费用记录；用量写入失败会阻止新摘要保存。模型异常携带的 partial usage 本批未另行补记。请求仍走现有 HTTP 调试记录和会话上下文，不增加日志或调试网络服务。
 
-同步 RPC 沿用既有模型网络超时，没有新增任务 ID、流式进度、总时限或取消入口。连接断开不取消线程内模型请求，可能继续保存；重连后调用 `load_memory/load_chat_log` 核对，不自动重试。预期专项测试通过，特别是模型等待时另一个真实 worker 可完成 WRITES 保护的工具，以及断连后只有一次模型调用、预留正确释放。整个 HeadlessApp 仍有看板/笔记继承；GUI 实机、真实模型、真实沙箱和发布包另行报告。见 [#119](https://github.com/liukun158959-beep/tebb/issues/119)。
+同步 RPC 沿用既有模型网络超时，没有新增任务 ID、流式进度、总时限或取消入口。连接断开不取消线程内模型请求，可能继续保存；重连后调用 `load_memory/load_chat_log` 核对，不自动重试。预期专项测试通过，特别是模型等待时另一个真实 worker 可完成 WRITES 保护的工具，以及断连后只有一次模型调用、预留正确释放。HeadlessApp 已独立组装服务，完整后台检查见下文；GUI 实机、真实模型、真实沙箱和发布包另行报告。见 [#119](https://github.com/liukun158959-beep/tebb/issues/119)。
+
+
+## 无 GUI 的完整后台验收
+
+在仓库根目录运行：
+
+```powershell
+python -m unittest tests.test_headless_host -v
+python -m unittest tests.test_local_api tests.test_feishu_agent tests.test_feishu_cards -v
+$env:DESK_TEST_ATLAS_SOURCE = 'E:\path\to\Atlas'
+python -m unittest discover -s tests -v
+```
+
+`test_headless_host` 自动使用临时数据目录，在新进程中安装 GUI 导入拦截器，再通过 `tests.headless_backend_fixture` 实际执行 `server.main()`：取得运行权、构造宿主、启动监听和调度，验证 health、错误 token、七个查询、会话 RPC、真实任务 worker 的假模型对话/历史以及认证 shutdown。飞书自动连接与目录外部适配被替换，不访问真实模型、GitHub 或飞书。配置损坏会在监听和任务恢复前明确失败，不改写原文件。其它测试覆盖保存坐标、并发首次访问只构造一个任务/协作实例、显式飞书模式及旧桌面 pet 收尾保护。
+
+服务级 `tests.gui_import_guard.NoGui()` 仍禁止 App、Host、Bridge、BoardWorkbench 与窗口库；后台级 `NoGui(BACKEND_FORBIDDEN)` 只允许 Host 和 Bridge，仍禁止 App、BoardWorkbench、显示器、桌宠、托盘、WebView 与 win32 GUI 模块。先安装拦截器再导入才能验证真实启动链，不能在已加载窗口模块的测试进程里只检查继承关系。
+
+成功应包含 `backend GUI boundary verified`、认证 RPC 的外层和业务层 `ok`、两条普通会话历史以及正常退出码。出现 `GUI import forbidden` 时按 traceback 查引入窗口的实际调用；启动失败先核对隔离目录的配置错误，不能把失败解释为无任务或空结果。错误 token 和白名单外 GUI 方法必须被拒绝，不能为调试绕过现有权限。
+
+直接服务调试可在隔离目录构造 `HeadlessApp()`，通过 `bridge` 或各业务服务调用；独立构造不替代生产入口的数据目录运行权，也不要在正在运行的真实数据目录构造第二个 TaskManager。正式后台仍运行 `python -m desk_companion.local_api.server --port <空闲端口> --token <临时令牌>`；该入口会使用真实配置与飞书自动连接，离线验收优先运行上述测试，不要将令牌或用户数据写入报告。
+
+本批保留系统文件选择、打开/定位、Windows 平台约束与现有退出顺序，不新增任意执行接口或后台重试。真实模型、飞书写入/消息、完整 GUI 实机、沙箱与发布包需分别验收；本批不发布，也不启动 Gugu 产品需求。见 [#135](https://github.com/liukun158959-beep/tebb/issues/135)。

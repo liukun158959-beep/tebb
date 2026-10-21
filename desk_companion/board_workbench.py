@@ -3,60 +3,19 @@ from __future__ import annotations
 
 import json
 
-
-from .conversation_input import CLI_CHIPS, compose_turn
+from . import workbench_queries
+from .conversation_input import compose_turn
 
 
 class BoardWorkbench:
     def board_composer_options(self) -> dict:
-        from .skill_catalog import list_skills
-
-        try:
-            skills = [
-                {"id": item["id"], "label": item["id"], "description": item["description"]}
-                for item in list_skills()
-            ]
-        except Exception as extra:
-            return {"ok": False, "error": str(extra)}
-        github = {"ok": True, "items": []}
-        try:
-            from .github import list_owned_repos
-
-            github = {
-                "ok": True,
-                "items": [
-                    {"id": row["full_name"], "label": row["full_name"]}
-                    for row in list_owned_repos()
-                ],
-            }
-        except Exception as extra:
-            github = {"ok": False, "error": str(extra), "items": []}
-        return {
-            "ok": True,
-            "skills": skills,
-            "cli": [{"id": key, "label": label} for key, label in CLI_CHIPS],
-            "github": github,
-        }
+        return workbench_queries.load_composer_options()
 
     def list_mcp_tools(self) -> dict:
-        from .mcp_client import list_mcp_menu
-
-        return list_mcp_menu()
+        return workbench_queries.list_mcp_tools()
 
     def list_feishu_docs(self) -> dict:
-        from .feishu_docs import list_my_docx
-        from .wiki_connection import catalog, load_settings, enrich_catalog
-        items, errors = [], []
-        for get in (list_my_docx, catalog):
-            try:
-                items.extend(get())
-            except Exception as extra:
-                items.extend(getattr(extra, 'items', []))
-                errors.append(str(extra))
-        unique = {item["token"]: item for item in items}
-        grouped = enrich_catalog(list(unique.values())) if unique else []
-        return {"ok": bool(items) or not errors, "items": grouped,
-                "error": "\n".join(errors), "wiki_connected": bool(load_settings().get("wiki_url"))}
+        return workbench_queries.list_feishu_docs()
 
     def write_week_review_doc(self, payload: dict) -> dict:
         return self.weekly_review.write_week_review_doc(payload)
