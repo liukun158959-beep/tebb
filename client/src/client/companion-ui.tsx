@@ -41,6 +41,8 @@ const ICON_PATHS: Record<string, ReactNode> = {
   memory: <><rect x="5" y="3" width="14" height="18" rx="2" /><path d="M9 8h6m-6 4h6m-6 4h4" /></>,
   knowledge: <><path d="M12 6Q6 2 2 5v15q5-3 10 0 5-3 10 0V5q-5-3-10 1v14" /></>,
   board: <><rect x="3" y="3" width="18" height="18" rx="3" /><path d="M3 9h18m-12 0v12" /></>,
+  calendar: <><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4m10-4v4M3 11h18m-13 4h2m4 0h2"/></>,
+  notes: <><path d="M6 3h13v18H6ZM3 7h6M3 12h6M3 17h6m3-9h4m-4 5h4"/></>,
   feishu: <path d="m3 4 10 6 8-6-6 12-5 5-3-9Z" />,
   automation: <><circle cx="12" cy="12" r="9" /><path d="M12 6v7l4 2" /></>,
   video: <><rect x="2" y="5" width="20" height="15" rx="3" /><path d="m10 9 6 4-6 3Z" /></>,
@@ -59,6 +61,7 @@ export function RailButton({ icon, label, active, onClick }: { icon: string; lab
   const [tipY, setTipY] = useState(0);
   return <button onMouseEnter={event => setTipY(event.currentTarget.getBoundingClientRect().top + 17)} onFocus={event => setTipY(event.currentTarget.getBoundingClientRect().top + 17)} type="button" className={`cp-rail-button ${active ? "is-active" : ""}`} aria-label={label} aria-pressed={!!active} onClick={onClick}>
     <AppIcon name={icon} />
+    <span className="cp-rail-label">{label}</span>
     <span className="cp-rail-tooltip" style={{ top: tipY }} aria-hidden="true">{label}</span>
   </button>;
 }

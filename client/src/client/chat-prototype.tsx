@@ -10,7 +10,7 @@ import "./chat-prototype.css";
 import { ComposerPicker } from './composer-popover';
 import { StreamText } from "./stream-text";
 import { useAutoGrowInput } from './auto-grow-input';
-import { RunProgress, visibleChatMessage } from './run-progress';
+import { RunProgress, visibleChatMessage, hasCalendarContext } from './run-progress';
 import { Markdown } from "./Markdown";
 import { ProjectMigration } from './project-migration';
 import { CompanionAvatar as Avatar, RailButton, AVATAR_NAMES, AppIcon, readDeveloperMode, saveDeveloperMode } from "./companion-ui";
@@ -76,7 +76,7 @@ function GroupForm({ editing, agents, projects, projectId, onCreate, onClose, re
   </form></Modal>;
 }
 
-export function ChatPrototype({ standalone = false, live, composeRequest, navigation, developerMode, onDeveloperMode, backend, onAttach, attachments: providedAttachments = [], onDetach, onProject, onFile, onTerminal }: { backend?: BackendInfo | null; onAttach?: () => void; attachments?: LocalSource[]; onDetach?: (id: string) => void; onProject?: () => void; onFile?: () => void; onTerminal?: () => void; standalone?: boolean; composeRequest?: { id: number; text: string }; navigation?: ReactNode; developerMode?: boolean; onDeveloperMode?: (value: boolean) => void; live?: { state: DemoState; act: (action: DemoAction) => Promise<boolean>; busy: boolean; error: string } }) {
+export function ChatPrototype({ standalone = false, live, composeRequest, navigation, developerMode, onDeveloperMode, backend, onAttach, attachments: providedAttachments = [], onDetach, onProject, onFile, onTerminal, onCalendar }: { backend?: BackendInfo | null; onAttach?: () => void; attachments?: LocalSource[]; onDetach?: (id: string) => void; onProject?: () => void; onFile?: () => void; onTerminal?: () => void; onCalendar?: () => void; standalone?: boolean; composeRequest?: { id: number; text: string }; navigation?: ReactNode; developerMode?: boolean; onDeveloperMode?: (value: boolean) => void; live?: { state: DemoState; act: (action: DemoAction) => Promise<boolean>; busy: boolean; error: string } }) {
   const [demoState, demoDispatch] = useReducer(demoReducer, undefined, () => {
     if (live) return initialDemo();
     try { return restoreDemo(localStorage.getItem(DEMO_STORAGE)); } catch { return initialDemo(); }
@@ -325,7 +325,7 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
           {messages.map(item => item.kind === "notice" ? <p key={item.id} className="cp-system-message">{item.text}</p> : <article key={item.id} className={`cp-message ${item.sender === "user" ? "cp-message-user" : ""}`}>
             {item.sender === "user" ? <span className="cp-user-avatar">你</span> : <Avatar agent={member(item.sender)} />}
             <div className="cp-message-content"><div className="cp-message-author"><strong>{item.sender === "user" ? "你" : member(item.sender)?.name}</strong>{item.kind === "result" && <span className="cp-result-tag">成果</span>}</div>
-              {item.sender !== 'user' && <RunProgress run={runs.find(r=>r.id===item.run)} />}
+              {item.sender !== 'user' && <><RunProgress run={runs.find(r=>r.id===item.run)} />{onCalendar&&hasCalendarContext(runs.find(r=>r.id===item.run))&&<button type="button" className="cp-message-reference" onClick={onCalendar}>查看相关日程 →</button>}</>}
               {(item.text || !real) && <div className="cp-markdown"><StreamText text={item.text} active={!!item.run && runs.some(r=>r.id===item.run && runActive(r))} externalLinks={standalone} /></div>}
               {item.sender !== 'user' && item.run && <div className="cp-message-footer">{(developer || !["chat","route","compress"].includes(runs.find(run => run.id===item.run)?.kind || "")) && <button className="cp-message-reference" onClick={() => { setFocusedRun(item.run!); setInspector(true); setTab("tasks"); }}>↗ 关联任务</button>}
               {real && <small className="cp-message-usage" title="本条消息的执行模型与输入／输出 token 用量">{runs.find(r => r.id===item.run)?.model} · ↑ {runs.find(r => r.id===item.run)?.input_tokens || 0} / ↓ {runs.find(r => r.id===item.run)?.output_tokens || 0}</small>}

@@ -1,9 +1,9 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Fragment, lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { Button, Card, CardBody, GlitchText } from "reend-components";
+import { Button, Card, CardBody } from "reend-components";
 import { useBoardActions } from "./board-actions";
-import { BoardPane, shouldReloadBoard, type BoardPayload } from "./board";
+import { shouldReloadBoard, type BoardPayload } from "./board";
 import {
   BOARD_FIXTURE,
   BOARD_NOW,
@@ -29,19 +29,24 @@ import { FeishuAgentPane } from "./feishu-agent";
 import { AgentMonitor } from "./agent-monitor";
 import { AgentDebugDialog } from "./agent-debug";
 import { WorkspaceRuns } from "./workspace-runs";
+import { NotebookSources } from "./notebook-sources";
+import { CalendarWorkspace } from "./calendar-workspace";
+import type { ScheduleTarget } from "./schedule";
 import { WorkBoardPane } from "./work-board";
+import { navigateWorkspace } from "./workspace-navigation";
 import { WorkspaceRail } from "./workspace-shell";
 import { PageStack } from "./page-stack";
 import { PetSettings } from "./pet-settings";
 import { ModelNetworkSettings } from './model-network';
 import { RailButton, readDeveloperMode, saveDeveloperMode } from "./companion-ui";
 import { TopToolbar } from "./top-toolbar";
+import "./workspace-navigation.css";
 import { LocalSourcesDialog, type LocalSource } from "./local-sources";
 import { SideWorkspace, previewSource, openTerminal, openProject, openProjectFolder, togglePreview } from "./side-workspace";
 import { LoadingText } from "./loading-text";
 import { AutomationPane } from "./automation";
 import { VideoPane, WikiConnectionSettings } from "./video";
-import { loadingStatuses, statusError, statusFromPayload, STATUS_KINDS, type StatusKind, type StatusView } from "./status";
+import { StatusGrid, loadingStatuses, statusError, statusFromPayload, STATUS_KINDS, type StatusKind, type StatusView } from "./status";
 import { Markdown, MdLink, openableHref, PlainLinks } from "./Markdown";
 import { DEFAULT_SAMPLING, samplingFromInputs, EFFORTS, type Sampling } from "./sampling";
 import { startupFailed, startupReady, startupStatus } from "./startup";
@@ -105,6 +110,15 @@ export function App() {
   const [showGuide, setShowGuide] = useState(false);
   const [dark, setDark] = useState(() => { try { return localStorage.getItem("tebb.theme") !== "light"; } catch { return true; } });
   const [sidebarState, setSidebarState] = useState({ open: false, available: false });
+  const [settingsSection,setSettingsSection] = useState("assistant");
+  const [workspaceModalOpen,setWorkspaceModalOpen] = useState(false);
+  useEffect(()=>{const dialogs=new Set<string>();const change=(event:Event)=>{const {id,open}=(event as CustomEvent<{id:string;open:boolean}>).detail;if(open)dialogs.add(id);else dialogs.delete(id);setWorkspaceModalOpen(dialogs.size>0);};window.addEventListener('tebb-workspace-dialog',change);return()=>window.removeEventListener('tebb-workspace-dialog',change);},[]);
+  const [noteSourcesOpen, setNoteSourcesOpen] = useState(false);
+  const [notebookCreating,setNotebookCreating] = useState(false);
+  const [notebookNeedsCheck,setNotebookNeedsCheck] = useState(false);
+  const notebookCreatingRef=useRef(false);
+  const [workTarget, setWorkTarget] = useState<{id:string;nonce:number}|null>(null);
+  const [calendarTarget, setCalendarTarget] = useState<(ScheduleTarget&{view?:'today'|'week'|'day'})|null>(null);
   const [composeRequest, setComposeRequest] = useState<{ id: number; text: string }>();
   const [developerMode, setDeveloperMode] = useState(readDeveloperMode);
   const [agentDebugOpen, setAgentDebugOpen] = useState(false);
@@ -155,9 +169,9 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [board, setBoard] = useState<BoardPayload | null>(boardDebug ? BOARD_FIXTURE : null);
-  const [boardClock, setBoardClock] = useState<string | null>(boardDebug ? BOARD_NOW : null);
+  const [boardClock, setBoardClock] = useState<string | null>(debugKind ? BOARD_NOW : null);
   const [statuses, setStatuses] = useState<StatusView[]>(boardDebug ? STATUS_FIXTURE : []);
-  const [chatFace, setChatFace] = useState<"thread" | "memory" | "knowledge">(
+  const [chatFace, setChatFace] = useState<"thread" | "memory" | "knowledge" | "notebooks">(
     debugKind === "memory" ? "memory" : debugKind === "knowledge" ? "knowledge" : "thread",
   );
   const [memory, setMemory] = useState<MemoryPayload | null>(debugKind === "memory" ? MEMORY_FIXTURE : null);
@@ -377,6 +391,7 @@ export function App() {
     if (!isTauri()) return;
     let stop = () => {};
     void listen("open-today", () => {
+      setCalendarTarget({view:'today'});
       openBoardRef.current(false);
     }).then((unlisten) => {
       stop = unlisten;
@@ -429,7 +444,7 @@ export function App() {
         setStatuses(STATUS_KINDS.map((kind) => statusFromPayload(kind, raw[kind])));
       },
       openBoard: (refresh = false) => openBoardRef.current(refresh),
-      requestToday: () => openBoardRef.current(false),
+      requestToday: () => {setCalendarTarget({view:'today'});openBoardRef.current(false);},
       openFeishu: () => openFeishuRef.current(),
       seedFeishu: (snap) => rememberFeishuRef.current(snap),
       seedMemory: (payload) => {
@@ -712,9 +727,10 @@ export function App() {
   async function loadNotebooks(backend: BackendInfo) {
     try {
       const page = await rpc<NotebookPage>(backend, "load_notebook");
-      takeNotebook(page);
+      return takeNotebook(page);
     } catch (err) {
       setNoteListError(String(err));
+      return false;
     }
   }
 
@@ -752,6 +768,8 @@ export function App() {
   }
 
   async function newNotebook() {
+    if(notebookCreatingRef.current)return;
+    if(notebookNeedsCheck)return;
     if (busy || noteBusy) {
       setNoteListError("当前内容正在处理，完成后再新建笔记。");
       return;
@@ -765,9 +783,11 @@ export function App() {
       return;
     }
     setNoteListError("");
+    notebookCreatingRef.current=true;setNotebookCreating(true);
     try {
       const page = await rpc<NotebookPage>(info, "new_notebook");
       if (!takeNotebook(page) || !page.session_id) {
+        setNotebookNeedsCheck(page.ok!==false||page.change_state==='unconfirmed'||page.change_state==='committed');
         if (!page.session_id && page.ok !== false) setNoteListError("新笔记没有 id。恢复：再点一次新笔记。");
         return;
       }
@@ -780,7 +800,8 @@ export function App() {
       setNoteChecked((page.docs || []).map((doc) => doc.id));
     } catch (err) {
       setNoteListError(String(err));
-    }
+      setNotebookNeedsCheck(true);
+    } finally {notebookCreatingRef.current=false;setNotebookCreating(false);}
   }
 
   function patchNote(sessionId: string, mapTurns: (turns: NoteSession["turns"]) => NoteSession["turns"], title?: string) {
@@ -791,13 +812,9 @@ export function App() {
   }
 
   function sendNote() {
-    const text = stripSlash(draft).trim();
+    const text = draft.trim();
     const sessionId = noteSessionId;
     if (!sessionId || busy || noteBusy || !text) return;
-    if (pickedSkills.length || pickedTools.length || pickedDocs.length || pickedMcp.length || pickedRepo || pickedAttachments.length) {
-      setNoteError("笔记只根据勾选的来源回答。去掉这些点选后再问。");
-      return;
-    }
     if (!noteChecked.length) {
       setNoteError("先勾选来源再问。");
       return;
@@ -1250,6 +1267,13 @@ export function App() {
         return { ok: false, error };
       }
       setKnowledge((cur) => mergeKnowledgePage(cur, { ...page, error: "" }));
+      if(['add_knowledge','delete_knowledge','rebuild_knowledge'].includes(method)){
+        try{const notebook=await rpc<NotebookPage>(info,'load_notebook');
+          if(notebook.ok===false||!Array.isArray(notebook.docs))throw Error(notebook.error||'笔记来源缺失');
+          const valid=new Set(notebook.docs.map(doc=>doc.id)),old=new Set(noteDocs.map(doc=>doc.id));
+          setNoteDocs(notebook.docs);setNoteChecked(cur=>[...new Set([...cur.filter(id=>valid.has(id)),...(method==='add_knowledge'?notebook.docs!.filter(doc=>!old.has(doc.id)).map(doc=>doc.id):[])])]);
+        }catch(error){const message='知识库操作已完成，但笔记来源刷新失败，请重新读取核对：'+String(error);setNoteError(message);return {ok:false,error:message};}
+      }
       return { ok: true, error: "" };
     } catch (err) {
       const error = String(err);
@@ -1833,22 +1857,37 @@ export function App() {
     setDeveloperMode(value); setComposerNotice(value ? "开发者模式已开启" : "开发者模式已关闭"); const notice = saveDeveloperMode(value); if (notice) setError(notice);
     if (!value) { setAgentDebugOpen(false); if (chatFace === "memory") { setChatFace("thread"); setPane("collaboration"); } }
   };
+  async function openNotes(){
+    setPane('chat');setChatFace('notebooks');
+    if(noteSessionId){setChatFace('thread');return;}
+    if(debugKind){setNoteSessions(NOTE_FIXTURE.sessions);setNoteDocs(NOTE_FIXTURE.docs);setNoteChecked(NOTE_FIXTURE.docs.map(doc=>doc.id));setNoteSessionId(NOTE_FIXTURE.sessions[0].id);setChatFace('thread');return;}
+    if(noteSessions.length){openNoteSession(noteSessions[0].id);return;}
+    await newNotebook();
+  }
+  async function refreshNotebooks(){if(!noteBusy&&info&&await loadNotebooks(info))setNotebookNeedsCheck(false);}
+  function openCalendar(target:ScheduleTarget={}){setCalendarTarget({...target});void openBoard();}
+  function openWorkItem(id:string){setWorkTarget({id,nonce:Date.now()});setPane('work');}
   const workspaceNavigation = <>
-    <RailButton icon="chat" label="伙伴聊天" active={pane === "collaboration"} onClick={() => setPane("collaboration")} />
-    <RailButton icon="knowledge" label="知识库" active={pane === "chat" && chatFace === "knowledge"} onClick={() => void openKnowledge()} />
-    <RailButton icon="board" label="工作看板" active={pane === "work"} onClick={() => setPane("work")} />
-    <RailButton icon="board" label="今日看板" active={pane === "board"} onClick={() => void openBoard()} />
-    <RailButton icon="feishu" label="飞书" active={pane === "feishu"} onClick={() => void openFeishu()} />
-    <RailButton icon="automation" label="定时任务" active={pane === "automation"} onClick={() => setPane("automation")} />
-    <RailButton icon="tasks" label="执行任务" active={pane === "monitor"} onClick={() => setPane("monitor")} />
-    <RailButton icon="video" label="视频读取" active={pane === "video"} onClick={() => setPane("video")} />
-    {developerMode && <RailButton icon="memory" label="旧助手记忆调试" active={pane === "chat" && chatFace === "memory"} onClick={() => void openMemory()} />}
-    <RailButton icon="settings" label="设置" active={pane === "settings"} onClick={() => setPane("settings")} />
-    <RailButton icon="pet" label="唤出桌宠" onClick={() => { void invoke("set_pet_visible", { visible: true }).catch(err => setError(`唤出桌宠失败：${String(err)}`)); }} />
+    <span className="tebb-nav-group">协作</span>
+    <RailButton icon="chat" label="伙伴聊天" active={pane === "collaboration"} onClick={() => navigateWorkspace(()=>setPane("collaboration"))} />
+    <RailButton icon="tasks" label="AI 执行" active={pane === "monitor"} onClick={() => navigateWorkspace(()=>setPane("monitor"))} />
+    <RailButton icon="automation" label="自动化" active={pane === "automation"} onClick={() => navigateWorkspace(()=>setPane("automation"))} />
+    <span className="tebb-nav-group">工作</span>
+    <RailButton icon="board" label="事项" active={pane === "work"} onClick={() => navigateWorkspace(()=>setPane("work"))} />
+    <RailButton icon="calendar" label="日程" active={pane === "board"} onClick={() => navigateWorkspace(()=>void openBoard())} />
+    <span className="tebb-nav-group">内容</span>
+    <RailButton icon="notes" label="笔记" active={pane === "chat" && (chatFace === "notebooks" || chatFace === "thread" && !!noteSessionId)} onClick={() => navigateWorkspace(()=>void openNotes())} />
+    <RailButton icon="knowledge" label="知识库" active={pane === "chat" && chatFace === "knowledge"} onClick={() => navigateWorkspace(()=>void openKnowledge())} />
+    <RailButton icon="video" label="视频学习" active={pane === "video"} onClick={() => navigateWorkspace(()=>setPane("video"))} />
+    <RailButton icon="feishu" label="飞书" active={pane === "feishu"} onClick={() => navigateWorkspace(()=>void openFeishu())} />
+    <span className="tebb-nav-group">偏好</span>
+    {developerMode && <RailButton icon="memory" label="旧助手记忆调试" active={pane === "chat" && chatFace === "memory"} onClick={() => navigateWorkspace(()=>void openMemory())} />}
+    <RailButton icon="settings" label="设置" active={pane === "settings"} onClick={() => navigateWorkspace(()=>setPane("settings"))} />
+    <div className="tebb-nav-actions"><RailButton icon="pet" label="唤出桌宠 ↗" onClick={() => { void invoke("set_pet_visible", { visible: true }).catch(err => setError(`唤出桌宠失败：${String(err)}`)); }} /></div>
   </>;
 
   return (
-    <div className="relative flex h-full overflow-hidden bg-background text-foreground" data-pane={pane}>
+    <div className="tebb-workspace relative flex h-full overflow-hidden bg-background text-foreground" data-pane={pane}>
       {showGuide && info && setupStatus ? <SetupGuide
         info={info} status={setupStatus} models={{ ok: true, active: activeModelId, items: modelItems }}
         onModels={(models) => rememberModels(models)} onClose={(completed) => {
@@ -1875,147 +1914,19 @@ export function App() {
         {bgUrl ? <div className="desk-bg-scrim" data-bg-scrim /> : null}
       </div>
       <WorkspaceRail developer={developerMode} onToggle={() => changeDeveloperMode(!developerMode)}>{workspaceNavigation}</WorkspaceRail>
-      <aside hidden style={{ display: "none" }} className="relative z-10 corner-brackets flex w-64 shrink-0 flex-col border-r border-border bg-card/80 backdrop-blur-md">
-        <div className="px-4 py-5">
-          <div className="ef-overline">AGENT WORKSPACE</div>
-          <GlitchText className="mt-1 block text-lg font-semibold text-primary" intensity="low">
-            tebb
-          </GlitchText>
-        </div>
-        <nav className="mt-2 flex flex-col gap-1 px-2" data-side-nav>
-          <SideNav
-            icon="chat"
-            label="本机工具助手"
-            active={pane === "chat" && chatFace === "thread" && !noteSessionId}
-            onClick={() => {
-              setNoteSessionId(null);
-              setChatFace("thread");
-              setPane("chat");
-            }}
-          />
-          {developerMode && <SideNav
-            icon="memory"
-            label="记忆"
-            sub="memory"
-            active={pane === "chat" && chatFace === "memory"}
-            onClick={() => void openMemory()}
-          />}
-          <SideNav icon="chat" label="伙伴聊天" active={pane === "collaboration"} onClick={() => setPane("collaboration")} />
-          <SideNav
-            icon="knowledge"
-            label="知识库"
-            sub="knowledge"
-            active={pane === "chat" && chatFace === "knowledge"}
-            onClick={() => void openKnowledge()}
-          />
-          <SideNav
-            icon="board"
-            label="看板"
-            active={pane === "work" || pane === "board" || pane === "feishu" || pane === "automation" || pane === "monitor" || pane === "video"}
-            onClick={() => void openBoard()}
-          />
-          <SideNav icon="settings" label="设置" active={pane === "settings"} onClick={() => setPane("settings")} />
-          <SideNav
-            icon="pet"
-            label="唤出桌宠"
-            onClick={() => {
-              invoke("set_pet_visible", { visible: true }).catch((err: unknown) => {
-                setError(`唤出桌宠失败：${String(err)}。恢复：重启客户端。`);
-              });
-            }}
-          />
-        </nav>
-        {pane === "chat" ? (
-          <>
-            <div className="mt-4 flex items-center justify-between px-4 text-xs text-muted-foreground">
-              <span>会话</span>
-              <Button type="button" variant="ghost" size="sm" onClick={() => { setChatFace("thread"); void newSession(); }}>
-                新对话
-              </Button>
-            </div>
-            <div className="mt-2 min-h-0 flex-1 overflow-y-auto px-2" data-nav="sessions">
-              {(thread?.sessions || []).map((session) => {
-                const generating = busy && session.id === thread?.sessionId;
-                const selected = !noteSessionId && session.id === thread?.sessionId;
-                return (
-                  <button
-                    key={session.id}
-                    type="button"
-                    data-session={session.id}
-                    data-session-generating={generating ? "1" : "0"}
-                    onClick={() => {
-                      setChatFace("thread");
-                      void openSession(session.id);
-                    }}
-                    className={`mb-1 flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-sm transition-colors duration-200 ${
-                      selected
-                        ? "bg-primary/15 text-primary"
-                        : "text-muted-foreground hover:bg-secondary"
-                    }`}
-                  >
-                    <div className="min-w-0 flex-1 truncate">{session.title || "未命名对话"}</div>
-                    {generating ? <ThinkDots /> : null}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="mt-3 flex items-center justify-between px-4 text-xs text-muted-foreground">
-              <span>笔记</span>
-              <Button type="button" variant="ghost" size="sm" data-new-notebook="" onClick={() => void newNotebook()}>
-                新笔记
-              </Button>
-            </div>
-            {noteListError ? <p data-notebook-error="" className="px-4 py-1 text-xs text-destructive">{noteListError}</p> : null}
-            <div className="mt-2 max-h-40 overflow-y-auto px-2 pb-3" data-nav="notebooks">
-              {noteSessions.map((session) => {
-                const selected = session.id === noteSessionId;
-                return (
-                  <button
-                    key={session.id}
-                    type="button"
-                    data-notebook={session.id}
-                    data-active={selected ? "1" : "0"}
-                    onClick={() => openNoteSession(session.id)}
-                    className={`mb-1 flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-sm transition-colors duration-200 ${
-                      selected ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-secondary"
-                    }`}
-                  >
-                    <div className="min-w-0 flex-1 truncate">{session.title}</div>
-                    {noteBusy && selected ? <ThinkDots /> : null}
-                  </button>
-                );
-              })}
-            </div>
-          </>
-        ) : pane === "settings" || pane === "collaboration" ? (
-          <div className="flex-1" />
-        ) : (
-          <div className="mt-4 flex-1 overflow-y-auto px-2" data-nav="board">
-            <SideLink icon="board" label="工作看板" sub="work" selected={pane === "work"} onClick={() => setPane("work")} />
-            <SideLink icon="today" label="今日" sub="today" selected={pane === "board"} onClick={() => openBoard()} />
-            <SideLink icon="feishu" label="飞书" sub="feishu" selected={pane === "feishu"} onClick={() => void openFeishu()} />
-            <SideLink icon="today" label="定时任务" sub="automation" selected={pane === "automation"} onClick={() => setPane("automation")} />
-            <SideLink icon="board" label="执行任务" sub="monitor" selected={pane === "monitor"} onClick={() => setPane("monitor")} />
-            <SideLink icon="video" label="视频读取" sub="video" selected={pane === "video"} onClick={() => setPane("video")} />
-          </div>
-        )}
-      </aside>
       <main className="main-workspace relative z-10 flex min-w-0 flex-1 flex-col">
-        <TopToolbar title={pane === "chat" ? noteSessionId ? "笔记" : ({ thread: "对话", memory: "记忆", knowledge: "知识库" })[chatFace] :
-          ({ work: "工作看板", board: "今日看板", feishu: "飞书", settings: "设置", automation: "定时任务", monitor: "执行任务", video: "视频读取", collaboration: "伙伴聊天" })[pane]}
-          model={modelItems.find(m => m.id === activeModelId)?.model ? `默认：${modelItems.find(m => m.id === activeModelId)?.model}` : ""} connected={!!info || !!debugKind} busy={busy || noteBusy} dark={dark}
-          onTheme={() => setDark(!dark)} onNewChat={() => { setPane("collaboration"); window.dispatchEvent(new CustomEvent("tebb-new-chat")); }}
-          onMonitor={() => setPane("monitor")} onVideo={() => setPane("video")} onDebug={() => { changeDeveloperMode(true); setAgentDebugOpen(true); }}
+        <TopToolbar title={pane === "chat" ? noteSessionId ? "笔记" : ({ thread: "对话", memory: "记忆", knowledge: "知识库", notebooks:"笔记" })[chatFace] :
+          ({ work: "事项", board: "日程", feishu: "飞书", settings: "设置", automation: "自动化", monitor: "AI 执行", video: "视频学习", collaboration: "伙伴聊天" })[pane]}
+          model={modelItems.find(m => m.id === activeModelId)?.model ? `默认：${modelItems.find(m => m.id === activeModelId)?.model}` : ""} connected={!!info || !!debugKind} busy={busy || noteBusy}
+          onNewChat={coreChat ? () => { setPane("collaboration"); window.dispatchEvent(new CustomEvent("tebb-new-chat")); } : undefined}
           onFile={() => setLocalDialog("file")} onFolder={openProjectFolder} onTerminal={openTerminal} sidebarOpen={sidebarState.open} sidebarAvailable={sidebarState.available} onSidebarToggle={togglePreview} />
+        {noteSourcesOpen&&<NotebookSources info={info} docs={noteDocs} checked={noteChecked} busy={noteBusy||knowledgeBusy} debug={!!debugKind} onCheck={(id,on)=>setNoteChecked(cur=>on?[...new Set([...cur,id])]:cur.filter(value=>value!==id))} onAdd={(doc_id,label,source)=>knowledgeCall('add_knowledge',{doc_id,label,source})} onLocal={()=>{setNoteSourcesOpen(false);setLocalDialog('file');}} onClose={()=>setNoteSourcesOpen(false)}/>}
         {localDialog && <LocalSourcesDialog info={info} initialKind={localDialog} debug={!!debugPane()} onClose={() => { setLocalDialog(null); setLocalDialogMinimized(false); }} onPreview={previewSource} onMinimizedChange={setLocalDialogMinimized}
           onAttach={sources => { setPickedAttachments(sources); setLocalDialog(null); setPane("collaboration"); setNoteSessionId(null); }}
           onIndex={source => knowledgeCall("add_knowledge", { doc_id: `local:${source.id}`, label: source.name })} />}
         <div className="tebb-page-body">
-        {!coreChat && <aside className="tebb-section-nav" aria-label="页面导航"><strong>{pane === 'settings' ? '偏好与连接' : pane === 'chat' && noteSessionId ? '笔记与成果' : pane === 'chat' && chatFace === 'knowledge' ? '知识库' : pane === 'feishu' ? '飞书空间' : pane === 'video' ? '视频资料' : '任务与工作'}</strong>
-          {(pane === 'settings') ? <><button onClick={() => setShowGuide(true)}>初始化引导</button><button onClick={releaseIntro.show}>版本介绍</button><button onClick={openProject}>工作目录与权限</button>{developerMode && <button onClick={() => setAgentDebugOpen(true)}>调用调试</button>}</> : pane === 'chat' && (chatFace === 'knowledge' || !!noteSessionId) ? <><button onClick={() => {setPane('collaboration');setNoteSessionId(null);}}>返回伙伴聊天</button><button onClick={() => void newNotebook()}>新建笔记</button><button onClick={() => void openKnowledge()}>刷新知识库</button><button onClick={() => setLocalDialog('file')}>添加本地资料</button><button onClick={openProject}>项目文件</button>{noteSessions.map(note => <button key={note.id} onClick={() => openNoteSession(note.id)}>{note.title || '笔记'}</button>)}</> : <><button onClick={() => setPane("work")}>工作看板</button><button onClick={() => void openBoard()}>今日看板</button><button onClick={() => setPane('monitor')}>执行任务</button><button onClick={() => setPane('automation')}>定时任务</button><button onClick={() => setPane('video')}>视频读取</button><button onClick={openProject}>项目文件</button></>}
-          <p>文件、引用与任务可以返回伙伴聊天继续处理。</p></aside>}
         <SideWorkspace onVisibilityChange={setSidebarState} info={info} session={noteSessionId || thread?.sessionId || ""} onTerminalDraft={text => { if (noteSessionId && pane === "chat" && chatFace === "thread") { setDraft(previous => `${previous}${previous ? "\n\n" : ""}${text}`); setComposerNotice("内容已加入笔记提问草稿，尚未发送。"); } else { setComposeRequest({ id: Date.now(), text }); setPane("collaboration"); } }} enabled={true} debug={!!debugKind}
-          suspended={agentDebugOpen || showGuide || !!cropSrc || releaseIntro.open || (!!localDialog && !localDialogMinimized)}
+          suspended={workspaceModalOpen || agentDebugOpen || showGuide || !!cropSrc || releaseIntro.open || (!!localDialog && !localDialogMinimized)}
           attachments={pickedAttachments}
           onAttach={sources => { setPickedAttachments(sources); setPane("collaboration"); setNoteSessionId(null); }}
           onDetach={id => setPickedAttachments(prev => prev.filter(s => s.id !== id))}
@@ -2023,7 +1934,7 @@ export function App() {
           onRequest={() => {}}>
         <div className="tebb-content-slot" data-content-slot>
         <div className="tebb-core-chat" hidden={!coreChat} style={{ display: coreChat ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0 }}>
-          {!debugKind && <Suspense fallback={<p className="p-6">正在连接伙伴…</p>}><LiveCollaboration attachments={pickedAttachments} onAttach={() => setLocalDialog("file")} onDetach={id => setPickedAttachments(old => old.filter(a => a.id!==id))} onProject={openProject} onFile={() => setLocalDialog("file")} onTerminal={openTerminal} composeRequest={composeRequest} info={info} developerMode={developerMode} onDeveloperMode={changeDeveloperMode} /></Suspense>}
+          {!debugKind && <Suspense fallback={<p className="p-6">正在连接伙伴…</p>}><LiveCollaboration onCalendar={()=>openCalendar()} attachments={pickedAttachments} onAttach={() => setLocalDialog("file")} onDetach={id => setPickedAttachments(old => old.filter(a => a.id!==id))} onProject={openProject} onFile={() => setLocalDialog("file")} onTerminal={openTerminal} composeRequest={composeRequest} info={info} developerMode={developerMode} onDeveloperMode={changeDeveloperMode} /></Suspense>}
         </div>
         <div className="tebb-route-page" hidden={coreChat} style={{ display: coreChat ? "none" : "flex" }}>
         <PageStack active={coreChat ? "" : pane === "chat" ? chatFace : pane}>
@@ -2034,6 +1945,7 @@ export function App() {
               className="flex-1 overflow-y-auto px-8 py-6"
             >
               <KnowledgePane
+                settings={<WikiConnectionSettings info={info} debug={!!debugPane()} onSaved={() => void openKnowledge()} />}
                 data={knowledge}
                 catalog={knowledgeCatalog}
                 catalogError={knowledgeCatalogError}
@@ -2069,8 +1981,9 @@ export function App() {
                   }
                 }}
               />
-              <WikiConnectionSettings info={info} debug={!!debugPane()} onSaved={() => void openKnowledge()} />
             </section>
+          ) : pane === "chat" && chatFace === "notebooks" ? (
+            <section key="notebooks" data-notebook-empty className="flex-1 overflow-y-auto px-8 py-6"><h1 className="text-xl">笔记</h1><p className="my-4 text-sm text-muted-foreground">选择或新建笔记会话，基于来源提问并保存成果。</p>{noteListError&&<p role="alert" className="text-destructive">{noteListError}</p>}<button type="button" className="desk-menu-item" disabled={notebookCreating||notebookNeedsCheck||busy||noteBusy} onClick={()=>void newNotebook()}>{notebookCreating?'正在创建…':'＋ 新建笔记'}</button><button type="button" className="desk-menu-item" onClick={()=>void refreshNotebooks()}>读取笔记核对</button>{noteSessions.map(session=><button type="button" className="desk-menu-item" key={session.id} onClick={()=>openNoteSession(session.id)}>{session.title||'未命名笔记'}</button>)}</section>
           ) : pane === "chat" && chatFace === "memory" ? (
             <section
               key="memory"
@@ -2095,6 +2008,8 @@ export function App() {
               data-chat-face="note"
               className="flex min-h-0 flex-1 flex-col"
             >
+              <div className="notebook-toolbar"><label>笔记会话 <select aria-label="笔记会话" value={noteSessionId} disabled={noteBusy} onChange={e=>openNoteSession(e.target.value)}>{noteSessions.map(session=><option key={session.id} value={session.id}>{session.title||'未命名笔记'}</option>)}</select></label><button type="button" disabled={notebookCreating||notebookNeedsCheck||busy||noteBusy} onClick={()=>void newNotebook()}>＋ 新建笔记</button><button type="button" onClick={()=>void refreshNotebooks()}>读取核对</button></div>
+              {noteListError&&<p role="alert" className="text-destructive px-4">{noteListError}</p>}
               <NoteMode
                 sessionId={noteSessionId}
                 book={{
@@ -2122,7 +2037,8 @@ export function App() {
                 saveStatus={noteSave}
                 saveBad={noteSaveBad}
                 docUrl={noteDocUrl}
-              />
+                onAddSources={()=>setNoteSourcesOpen(true)}
+              >
               <div data-chat-bar="" className="border-t border-border px-6 py-4">
                 <div className="composer-toolbar mb-2">
                   <ModelPick modelId={activeModelId} items={modelItems} busy={busy || noteBusy} onChange={(id) => void useModel(id)} />
@@ -2148,6 +2064,7 @@ export function App() {
                 </form>
                 {composerNotice && <p className="composer-feedback" role="status">{composerNotice}</p>}
               </div>
+              </NoteMode>
             </section>
           ) : pane === "chat" ? (
             <section
@@ -2155,6 +2072,7 @@ export function App() {
               data-chat-face="thread"
               className="flex min-h-0 flex-1 flex-col"
             >
+              {debugKind&&<div className="notebook-toolbar"><button type="button" onClick={()=>void newSession()}>新建普通会话</button><select aria-label="普通调试会话" value={thread?.sessionId||''} onChange={e=>void openSession(e.target.value)}><option value="">选择普通会话</option>{thread?.sessions.map(session=><option key={session.id} value={session.id}>{session.title||'未命名对话'}</option>)}</select></div>}
               <div ref={scroller} className="flex-1 space-y-3 overflow-y-auto px-8 py-6">
                 {debugMode ? (
                   <div className="text-xs text-muted-foreground">调试样本，未连接后端</div>
@@ -2326,10 +2244,11 @@ export function App() {
               key="settings"
               className="flex-1 overflow-y-auto px-8 py-6"
             >
-              <ReleaseSettings info={info} onShowIntro={releaseIntro.show} />
-              <PetSettings info={info} debug={!!debugKind} />
-              <ModelNetworkSettings info={info} debug={!!debugKind} />
-              <SettingsPane
+              <nav className="workspace-tabs" aria-label="设置分类">{[['assistant','模型与人设'],['connections','连接与网络'],['appearance','桌宠与外观'],['about','版本与诊断']].map(([id,label])=><button type="button" key={id} aria-pressed={settingsSection===id} onClick={()=>setSettingsSection(id)}>{label}</button>)}</nav>
+              <div hidden={settingsSection!=='about'}><ReleaseSettings info={info} onShowIntro={releaseIntro.show}/>{developerMode&&<button type="button" className="desk-menu-item" onClick={()=>setAgentDebugOpen(true)}>调用调试</button>}</div>
+              <div hidden={settingsSection!=='appearance'}><PetSettings info={info} debug={!!debugKind}/></div>
+              <div hidden={settingsSection!=='connections'}><ModelNetworkSettings info={info} debug={!!debugKind}/><StatusGrid cards={statuses} onOpenFeishu={()=>void openFeishu()}/></div>
+              <div hidden={!['assistant','appearance'].includes(settingsSection)}><SettingsPane section={settingsSection==='appearance'?'appearance':'assistant'}
                 onOpenGuide={() => {
                   if (!info) return;
                   void rpc<SetupStatus>(info, "load_onboarding").then((setup) => {
@@ -2357,7 +2276,7 @@ export function App() {
                 onEdit={editModel}
                 onDelete={(id) => void deleteModel(id)}
                 onSavePersona={(text) => void savePersona(text)}
-              />
+              /></div>
             </section>
           ) : pane === "feishu" ? (
             <section
@@ -2375,19 +2294,19 @@ export function App() {
             </section>
           ) : pane === "automation" ? (
             <section key="automation" data-page="automation" className="flex-1 overflow-y-auto px-8 py-6">
-              <h1 className="text-2xl font-semibold">定时任务</h1>
+              <h1 className="text-2xl font-semibold">自动化</h1>
               <p className="mt-2 text-sm text-muted-foreground">管理每日资讯、运行计划和执行记录。</p>
               <AutomationPane info={info} debug={boardClock !== null} />
             </section>
           ) : pane === "video" ? (
             <section key="video" data-page="video" className="flex-1 overflow-y-auto px-8 py-6">
-              <h1 className="text-2xl font-semibold">视频读取</h1>
+              <h1 className="text-2xl font-semibold">视频学习</h1>
               <p className="mt-2 text-sm text-muted-foreground">从实际视频资料中提炼要点，查看出处并整理笔记。</p>
               <VideoPane info={info} debug={boardClock !== null} />
             </section>
           ) : pane === "work" ? (
             <section key="work" data-page="work" className="flex min-h-0 flex-1 overflow-hidden">
-              <WorkBoardPane info={info} debug={debugKind === "work"} onOpen={async conversation => {
+              <WorkBoardPane info={info} debug={debugKind === "work"} target={workTarget} onCalendar={openCalendar} onOpen={async conversation => {
                 if (!info) throw new Error("后端尚未连接。");
                 await rpc(info, "collaboration_action", {action:{type:"select",id:conversation,conversation,request_id:crypto.randomUUID()}});
                 setPane("collaboration"); window.dispatchEvent(new CustomEvent("tebb-show-tasks"));
@@ -2395,7 +2314,7 @@ export function App() {
             </section>
           ) : pane === "monitor" ? (
             <section key="monitor" data-page="monitor" className="flex-1 overflow-y-auto px-8 py-6">
-              <h1 className="text-2xl font-semibold">执行任务</h1>
+              <h1 className="text-2xl font-semibold">AI 执行</h1>
               <p className="mt-2 text-sm text-muted-foreground">查看桌面与飞书会话的执行过程，停止任务或继续聊天。</p>
               <WorkspaceRuns info={info} onOpen={conversation => { if (!info) return; void rpc(info, 'collaboration_action', { action: { type: 'select', id: conversation, conversation, request_id: crypto.randomUUID() } }).then(() => { setPane('collaboration'); window.dispatchEvent(new CustomEvent('tebb-show-tasks')); }).catch(e => setError(String(e))); }} />
               <details className="mt-6"><summary>其他渠道与旧任务记录</summary><AgentMonitor info={info} debug={boardClock !== null} /></details>
@@ -2403,15 +2322,16 @@ export function App() {
           ) : (
             <section
               key="board"
-              className="flex-1 overflow-y-auto px-8 py-6"
+              data-page="calendar"
+              className="flex min-h-0 flex-1 overflow-hidden"
             >
-              <BoardPane
+              <CalendarWorkspace info={info} target={calendarTarget} onItem={openWorkItem} onRun={conversation=>{if(!info)return;void rpc(info,"collaboration_action",{action:{type:"select",id:conversation,conversation,request_id:crypto.randomUUID()}}).then(()=>setPane("collaboration")).catch(e=>setError(String(e)));}} onCreated={createEvent}
                 data={board}
                 nowIso={boardClock}
                 loading={boardLoading}
                 loadError={boardLoadError}
                 debug={boardClock !== null}
-                onRefresh={() => void openBoard(true)}
+                onRefresh={() => { if(!debugKind)void loadBoardSnapshot(true); }}
                 statuses={statuses}
                 fetches={fetchCount}
                 onOpenFeishu={() => void openFeishu()}
@@ -2423,7 +2343,7 @@ export function App() {
                 createError={createError}
                 createNotice={createNotice}
                 createNonce={createNonce}
-                onCreateEvent={(summary, start, end) => void createEvent(summary, start, end)}
+
               />
             </section>
           )}
@@ -2455,83 +2375,6 @@ export function App() {
   );
 }
 
-function SideIcon(props: { name: string }) {
-  const stroke = {
-    width: 16,
-    height: 16,
-    viewBox: "0 0 16 16",
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: 1.4,
-    "aria-hidden": true as const,
-    className: "shrink-0",
-  };
-  if (props.name === "video") {
-    return <svg {...stroke}><rect x="2" y="3" width="12" height="10" rx="2" /><path d="m6.5 5.5 4 2.5-4 2.5z" /></svg>;
-  }
-  if (props.name === "chat") {
-    return (
-      <svg {...stroke}>
-        <path d="M2.5 3.5h11v7H7.5L5 13V10.5h-2.5v-7z" />
-      </svg>
-    );
-  }
-  if (props.name === "board") {
-    return (
-      <svg {...stroke}>
-        <path d="M2.5 3h11v10h-11V3zM2.5 6.5h11M6 6.5V13M10 6.5V13" />
-      </svg>
-    );
-  }
-  if (props.name === "settings") {
-    return (
-      <svg {...stroke}>
-        <circle cx="8" cy="8" r="2" />
-        <path d="M8 2.2v1.8M8 12v1.8M2.2 8H4M12 8h1.8M4.1 4.1l1.3 1.3M10.6 10.6l1.3 1.3M11.9 4.1l-1.3 1.3M5.4 10.6l-1.3 1.3" />
-      </svg>
-    );
-  }
-  if (props.name === "memory") {
-    return (
-      <svg {...stroke}>
-        <path d="M4 2.8h8v10.4H4zM6.2 5.6h3.6M6.2 8h3.6M6.2 10.4h2.2" />
-      </svg>
-    );
-  }
-  if (props.name === "knowledge") {
-    return (
-      <svg {...stroke}>
-        <path d="M8 3.4c-1.5.7-3 .7-4.6 0v8.6c1.6.7 3.1.7 4.6 0V3.4zM8 3.4c1.5.7 3 .7 4.6 0v8.6c-1.6.7-3.1.7-4.6 0V3.4z" />
-      </svg>
-    );
-  }
-  if (props.name === "pet") {
-    return (
-      <svg {...stroke}>
-        <path d="M8 13.2c-2.8 0-4.4-1.8-4.4-3.8 0-1.4.9-2.3 2-2.3.8 0 1.3.4 2.4.4s1.6-.4 2.4-.4c1.1 0 2 .9 2 2.3 0 2-1.6 3.8-4.4 3.8z" />
-        <circle cx="4.6" cy="4.4" r="1" />
-        <circle cx="8" cy="3.6" r="1" />
-        <circle cx="11.4" cy="4.4" r="1" />
-      </svg>
-    );
-  }
-  if (props.name === "today") {
-    return (
-      <svg {...stroke}>
-        <path d="M3 4.5h10v8H3v-8zM3 7h10M6 3v2.2M10 3v2.2" />
-      </svg>
-    );
-  }
-
-
-
-  return (
-    <svg {...stroke}>
-      <path d="M3.5 3h6.2L12.5 5.8V13h-9V3zM9.5 3v3H12.5" />
-    </svg>
-  );
-}
-
 function ModelPick(props: {
   modelId: string;
   items: ModelEntry[];
@@ -2556,41 +2399,6 @@ function ModelPick(props: {
         ))}
       </select>
     </label>
-  );
-}
-
-function SideNav(props: { icon: string; label: string; sub?: string; active?: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      data-side-item={props.label}
-      data-sub={props.sub}
-      data-selected={props.active ? "1" : "0"}
-      onClick={props.onClick}
-      className={`flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-sm ${
-        props.active ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-secondary"
-      }`}
-    >
-      <SideIcon name={props.icon} />
-      <span data-side-label>{props.label}</span>
-    </button>
-  );
-}
-
-function SideLink(props: { icon: string; label: string; sub: string; selected: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      data-sub={props.sub}
-      data-selected={props.selected ? "1" : "0"}
-      onClick={props.onClick}
-      className={`mb-1 flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors duration-200 ${
-        props.selected ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-secondary"
-      }`}
-    >
-      <SideIcon name={props.icon} />
-      <span>{props.label}</span>
-    </button>
   );
 }
 

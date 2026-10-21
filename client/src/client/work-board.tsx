@@ -12,7 +12,7 @@ import { WorkBoardController, WORK_STATES, demoWorkTransport, workStateLabel, ru
 import './work-board.css';
 const ScheduleWeekPane=lazy(()=>import('./schedule-week').then(module=>({default:module.ScheduleWeekPane})));
 
-type Props={info:BackendInfo|null;debug?:boolean;onOpen:(conversation:string)=>Promise<void>|void};
+type Props={info:BackendInfo|null;debug?:boolean;onOpen:(conversation:string)=>Promise<void>|void;target?:{id:string;nonce:number}|null;onCalendar?:(target:ScheduleTarget)=>void};
 const priorities={high:'高',normal:'中',low:'低'};
 const blank=():WorkFields=>({title:'',description:'',project_id:'',priority:'normal',due:''});
 const collision:CollisionDetection=args=>{const hits=pointerWithin(args);return hits.length?hits:closestCenter(args);};
@@ -49,7 +49,7 @@ function Column({state,label,children,count}:{state:WorkState;label:string;child
   </section>;
 }
 
-export function WorkBoardPane({info,debug=false,onOpen}:Props) {
+export function WorkBoardPane({info,debug=false,onOpen,target,onCalendar}:Props) {
   const active=usePageActive(),reduce=useReducedMotion();
   const demo=useMemo(()=>debug?demoWorkTransport():null,[debug]);
   const controller=useMemo(()=>new WorkBoardController(demo||(async(method,args)=>{
@@ -80,10 +80,12 @@ export function WorkBoardPane({info,debug=false,onOpen}:Props) {
   const visible=controller.items.filter(item=>item.archived===archived&&(project==='all'||(project==='none'?!item.project_id:item.project_id===project))&&(!query||(item.title+' '+item.description).toLocaleLowerCase().includes(query.toLocaleLowerCase())));
   useEffect(()=>{if(controller.loaded&&project!=='all'&&project!=='none'&&!controller.page.projects.some(p=>p.id===project))setProject('none');},[controller.loaded,controller.page.projects,project]);
   function guardDraft(next:()=>void){if(draft&&JSON.stringify(draft)!==draftBase.current)setLeaveWork(()=>next);else next();}
+  useEffect(()=>{if(!active)return;const before=(event:Event)=>{if(draft&&JSON.stringify(draft)!==draftBase.current){event.preventDefault();guardDraft((event as CustomEvent<{navigate:()=>void}>).detail.navigate);}};window.addEventListener?.('tebb-before-navigate',before);return()=>window.removeEventListener?.('tebb-before-navigate',before);},[active,draft]);
   function close(){guardDraft(()=>{setDraft(null);setSelected('');setFormError('');formRequest.current='';});}
-  function openSchedule(targetItem?:WorkItem){guardDraft(()=>{const event=targetItem?.schedules?.next||targetItem?.schedules?.previous||targetItem?.schedules?.events[0];setDraft(null);setScheduleTarget({item_id:targetItem?.id,...(event?{calendar_id:event.calendar_id,event_id:event.event_id,day:event.start.slice(0,10)}:{})});});}
-  function openWeek(target:ScheduleTarget={}){guardDraft(()=>{setDraft(null);setScheduleTarget(null);setWeekTarget(target);});}
+  function openSchedule(targetItem?:WorkItem){guardDraft(()=>{const event=targetItem?.schedules?.next||targetItem?.schedules?.previous||targetItem?.schedules?.events[0];setDraft(null);const next={item_id:targetItem?.id,...(event?{calendar_id:event.calendar_id,event_id:event.event_id,day:event.start.slice(0,10)}:{})};if(onCalendar)onCalendar(next);else setScheduleTarget(next);});}
+  function openWeek(target:ScheduleTarget={}){guardDraft(()=>{setDraft(null);setScheduleTarget(null);if(onCalendar)onCalendar(target);else setWeekTarget(target);});}
   function returnToItem(id:string){const targetItem=controller.items.find(i=>i.id===id);if(!targetItem){setDetailError('事项已不可用，请重新读取核对。');return;}setWeekTarget(null);setScheduleTarget(null);setProject('all');setQuery('');setArchived(targetItem.archived);setDraft(null);setSelected(id);void controller.load();}
+  useEffect(()=>{if(target&&controller.loaded)guardDraft(()=>returnToItem(target.id));},[target?.nonce,controller.loaded]);
   function recoverForm(){const key=draftRef.current?.id||'create',receipt=controller.completed.get(key);if(formRequest.current&&receipt?.request_id===formRequest.current&&!controller.uncertain.has(key)){setDraft(null);setSelected(receipt.item_id);setFormError('');formRequest.current='';}}
   async function refresh(){await controller.load(true);recoverForm();}
   async function retry(key:string){await controller.retry(key);recoverForm();}

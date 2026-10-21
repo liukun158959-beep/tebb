@@ -21,9 +21,9 @@ test('version opens on the fifth consecutive click, resets after an interval, an
   for (let i = 1; i <= 4; i++) { taps = versionTap(taps, i * 100); assert.equal(taps.open, false); }
   assert.equal(versionTap(taps, 600).open, true);
   assert.equal(versionTap(taps, 5000).count, 1);
-  let opened = 0, chats = 0, videos = 0; let renderer;
+  let opened = 0, chats = 0; let renderer;
   act(() => { renderer = create(React.createElement(TopToolbar, { title: '对话', model: 'test', connected: true, busy: false, dark: true,
-    onDebug: () => opened++, onNewChat: () => chats++, onVideo: () => videos++, onTheme() {}, onMonitor() {} })); });
+    onNewChat: () => chats++ })); });
   assert.equal(renderer.root.findAllByProps({ 'data-debug-version': true }).length, 0);
   const { ProductBrand } = load('workspace-shell', { './release': {CURRENT_RELEASE:{version:'0.2.3'}}, './top-toolbar':{versionTap} });
   let brand; act(()=>{brand=create(React.createElement(ProductBrand,{developer:false,onToggle:()=>opened++}));});
@@ -33,8 +33,8 @@ test('version opens on the fifth consecutive click, resets after an interval, an
   for(let i=0;i<5;i++) act(()=>version.props.onClick()); assert.equal(opened,2);
   act(()=>brand.unmount());
   act(() => renderer.root.findAllByType('button').find(n => n.children.join('') === '新对话').props.onClick());
-  act(() => renderer.root.findAllByType('button').find(n => n.children.join('') === '视频').props.onClick());
-  assert.equal(chats, 1); assert.equal(videos, 1); act(() => renderer.unmount());
+  assert.equal(renderer.root.findAllByType('button').filter(n=>['视频','任务','浅色','深色'].includes(n.children.join(''))).length,0);
+  assert.equal(chats, 1); act(() => renderer.unmount());
 });
 
 test('fixed top toolbar owns the sidebar toggle and reflects whether a panel is available',()=>{

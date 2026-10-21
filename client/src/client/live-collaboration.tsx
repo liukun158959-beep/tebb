@@ -24,7 +24,7 @@ export function browserAccess(): BackendInfo | null {
   } catch { return null; }
 }
 
-export function LiveCollaboration({ info: provided, standalone = false, composeRequest, navigation, developerMode, onDeveloperMode, attachments, onAttach, onDetach, onProject, onFile, onTerminal }: { attachments?: LocalSource[]; onAttach?: () => void; onDetach?: (id: string) => void; onProject?: () => void; onFile?: () => void; onTerminal?: () => void; info?: BackendInfo | null; standalone?: boolean; composeRequest?: { id: number; text: string }; navigation?: ReactNode; developerMode?: boolean; onDeveloperMode?: (value: boolean) => void }) {
+export function LiveCollaboration({ info: provided, standalone = false, composeRequest, navigation, developerMode, onDeveloperMode, attachments, onAttach, onDetach, onProject, onFile, onTerminal, onCalendar }: { attachments?: LocalSource[]; onAttach?: () => void; onDetach?: (id: string) => void; onProject?: () => void; onFile?: () => void; onTerminal?: () => void; onCalendar?: () => void; info?: BackendInfo | null; standalone?: boolean; composeRequest?: { id: number; text: string }; navigation?: ReactNode; developerMode?: boolean; onDeveloperMode?: (value: boolean) => void }) {
   const [info, setInfo] = useState<BackendInfo | null>(provided || null);
   const [state, setState] = useState<DemoState | null>(null);
   const [error, setError] = useState("");
@@ -81,5 +81,5 @@ export function LiveCollaboration({ info: provided, standalone = false, composeR
   };
   if (!state) return <div className="flex min-h-0 flex-1"><section className="cp-connect" aria-label="连接真实协作"><span>tebb / LOCAL AGENTS</span><h1>你的伙伴，即将就位</h1>
     <p>{error || "正在连接本地模型与协作任务服务…"}</p><button onClick={() => setRetry(value => value+1)}>重新连接</button><a href="/client.html?preview=chat">返回交互演示</a></section>{navigation && <nav className="cp-rail" aria-label="工作区快捷栏">{navigation}</nav>}</div>;
-  return <ChatPrototype backend={info} attachments={attachments} onAttach={onAttach} onDetach={onDetach} onProject={onProject} onFile={onFile} onTerminal={onTerminal} composeRequest={composeRequest} navigation={navigation} developerMode={developerMode} onDeveloperMode={onDeveloperMode} standalone={standalone} live={{ state, act, busy, error: actionError || error }} />;
+  return <ChatPrototype backend={info} attachments={attachments} onAttach={onAttach} onDetach={onDetach} onProject={onProject} onFile={onFile} onTerminal={onTerminal} onCalendar={onCalendar} composeRequest={composeRequest} navigation={navigation} developerMode={developerMode} onDeveloperMode={onDeveloperMode} standalone={standalone} live={{ state, act, busy, error: actionError || error }} />;
 }

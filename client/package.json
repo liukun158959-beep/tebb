@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test tests/board-actions.test.cjs tests/startup.test.cjs tests/onboarding.test.cjs tests/pet-assets.test.cjs tests/pet-menu.test.cjs tests/feishu-agent.test.cjs tests/agent-monitor.test.cjs tests/agent-debug.test.cjs tests/automation.test.cjs tests/release.test.cjs tests/video.test.cjs tests/local-sources.test.cjs tests/workspace.test.cjs tests/terminal.test.cjs tests/chat-prototype.test.cjs tests/live-collaboration.test.cjs tests/project-panel.test.cjs tests/pet-settings.test.cjs tests/pet-chat.test.cjs tests/work-board.test.cjs tests/schedule.test.cjs tests/schedule-week.test.cjs",
+    "test": "node --test tests/board-actions.test.cjs tests/startup.test.cjs tests/onboarding.test.cjs tests/pet-assets.test.cjs tests/pet-menu.test.cjs tests/feishu-agent.test.cjs tests/agent-monitor.test.cjs tests/agent-debug.test.cjs tests/automation.test.cjs tests/release.test.cjs tests/video.test.cjs tests/local-sources.test.cjs tests/workspace.test.cjs tests/terminal.test.cjs tests/chat-prototype.test.cjs tests/live-collaboration.test.cjs tests/project-panel.test.cjs tests/pet-settings.test.cjs tests/pet-chat.test.cjs tests/work-board.test.cjs tests/schedule.test.cjs tests/schedule-week.test.cjs tests/workspace-redesign.test.cjs",
     "tauri": "tauri"
   },
   "dependencies": {

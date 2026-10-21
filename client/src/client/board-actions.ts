@@ -1,6 +1,7 @@
 import { useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { rpc, type BackendInfo } from "./api";
 import type { BoardPayload } from "./board";
+export type CreatedAgenda={ok:true;event_id?:string;summary:string;start:string;end:string;notice?:string;snapshot?:BoardPayload|null};
 
 // Own board request ordering and form/error state; backend owns remote/cache stages.
 export function useBoardActions({ info, boardClock, setBoard, onLoaded }: {
@@ -144,7 +145,7 @@ export function useBoardActions({ info, boardClock, setBoard, onLoaded }: {
         if (start.slice(0, 10) !== boardDay) {
           setCreateNotice("已创建。今天的看板只显示今天。");
           setCreateNonce((n) => n + 1);
-          return;
+          return {ok:true as const,event_id:`evt-${start}`,summary,start,end};
         }
         const clock = (iso: string) => iso.slice(11, 16);
         setBoard((cur) => {
@@ -162,13 +163,13 @@ export function useBoardActions({ info, boardClock, setBoard, onLoaded }: {
           };
         });
         setCreateNonce((n) => n + 1);
-        return;
+        return {ok:true as const,event_id:`evt-${start}`,summary,start,end};
       }
       if (!info) {
         setCreateError("还没有连上本地后端。恢复：重启客户端。");
         return;
       }
-      const data = await request<{ ok?: boolean; error?: string; notice?: string; snapshot?: BoardPayload | null }>("create_agenda", {
+      const data = await request<CreatedAgenda & {error?:string}>("create_agenda", {
         summary,
         start,
         end,
@@ -176,6 +177,7 @@ export function useBoardActions({ info, boardClock, setBoard, onLoaded }: {
       if (data.snapshot) setBoard(data.snapshot);
       setCreateNotice(data.notice || "");
       setCreateNonce((n) => n + 1);
+      return data;
     } catch (err) {
       setCreateError(String(err));
     } finally {

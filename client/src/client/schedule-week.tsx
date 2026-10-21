@@ -17,7 +17,7 @@ import type { ScheduleTarget } from './schedule';
 import './schedule-week.css';
 
 type Props={info:BackendInfo|null;debug?:boolean;transport?:WeekTransport;target:ScheduleTarget;revision?:number;
-  onClose:()=>void;onReturn:(id:string)=>void;onDay:(target:ScheduleTarget)=>void;onChange:()=>void};
+  onClose:()=>void;onReturn:(id:string)=>void;onDay:(target:ScheduleTarget)=>void;onChange:()=>void;view?:'week'|'day';closeLabel?:string;onNew?:(day:string)=>void;onNavigationGuard?:(guard:((next:()=>void)=>void)|null)=>void};
 type Form={key:string;start:string;end:string};
 type KeyboardDraft={event:CalendarEvent;draft:TimeDraft};
 const sameDraft=(event:CalendarEvent,draft:TimeDraft)=>Date.parse(event.start)===Date.parse(draft.start)&&Date.parse(event.end)===Date.parse(draft.end);
@@ -27,7 +27,7 @@ function annotateEvent(element:HTMLElement,source:CalendarEvent){
   element.title=source.summary+'\n'+eventTime(source);
 }
 
-export function ScheduleWeekPane({info,debug=false,transport,target,revision,onClose,onReturn,onDay,onChange}:Props){
+export function ScheduleWeekPane({info,debug=false,transport,target,revision,onClose,onReturn,onDay,onChange,view='week',closeLabel='返回工作看板',onNew,onNavigationGuard}:Props){
   const active=usePageActive(),reduce=useReducedMotion();
   const root=useRef<HTMLElement|null>(null),calendar=useRef<FullCalendar|null>(null),details=useRef<HTMLElement|null>(null);
   const [day,setDay]=useState(target.day||beijingDay()),[fullDay,setFullDay]=useState(false),[narrow,setNarrow]=useState(false);
@@ -47,17 +47,19 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
   const busy=controller.pending.has(selected),blocked=controller.blocked(selected),checking=controller.checking.has(selected);
   const initialForm=event&&event.start.includes('T')&&Number.isFinite(Date.parse(event.start))&&Number.isFinite(Date.parse(event.end))?{key:selected,start:beijingStamp(event.start),end:beijingStamp(event.end)}:null;
   const dirty=!!form&&!!initialForm&&(form.start!==initialForm.start||form.end!==initialForm.end||form.key!==initialForm.key);
+  useEffect(()=>{onNavigationGuard?.(guard);return()=>onNavigationGuard?.(null);},[onNavigationGuard,dirty,form,selected]);
+  useEffect(()=>{if(!active)return;const before=(event:Event)=>{if(dirty){event.preventDefault();guard((event as CustomEvent<{navigate:()=>void}>).detail.navigate);}};window.addEventListener?.('tebb-before-navigate',before);return()=>window.removeEventListener?.('tebb-before-navigate',before);},[active,dirty,form,selected]);
   useEffect(()=>controller.subscribe(redraw),[controller]);
   useEffect(()=>{if(!active)return;let live=true;void(async()=>{await controller.read(day);if(live)await controller.read(day,true);})();
     const timer=window.setInterval(()=>{if(!controller.loading)void controller.read(day);},5000);return()=>{live=false;window.clearInterval(timer);};},[active,controller,monday]);
   useEffect(()=>{if(active&&revision!==undefined)void controller.read(day);},[active,controller,revision]);
   useEffect(()=>{if(!root.current||typeof ResizeObserver==='undefined')return;const observer=new ResizeObserver(entries=>setNarrow(entries[0].contentRect.width<680));observer.observe(root.current);return()=>observer.disconnect();},[]);
-  useEffect(()=>{calendar.current?.getApi().changeView(narrow?'timeGridDay':'timeGridWeek',day);},[day,narrow]);
+  useEffect(()=>{calendar.current?.getApi().changeView(narrow||view==='day'?'timeGridDay':'timeGridWeek',day);},[day,narrow,view]);
   useEffect(()=>{root.current?.querySelectorAll<HTMLElement>('[data-week-event]').forEach(element=>{
     const source=controller.event(element.dataset.weekEvent||'');if(source)annotateEvent(element,source);
   });},[controller,version,day,narrow]);
   useEffect(()=>{if(!active)return;calendar.current?.getApi().updateSize();},[active,narrow]);
-  useEffect(()=>{if(!selected&&controller.page.events.length){const first=controller.page.events.find(e=>e.eligible)||controller.page.events[0];setSelected(calendarKey(first));}},[selected,controller.page.events]);
+  useEffect(()=>{if(!selected&&controller.page.events.length){const first=target.event_id?controller.page.events.find(e=>e.event_id===target.event_id):controller.page.events.find(e=>e.eligible)||controller.page.events[0];if(first)setSelected(calendarKey(first));}},[selected,controller.page.events,target.event_id]);
   useEffect(()=>{
     if(!active||!selected)return;
     const source=controller.event(selected)||((target.calendar_id&&target.event_id)?{calendar_id:target.calendar_id,event_id:target.event_id}:null);
@@ -142,7 +144,7 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
   }catch(error){setFormError(String(error));return false;}}
   function field(which:'start'|'end',value:string){if(initialForm)setForm({...initialForm,...form,[which]:value});}
   return <section className={`schedule-week${pointerCancelled?' sw-cancelled':''}`} ref={root} aria-label="周日程安排" onKeyDownCapture={keyboardMove} data-week-view data-week-version={version}>
-    <header className="sw-heading"><div><span className="wb-eyebrow">工作区 / 日程安排</span><h1>把时间留给重要的事。</h1><p>{controller.page.calendar?.summary||'当前飞书用户主日历'} · 北京时间 UTC+8{debug?' · 演示数据，未连接飞书':''}</p></div><button type="button" onClick={()=>guard(onClose)}>返回工作看板</button></header>
+    <header className="sw-heading"><div><span className="wb-eyebrow">工作区 / 日程安排</span><h1>把时间留给重要的事。</h1><p>{controller.page.calendar?.summary||'当前飞书用户主日历'} · 北京时间 UTC+8{debug?' · 演示数据，未连接飞书':''}</p></div><div className="sc-actions">{onNew&&<button type="button" className="wb-primary" onClick={()=>guard(()=>onNew(day))}>＋ 新建日程</button>}<button type="button" onClick={()=>guard(onClose)}>{closeLabel}</button></div></header>
     <div className="sw-toolbar"><button type="button" aria-label="上一周" onClick={()=>guard(()=>setDay(addCalendarDays(day,-7)))}>‹</button><button type="button" aria-label="下一周" onClick={()=>guard(()=>setDay(addCalendarDays(day,7)))}>›</button>
       <strong>{monday.replaceAll('-','.')} — {addCalendarDays(monday,6).slice(5).replace('-','.')}</strong><button type="button" onClick={()=>guard(()=>setDay(beijingDay()))}>本周</button>
       <label>定位日期<input type="date" aria-label="周日程定位日期" value={day} onChange={e=>{if(e.target.value)guard(()=>setDay(e.target.value));}}/></label>
@@ -152,6 +154,7 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
     </div>
     {narrow&&<div className="sw-day-picker" aria-label="本周日期">{days.map((value,i)=><button type="button" key={value} aria-pressed={day===value} onClick={()=>guard(()=>setDay(value))}>{['一','二','三','四','五','六','日'][i]} {value.slice(8)}</button>)}</div>}
     {controller.error&&<p className="sc-error" role="alert">{controller.error}</p>}
+    {target.event_id&&controller.page.events_valid&&!controller.loading&&!controller.page.events.some(e=>e.event_id===target.event_id)&&<p className="sc-warning" role="status">当前区间未找到目标日程，请核对日期、访问权限或远端是否已删除；不会用另一场日程替代。</p>}
     {!controller.page.events_valid&&<p className="sc-warning">{controller.page.events_error||'尚未完成本周远端核对。'}{visible.length?' 下方保留上次信息，不能据此判断没有安排。':''}</p>}
     {!!outside.length&&<div className="sw-outside" aria-label="时段外安排"><span>时段外 / 跨日 {outside.length}</span>{outside.map(row=><button type="button" key={calendarKey(row)} onClick={()=>locate(row)}>{row.summary} · {eventTime(row)}</button>)}</div>}
     {!!unknownDate.length&&<div className="sw-outside">{unknownDate.map(row=><button type="button" key={calendarKey(row)} onClick={()=>choose(calendarKey(row))}>{row.summary} · 时间未核实</button>)}</div>}
@@ -164,7 +167,7 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
     </section>)}</div>}
     <div className="sw-live" role="status" aria-live="polite">{announcement||controller.notice|| (checking?'正在核对组织者、权限和完整参与人…':'选择日程后核对编辑资格；普通个人日程可拖动改期。')}</div>
     <div className="sw-calendar"><FullCalendar ref={calendar} plugins={[timeGridPlugin,interactionPlugin,luxonPlugin]} locale={zhLocale} timeZone="Asia/Shanghai"
-      firstDay={1} initialView={narrow?'timeGridDay':'timeGridWeek'} initialDate={day} headerToolbar={false} height="auto" allDaySlot allDayText="全天"
+      firstDay={1} initialView={narrow||view==='day'?'timeGridDay':'timeGridWeek'} initialDate={day} headerToolbar={false} height="auto" allDaySlot allDayText="全天"
       slotMinTime={fullDay?'00:00:00':'08:00:00'} slotMaxTime={fullDay?'24:00:00':'20:00:00'} slotDuration="00:30:00" snapDuration="00:15:00"
       slotLabelInterval="01:00:00" slotLabelFormat={{hour:'2-digit',minute:'2-digit',hour12:false}} eventTimeFormat={{hour:'2-digit',minute:'2-digit',hour12:false}}
       dayHeaderFormat={{weekday:'short',month:'numeric',day:'numeric'}} events={events} editable eventResizableFromStart eventOverlap

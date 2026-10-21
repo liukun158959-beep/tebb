@@ -190,6 +190,7 @@ test('notebook titles are reading links, citations use complete stored Markdown,
   assert.equal(view.root.findByProps({ 'data-note-reader': 'n1' }).type, 'article');
   await act(async()=>button(view,'作为资料交给伙伴').props.onClick());assert.equal(shared,'n1');
   await act(async () => button(view, '引用1').props.onClick()); assert.deepEqual(quoted, cite);
+  await act(async () => view.root.findByProps({ 'data-note-answer-toggle': 'n1' }).props.onClick({preventDefault(){}}));
   await act(async () => button(view, '删除文件').props.onClick()); assert.equal(deleted.length, 0);
   await act(async () => button(view, '确认删除文件').props.onClick()); assert.deepEqual(deleted, [['n1', '资料.md']]);
   await act(async () => button(view, '多选').props.onClick());

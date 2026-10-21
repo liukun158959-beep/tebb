@@ -166,6 +166,7 @@ export function readBackgroundFile(file: File): Promise<{ url: string; error: st
 }
 
 export function SettingsPane(props: {
+  section?: 'assistant'|'appearance';
   model: ModelPublic | null;
   models: ModelEntry[];
   editingId: string;
@@ -214,7 +215,7 @@ export function SettingsPane(props: {
         <p className="mb-3 text-muted-foreground">首次使用或不确定配置位置时，可以重新打开引导，查看模型、账号和可选功能的准备步骤。</p>
         <button type="button" className="desk-btn desk-btn-lg" onClick={props.onOpenGuide}>打开使用引导</button>
       </section>
-      <section className="flex flex-col gap-3">
+      <section hidden={props.section==='appearance'} className="flex flex-col gap-3">
         <h2 className="text-sm font-semibold text-primary">模型</h2>
         <div className="flex flex-col gap-1">
           {props.models.length === 0 ? (
@@ -331,7 +332,7 @@ export function SettingsPane(props: {
           </p>
         ) : null}
       </section>
-      <section className="flex flex-col gap-3">
+      <section hidden={props.section==='appearance'} className="flex flex-col gap-3">
         <h2 className="text-sm font-semibold text-primary">系统提示词</h2>
         <p className="text-xs text-muted-foreground">保存后立刻生效。工具用法仍由程序接在这段后面。</p>
         <textarea
@@ -361,7 +362,7 @@ export function SettingsPane(props: {
           </p>
         ) : null}
       </section>
-      <section className="flex flex-col gap-3">
+      <section hidden={props.section==='assistant'} className="flex flex-col gap-3">
         <h2 className="text-sm font-semibold text-primary">外观</h2>
         <div className="flex flex-wrap gap-2">
           <button type="button" data-theme className="desk-btn desk-btn-lg desk-btn-solid" onClick={props.onToggleTheme}>

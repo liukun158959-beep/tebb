@@ -224,6 +224,7 @@ function HitList(props: { mark: "candidate" | "kept"; rows: KnowledgeHit[] }) {
 }
 
 export function KnowledgePane(props: {
+  settings?: ReactNode;
   data: KnowledgePayload | null;
   catalog: FeishuDoc[];
   catalogError: string;
@@ -240,6 +241,7 @@ export function KnowledgePane(props: {
 }) {
   const data = props.data;
   const failed = !data || data.ok === false;
+  const [section, setSection] = useState("docs");
   const [query, setQuery] = useState("");
   const [catalogQuery, setCatalogQuery] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
@@ -320,10 +322,11 @@ export function KnowledgePane(props: {
       <p className="mt-1 text-sm text-muted-foreground">
         管理飞书与本地资料，在笔记中基于来源检索；笔记可以作为资料带回伙伴聊天，伙伴回答也能收藏为笔记。
       </p>
+      <nav className="workspace-tabs mt-5" aria-label="知识库功能">{[['docs','资料库'],['check','检索检查'],['index','索引设置']].map(([id,label])=><button type="button" key={id} aria-pressed={section===id} onClick={()=>setSection(id)}>{label}</button>)}</nav>
       {data?.error ? <p data-knowledge-error="" className="mt-3 text-sm text-destructive">{data.error}</p> : null}
       {data && data.ok !== false ? (
-        <section data-knowledge-settings="" className="mt-6 border border-border px-3 py-3 text-sm">
-          <h2 className="font-semibold">子代理设置</h2>
+        <section hidden={section!=="index"} data-knowledge-settings="" className="mt-6 border border-border px-3 py-3 text-sm">
+          <h2 className="font-semibold">索引与检索设置</h2>
           <p className="mt-2">子代理 {data.subagent}</p>
           {data.endpoint ? (
             <p data-knowledge-endpoint="" className="mt-1 break-all text-muted-foreground">下载地址 {data.endpoint}</p>
@@ -407,7 +410,8 @@ export function KnowledgePane(props: {
           ) : null}
         </section>
       ) : null}
-      <section className="mt-6">
+      <div hidden={section!=="index"}>{props.settings}</div>
+      <section hidden={section!=="docs"} className="mt-6">
         <div className="flex items-center gap-2"><h2 className="mr-auto text-sm font-semibold">文档库 · {docs.length} 篇</h2>
           <button className="desk-btn" disabled={props.busy} onClick={() => props.onLocal?.("file")}>本地文件</button>
           <button className="desk-btn" disabled={props.busy} onClick={() => props.onLocal?.("folder")}>本地文件夹</button></div>
@@ -438,7 +442,7 @@ export function KnowledgePane(props: {
           ) : null}
         </div>
       </section>
-      <section className="mt-6">
+      <section hidden={section!=="docs"} className="mt-6">
         <div className="flex items-center justify-between"><h2 className="text-sm font-semibold">从飞书添加</h2>
           <button className="desk-btn" disabled={props.busy} onClick={props.onRefresh}>刷新目录</button></div>
         {props.catalogError ? <p className="mt-2 text-sm text-destructive">{props.catalogError}</p> : null}
@@ -524,7 +528,7 @@ export function KnowledgePane(props: {
           <p data-knowledge-remove-status="" className={`mt-2 text-xs ${removeBad ? "text-destructive" : "text-foreground"}`}>{removeNote}</p>
         ) : null}
       </section>
-      <section className="mt-6">
+      <section hidden={section!=="check"} className="mt-6">
         <h2 className="text-sm font-semibold">切块</h2>
         <div className="mt-3 max-h-64 space-y-2 overflow-y-auto">
           {chunks.length === 0 ? <p className="text-sm text-muted-foreground">还没有切块。</p> : null}
@@ -536,8 +540,8 @@ export function KnowledgePane(props: {
           ))}
         </div>
       </section>
-      <section className="mt-6">
-        <h2 className="text-sm font-semibold">试问</h2>
+      <section hidden={section!=="check"} className="mt-6">
+        <h2 className="text-sm font-semibold">检索检查</h2><p className="mt-1 text-xs text-muted-foreground">检查来源召回与回答，不写入普通聊天或笔记历史。</p>
         <form
           className="mt-2 flex gap-2"
           onSubmit={(ev) => {
@@ -549,7 +553,7 @@ export function KnowledgePane(props: {
             data-knowledge-ask=""
             value={askText}
             onChange={(ev) => setAskText(ev.target.value)}
-            placeholder="问一个面试或 AI 知识问题"
+            placeholder="输入与你的资料有关的问题"
             className="flex-1 border border-border bg-card px-3 py-2 text-sm"
           />
           <button type="submit" data-knowledge-send="" disabled={props.busy} className="desk-btn desk-btn-lg desk-btn-solid">

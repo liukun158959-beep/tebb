@@ -131,10 +131,12 @@ test('storage failure prevents submission and damaged markers are preserved acro
 });
 
 test('a detail response cannot undo a newer week observation',async()=>{
-  const old=deferred(),latest=event('event_0',{start:time('08:30')});
+  // Declare observation order explicitly; constructing fixtures milliseconds apart
+  // must not accidentally give the "newer" week an older checked_at timestamp.
+  const old=deferred(),latest=event('event_0',{start:time('08:30'),checked_at:'2026-01-01T00:00:02Z'});
   const c=new state.ScheduleWeekController(async method=>method==='inspect_schedule_event'?old.promise:page([latest]),day,memory());
-  c.page=page([event()]);const pending=c.inspect(event());await c.read();
-  old.resolve({ok:true,event:event()});await pending;
+  c.page=page([event('event_0',{checked_at:'2026-01-01T00:00:00Z'})]);const pending=c.inspect(event());await c.read();
+  old.resolve({ok:true,event:event('event_0',{checked_at:'2026-01-01T00:00:01Z'})});await pending;
   assert.equal(c.event('cal/event_0').start,time('08:30'));assert.equal(c.checking.size,0);
 });
 

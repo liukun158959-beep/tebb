@@ -120,7 +120,14 @@ export function createScheduleDemo(work:()=>WorkPage):ScheduleTransport {
       timeFingerprints.set(action.request_id,JSON.stringify(action));
       return {...page(),change_state:'committed',stage:'committed'};
     }
-    const action=args.action as ScheduleAction, item=work().items.find(i=>i.id===action.item_id)!;
+    const action=args.action as ScheduleAction;
+    if(!action.item_id&&action.type==='create'){
+      const previous=operations.get(action.request_id);if(previous)return snapshot(action.day,'',action.request_id);
+      const event=make('demo-independent-'+(++number)+'_0',action.summary!,action.start!,action.end!);events.push(event);
+      operations.set(action.request_id,{id:action.request_id,item_id:'',type:'create',state:'created',stage:'committed',error:'',event});return snapshot(action.day,'',action.request_id);
+    }
+    const item=work().items.find(i=>i.id===action.item_id);
+    if(!item)return {...snapshot(action.day,''),ok:false,error:'演示事项不存在。'};
     if(operations.has(action.request_id))return snapshot(action.day,item.id,action.request_id);
     if(item.archived||item.version!==action.version)return {...snapshot(action.day,item.id),ok:false,error:'演示事项已变化，请刷新。'};
     let event=events.find(e=>e.event_id===action.event_id);

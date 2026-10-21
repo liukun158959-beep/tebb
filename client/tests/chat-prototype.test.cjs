@@ -505,7 +505,7 @@ test('migration preview separates evidence categories and makes no move until ex
 
 
 test('normal App starts in core chat and keeps its draft mounted across settings and source previews', async () => {
-  environment(); global.window.addEventListener = () => {}; global.window.removeEventListener = () => {};
+  environment(); global.window.addEventListener = () => {}; global.window.removeEventListener = () => {}; global.window.dispatchEvent = () => true;
   let sideProps, liveProps, mounts = 0, unmounts = 0;
   const Empty = () => null;
   function LiveStub(props) {
@@ -518,6 +518,7 @@ test('normal App starts in core chat and keeps its draft mounted across settings
   const modules = {
     './companion-ui': load('companion-ui'),
     './workspace-shell': load('workspace-shell'),
+    './workspace-navigation': load('workspace-navigation'),
     './page-stack': load('page-stack'),
     './live-collaboration': { LiveCollaboration: LiveStub },
     './debug': { debugPane: () => null, debugRequested: () => false, installDeskDebug() {} },
@@ -566,6 +567,10 @@ test('normal App starts in core chat and keeps its draft mounted across settings
   assert.equal(view.root.findByProps({'data-content-slot': true}), slot);
   assert.equal(route().props.hidden, true); assert.equal(route().findAllByType('section').length, 1);
   assert.equal(view.root.findByProps({'data-page-panel': 'settings'}).props.hidden, true);
+  await act(async()=>rail.findAllByType('button').find(n=>n.props['aria-label']==='笔记').props.onClick());
+  assert.equal(root().props['data-pane'],'chat');assert.equal(view.root.findAllByProps({'data-notebook-empty':true}).length,1);
+  assert.match(text(view.root.findByProps({'data-notebook-empty':true})),/还没有连上本地后端/);
+  assert.equal(draft().props.value,'跨页保留的草稿');assert.equal(unmounts,0);
   await act(async () => view.unmount()); assert.equal(unmounts, 1);
 });
 

@@ -158,12 +158,16 @@ export function BoardPane(props: {
   createNotice?: string;
   createNonce?: number;
   onCreateEvent?: (summary: string, start: string, end: string) => void;
+  embedded?: boolean;
+  onViewEvent?: (eventId:string) => void;
+  attention?: ReactNode;
+  review?: ReactNode;
 }) {
   if (!props.data) {
     return (
       <div data-board data-board-fetches={props.fetches}>
         <div className="mb-6 flex items-end justify-between gap-4">
-          <div><h1 className="text-xl font-semibold">今日看板</h1>
+          <div><h1 className="text-xl font-semibold">{props.embedded?'今天':'今日看板'}</h1>
             <p className="text-sm text-muted-foreground">{props.loading ? "正在读取今日看板…" : "打开看板页时再拉今日数据。"}</p>
           </div>
           <Button type="button" variant="secondary" size="sm" disabled={props.debug || props.loading} onClick={props.onRefresh}>
@@ -174,7 +178,8 @@ export function BoardPane(props: {
           {["日程", "待办"].map(title => <section key={title}><h2>{title}</h2><div className="tebb-skeleton"/><div className="tebb-skeleton"/><div className="tebb-skeleton"/></section>)}
         </div> : null}
         {props.loadError ? <p role="alert" className="text-sm text-destructive">{props.loadError}</p> : null}
-        <StatusGrid cards={props.statuses} onOpenFeishu={props.onOpenFeishu} />
+        {props.embedded&&props.attention}
+        {!props.embedded&&<StatusGrid cards={props.statuses} onOpenFeishu={props.onOpenFeishu} />}
       </div>
     );
   }
@@ -184,7 +189,7 @@ export function BoardPane(props: {
     <div data-board data-board-fetches={props.fetches}>
       <div className="mb-6 flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold">今日看板</h1>
+          <h1 className="text-xl font-semibold">{props.embedded?'今天':'今日看板'}</h1>
           {model.date ? <div className="mt-1 text-sm text-muted-foreground">{model.date}</div> : null}
         </div>
         <Button type="button" variant="secondary" size="sm" disabled={props.debug || props.loading} onClick={props.onRefresh}>
@@ -196,17 +201,19 @@ export function BoardPane(props: {
       {model.fatal ? (
         <div data-board-error className="bg-card p-5 text-sm text-destructive">
           {model.fatal}
+          {props.embedded&&props.attention}
+          {props.embedded&&props.review}
         </div>
       ) : (
         <div className="grid gap-6 lg:grid-cols-2">
-          <Section title="日程">
-            <CreateEventBox
+          <Section title="日程" embedded={props.embedded}>
+            {!props.embedded&&<CreateEventBox
               key={props.createNonce || 0}
               disabled={!!props.deleting}
               error={props.createError || ""}
               notice={props.createNotice || ""}
               onCreate={(summary, start, end) => props.onCreateEvent?.(summary, start, end)}
-            />
+            />}
             {model.agendaError ? <p data-agenda-error className="text-sm text-destructive">{model.agendaError}</p> : null}
             {model.agendaEmpty ? <p data-agenda-empty className="text-sm text-muted-foreground">今天没有日程。</p> : null}
             <ol className="tl">
@@ -225,6 +232,7 @@ export function BoardPane(props: {
                   </div>
                   {event.eventId ? (
                     <span data-event-delete="" data-event-delete-disabled={props.deleting ? "1" : "0"}>
+                      {props.onViewEvent&&<Button type="button" variant="ghost" size="sm" onClick={()=>props.onViewEvent?.(event.eventId)}>查看日程</Button>}
                       <Button
                         type="button"
                         variant="ghost"
@@ -240,8 +248,9 @@ export function BoardPane(props: {
                 </li>
               ))}
             </ol>
+            {props.review}
           </Section>
-          <Section title="待办">
+          <Section title={props.embedded?'飞书待办':'待办'} embedded={props.embedded}>
             {model.taskError ? <p data-task-error className="text-sm text-destructive">{model.taskError}</p> : null}
             {model.taskEmpty ? <p data-task-empty className="text-sm text-muted-foreground">今天没有待办。</p> : null}
             <ul className="space-y-2">
@@ -283,11 +292,12 @@ export function BoardPane(props: {
                 </li>
               ))}
             </ul>
+            {props.attention}
           </Section>
         </div>
       )}
-      {model.summary ? <p data-summary className="mt-6 text-sm leading-6 text-muted-foreground">{model.summary}</p> : null}
-      <StatusGrid cards={props.statuses} onOpenFeishu={props.onOpenFeishu} />
+      {model.summary&&!props.embedded ? <p data-summary className="mt-6 text-sm leading-6 text-muted-foreground">{model.summary}</p> : null}
+      {!props.embedded&&<StatusGrid cards={props.statuses} onOpenFeishu={props.onOpenFeishu} />}
     </div>
   );
 }
@@ -358,7 +368,8 @@ function CreateEventBox(props: {
   );
 }
 
-function Section(props: { title: string; children: ReactNode }) {
+function Section(props: { title: string; children: ReactNode; embedded?:boolean }) {
+  if(props.embedded)return <section className="calendar-section"><h2>{props.title}</h2>{props.children}</section>;
   return (
     <TacticalPanel title={props.title} status="online">
       {props.children}
