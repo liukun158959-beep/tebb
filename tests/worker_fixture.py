@@ -1,7 +1,17 @@
 """仅离线测试启动：真实 worker/Atlas 循环，模型脚本在子进程内注入。"""
 from pathlib import Path
+import importlib.abc
 import os
 import sys
+
+
+class NoProviderSDK(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'openai' or fullname.startswith('openai.'):
+            raise AssertionError('Offline worker must not import the real provider SDK')
+
+
+sys.meta_path.insert(0, NoProviderSDK())
 from unittest.mock import patch
 from atlas.testing import FakeLLM
 from desk_companion import assistant, model_catalog, video

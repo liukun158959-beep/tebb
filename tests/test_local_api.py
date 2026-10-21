@@ -33,9 +33,9 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.host._tasks.shutdown)
         with patch.object(assistant, "require_llm_env", return_value={
             "ATLAS_API_KEY": "test-only", "ATLAS_BASE_URL": "http://example.invalid/v1", "ATLAS_MODEL": "fake",
-        }):
+        }), patch('atlas.LLM', return_value=FakeLLM(["本地流式回归正常。"])), \
+                patch('desk_companion.model_catalog.bind_llm'):
             self.host.agent = assistant.build_agent(self.host)
-        self.host.agent.llm = FakeLLM(["本地流式回归正常。"])
         self.host.agent.llm.sampling = None
         patch.object(self.host, "engage_model").start()
         patch.object(server, "HOST", self.host).start()
@@ -148,6 +148,10 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
                     task_id = await asyncio.to_thread(self.host.tasks.submit, '写入测试', 'other')
                     result = await asyncio.wait_for(asyncio.to_thread(self.host.tasks.wait, task_id), 20)
                     self.assertEqual(result['state'], 'succeeded', result)
+                    phases = [e['data'] for e in result['events'] if e['kind'] == 'worker_phase']
+                    self.assertEqual([p['stage'] for p in phases],
+                                     ['request_received', 'building_agent', 'agent_ready'])
+                    self.assertGreaterEqual(phases[-1]['duration_ms'], 0)
                     await ws.close()
                 finally:
                     release.set()

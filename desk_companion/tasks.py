@@ -258,10 +258,12 @@ class TaskManager:
         outcome = {}
         try:
             self.event(task_id, "status", "正在整理上下文，准备调用模型。")
+            spawn_started = time.monotonic()
             spare=self.standby.take() if self.standby else None
             if spare:process,tree=spare
             else:process=self._spawn();tree=ProcessTree(process)
-            self.event(task_id,'worker_pool',dict(prewarmed=bool(spare)))
+            self.event(task_id,'worker_pool',dict(prewarmed=bool(spare),
+                spawn_duration_ms=int((time.monotonic()-spawn_started)*1000)))
             # worker 初始化前挂入 Job；从此包括工具子进程在内都能及时停止。
             process.stdin.write(json.dumps(request) + "\n")
             process.stdin.flush()
@@ -323,6 +325,10 @@ class TaskManager:
                     self.event(task_id, "status", "当前调用仍在等待返回；此提示不代表超时或失败。")
                     phase["waiting_note"] = None
             if reason:
+                if reason == 'timed_out':
+                    self.event(task_id, 'timeout_phase', dict(
+                        stage=phase['kind'] or 'outside_call',
+                        scope='task' if time.monotonic() >= deadline else 'call'))
                 control["cancel"].set()
                 tree.close()
                 reader.join(2)

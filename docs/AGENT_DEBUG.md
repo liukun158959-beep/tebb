@@ -402,3 +402,20 @@ pnpm --dir client build
 排查先查 `operation.id/state/stage/event`，再查关联；未确认时不要再次创建。已知事件保留原 ID 和时间，读取错误不能解释为删除；“已保存但页面读取失败”先读本地关系。`refresh=false` 不连飞书，`true` 使用当前用户主日历的原生 `calendars primary / events instance_view / events get`，创建使用 `events create`，需要支持这些命令及 `--idempotency-key` 的现有 lark-cli；单命令超时 20 秒，RPC 等待 120 秒，后台可在连接中断后继续。本轮只验证假飞书和浏览器，真实 Feishu 写入、打包 Tauri 与实机另行验收；未发布版本。
 
 2026-10-21 验收记录：本批日程、看板、无 GUI 和新增认证 RPC 共 55 项检查、前端 149 项、类型与构建通过。Python 全量 615 项有 2 项等待超时，串行扩展组 96 项有 3 项等待超时；修改前 `016d56c` 的隔离归档也复现知识库、压缩与笔记的相同计时失败，未修改阈值或跳过断言。保留非全绿记录，独立诊断跟踪于 [#137](https://github.com/liukun158959-beep/tebb/issues/137)。
+
+### 独立任务启动与超时排查（#137）
+
+先通过认证 RPC `get_agent_task`（`task_id`、`focus=false`）读取任务及 `events`；同一数据保存于 `memory/tasks.sqlite3`。`worker_pool.spawn_duration_ms` 是进程取得/创建耗时，不代表模型已就绪。普通对话 worker 的 `worker_phase` 依次记录 `request_received`、`building_agent`、`agent_ready`，最后一项含构建耗时；其他工作流至少记录收到请求。结合事件时间戳与已有 `llm_start/end`、`tool_start/end` 判断等待发生在启动、模型还是工具。`timeout_phase` 记录触发时是否处于调用（`llm_start` / `tool_start` / `outside_call`）及总时限或调用时限（`task` / `call`）；`outside_call` 也可能是保存等收尾，不能一律认作启动失败。
+
+本次栈采样确认：Atlas 的模型契约导入会提前加载 OpenAI SDK，离线 worker 在首次模型事件之前耗费约 14–20 秒；父进程测试还构造了随后被替换的真实客户端。Atlas 已延迟 SDK 至默认客户端实际构造，产品固定正式提交；离线 RPC 直接注入 FakeLLM，worker fixture 禁止真实 SDK 导入，真实 Agent、工具和认证 WebSocket 均继续参与验证。保留原有等待阈值，不通过加时或预热掩盖问题。
+
+```powershell
+python -m unittest tests.test_tasks tests.test_local_api -v
+$env:DESK_TEST_ATLAS_SOURCE = 'E:/Learn_Project/Atlas'
+python -m unittest tests.test_atlas_runtime -v
+Remove-Item Env:DESK_TEST_ATLAS_SOURCE
+```
+
+新增阶段记录只包含固定阶段名和耗时；不持久化任意 worker stderr、凭证或原始堆栈。进程在收到请求前崩溃时仍需本地受控栈采样，不能仅凭缺少模型调用记录断言网络故障。测试日志可重定向到工作区 `output/` 留存，失败时先保留实际结果，再核对任务阶段，不自动重发有副作用的任务。
+
+2026-10-22 修复验收：Atlas 完整 pytest 为 57 项及 11 个子测试通过；原四项超时用例原阈值独立运行通过，并在最终 Python 全量中通过。最终 `DESK_TEST_ATLAS_SOURCE` 开启后的全量为 616 项：603 通过、13 跳过、无失败，740.961 秒，包含正式固定源及两套适配器契约、认证 RPC、真实离线 worker、任务超时分类与无 GUI 检查。跳过为 12 项真实沙箱开关和 1 项 Windows 符号链接权限；没有调用真实模型或飞书，没有发布版本。原始诊断及最终日志保留于工作区 `output/worker-timeout-2026-10-21/`，最终结果见 `tebb-final.log`，此前非全绿记录保持可追溯。

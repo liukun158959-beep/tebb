@@ -3,6 +3,7 @@ import contextlib
 import json
 import hashlib
 import sys
+import time
 
 
 def main():
@@ -14,8 +15,6 @@ def main():
         with http_client(5):pass
         sys.stdout.write(json.dumps(dict(kind='standby_ready'))+'\n');sys.stdout.flush()
     request = json.loads(sys.stdin.readline())
-    from .agent_debug import install
-    install({"task_id": request.get("task_id", ""), "session": request["session_id"], "channel": request.get("channel", "desktop")})
     transport = sys.stdout
 
     def emit(kind, data):
@@ -24,6 +23,9 @@ def main():
 
     # Atlas renderer、第三方库的调试输出不能混入事件协议。
     with contextlib.redirect_stdout(sys.stderr):
+        emit('worker_phase', {'stage': 'request_received'})
+        from .agent_debug import install
+        install({"task_id": request.get("task_id", ""), "session": request["session_id"], "channel": request.get("channel", "desktop")})
         if request.get("workflow") == "collaboration":
             from .collaboration_worker import execute
             try:
@@ -81,6 +83,8 @@ def main():
         def engage(model_id=""):
             if host.agent is not None:
                 return
+            started = time.monotonic()
+            emit('worker_phase', {'stage': 'building_agent'})
             host.agent = build_agent(host)
             bind_llm(host.agent.llm, require_item(model_id) if model_id else require_active(),
                      timeout=request["limits"]["call_timeout"])
@@ -118,6 +122,8 @@ def main():
                         archive.manual_save = True
                     return original(name, arguments)
             host.agent.tools.execute = execute
+            emit('worker_phase', {'stage': 'agent_ready',
+                                 'duration_ms': int((time.monotonic() - started) * 1000)})
 
         host.engage_model = engage
         try:

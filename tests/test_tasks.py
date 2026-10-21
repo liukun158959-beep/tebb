@@ -123,6 +123,21 @@ class TaskTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 2)
         self.assertEqual(task["answer"], "保留片段")
         self.assertIn('模型接口等待',task['error'])
+        phase = next(e['data'] for e in task['events'] if e['kind'] == 'timeout_phase')
+        self.assertEqual(phase, dict(stage='llm_start', scope='call'))
+
+    def test_total_timeout_outside_call_is_distinct_from_model_wait_and_persisted(self):
+        self.manager.settings.update(call_timeout=.3, task_timeout=.3)
+        # Both cold startup and the fixture's non-model wait are outside a call.
+        # Do not assume the child can emit its first event within 0.3 seconds.
+        task = self.manager.wait(self.manager.submit('slow', 'outside-call'))
+        self.assertEqual(task['state'], 'timed_out')
+        events = self.manager.get(task['id'])['events']
+        pool = next(e['data'] for e in events if e['kind'] == 'worker_pool')
+        self.assertGreaterEqual(pool['spawn_duration_ms'], 0)
+        self.assertEqual(next(e['data'] for e in events if e['kind'] == 'timeout_phase'),
+                         dict(stage='outside_call', scope='task'))
+        self.assertFalse(any(e['kind'] == 'llm_start' for e in events))
 
     def test_coding_command_wait_budget_does_not_use_short_model_idle_timeout(self):
         self.manager.settings.update(call_timeout=.15,task_timeout=3)

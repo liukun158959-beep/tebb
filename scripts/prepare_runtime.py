@@ -12,7 +12,7 @@ from pathlib import Path
 
 VERSION = "3.13.16"
 SHA256 = "97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297"
-ATLAS_REF = "20b890c20afc45cc5e593555e7b6f8ccdbcceb0b"
+ATLAS_REF = "47cf8e60af0a08c1e5c6b5465f310fdddf3dd404"
 ROOT = Path(__file__).resolve().parents[1]
 
 
