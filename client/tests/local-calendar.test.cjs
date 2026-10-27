@@ -52,3 +52,32 @@ test('a refreshed local title and version replace an old inspection without unne
  current={...current,summary:'改过的标题',local_version:2};await c.read();
  assert.equal(c.event('tebb-local/local').summary,'改过的标题');assert.equal(c.event('tebb-local/local').local_version,2);
 });
+
+test('drag preview never registers a calendar event, does not rerender the grid, and permits repeated lifting',async()=>{
+ const saved=global.document;global.document={body:{}};let callbacks,gridRenders=0,commits=[];
+ const {CalendarDragSurface}=load('calendar-drag.tsx',{'./schedule-state':state,'react-dom':{createPortal:node=>node},'@dnd-kit/core':{
+  DndContext:props=>{callbacks=props;return React.createElement('div',{},props.children);},DragOverlay:({children})=>React.createElement('aside',{},children),
+  PointerSensor(){},useSensor:()=>({}),useSensors:()=>[],useDraggable:()=>({})}});
+ function Grid(){gridRenders++;return React.createElement('div',{'data-grid':true});}
+ const source=event('same'),children=React.createElement(Grid);let view;
+ await act(async()=>{view=create(React.createElement(CalendarDragSurface,{children,reduce:true,onStart(){},project:(source,delta)=>({time:{start:source.start,end:source.end},style:{top:delta.y,left:0}}),onCommit:(source,time)=>commits.push([source,time]),onFinish(){}}));});
+ for(let i=0;i<3;i++){
+  act(()=>callbacks.onDragStart({active:{data:{current:{event:source}}}}));
+  for(let y=0;y<8;y++)act(()=>callbacks.onDragMove({delta:{x:0,y}}));
+  assert.equal(view.root.findAllByProps({'data-calendar-drop-preview':true}).length,1);assert.equal(gridRenders,1);
+  act(()=>callbacks.onDragEnd({delta:{x:0,y:8}}));assert.equal(view.root.findAllByProps({'data-calendar-drop-preview':true}).length,0);
+ }
+ assert.equal(commits.length,3);assert(commits.every(([e])=>e===source));await act(async()=>view.unmount());global.document=saved;
+});
+
+test('interaction suspends stale reads and inspection, while pending saves cannot trigger a permission downgrade',async()=>{
+ let resolveRead,resolveSave,reads=0,inspects=0;const current=event('moving');
+ const c=new week.ScheduleWeekController(async(method,args)=>{if(method==='load_schedule_week'){reads++;return new Promise(resolve=>resolveRead=resolve);}
+  if(method==='inspect_schedule_event'){inspects++;return {ok:true,event:{...current,editable:false}};}
+  return new Promise(resolve=>resolveSave=()=>resolve({ok:true,change_state:'committed',operation:{id:args.action.request_id,state:'retimed',event:{...current,start:args.action.start,end:args.action.end}}}));
+ },day,storage());c.page={...c.page,events:[current]};
+ const old=c.read();c.beginInteraction();assert.equal(await c.read(),false);assert.equal(await c.inspect(current),false);
+ resolveRead({...c.page,events:[]});await old;assert.equal(c.page.events.length,1);assert.equal(reads,1);assert.equal(inspects,0);
+ c.endInteraction();const saving=c.retime(current,{start:day+'T11:00:00+08:00',end:day+'T12:00:00+08:00'});
+ assert.equal(await c.inspect(current),false);assert.equal(inspects,0);resolveSave();assert.equal(await saving,true);assert(week.timeEditable(c.event('tebb-local/moving')));
+});

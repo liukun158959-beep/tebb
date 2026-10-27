@@ -18,7 +18,7 @@ export function CalendarWorkspace(props:Props){
   const [panel,setPanel]=useState<'tasks'|'review'|null>(null),[reviewText,setReviewText]=useState(''),[reviewError,setReviewError]=useState(''),[reviewBusy,setReviewBusy]=useState(false),[deleteError,setDeleteError]=useState('');
   const demo=useMemo(()=>props.debug?demoWorkTransport():null,[props.debug]);
   useEffect(()=>{if(props.target){setTarget({...props.target,day:props.target.view==='today'?beijingDay():props.target.day});setView(props.target.view==='day'?'day':'week');}},[props.target]);
-  function changed(){bump();props.onRefresh();}
+  function changed(){bump();}
   function navigate(next:()=>void){if(guard.current)guard.current(next);else next();}
   async function reviewCall(method:string){if(reviewBusy||!props.info||props.debug)return;setReviewBusy(true);setReviewError('');try{
     const result=await rpc<{ok:boolean;error?:string;summary?:string;url?:string}>(props.info,method,{}, {timeoutMs:120000});

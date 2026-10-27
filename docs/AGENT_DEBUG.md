@@ -473,3 +473,11 @@ pnpm --dir client build
 本机浏览器验收材料在 `output/calendar-implementation-2026-10-27/`（跨日实施，最终运行日 2026-10-28）：`auth-ui-final.log`、`extra-ui-final.log`、`auth-wide.png`、`auth-narrow.png`、`calendar-light-final.png`、`calendar-dark-final.png`。覆盖认证 RPC、首次拖动、60 分钟精确位移、短日程几何、键盘/Escape、凌晨锚点、单条/批量同步与去重、760/390/320px 七列周视图和独立单日，以及临时草稿保存前零写入、移动/缩放、丢弃提示。远端为 TimeCalendar，未向真实飞书写入或发送通知；Rust 壳与发布包未重新验收。
 
 最终回归：Python 共 656 项，642 通过、14 跳过，无失败或超时；跳过为 12 项需显式启用的真实沙箱、1 项 Windows 符号链接权限、1 项需指定 Atlas 源码的发布归档验证。前端 170 项通过，类型检查和生产构建通过（保留既有分包体积提示）。最终文件 `backend-final.log/frontend-final.log/types-final.log/build-final.log`；以最终文件为准，中间定位日志不作为交付结果。冗余检查清理旧独立飞书创建组件、今天汇总样式、未使用的展示计数及传参，日程页以小接口接入现有待办/删除服务；旧桌面与后台兼容入口保留。
+
+## 连续日程拖动与嵌入布局（#142）
+
+本轮仅修改客户端，复用原认证 RPC 和服务。前端行为测试新增预览与事件源隔离、连续抓取、交互期间旧读取及资格返回不打断手势的用例。保存中 `.fc-event.sw-pending` / `aria-busy=true` 显示目标时间；完成后可继续操作；`.sw-recovery` 仅用于待核对结果，不用它显示正常网络等待。独立浮层 `[data-calendar-drop-preview]` 不得包含 `.sw-drag-content`，FullCalendar 事件源中不得出现 `drag-preview`。
+
+本机材料在 `output/calendar-stability-2026-10-28/`：`repeat-before.log/repeat-root-cause.log` 为失败复现，`repeat-final.log/layout-final.log` 为修复后认证组件验收，`frontend-final.log/types-final.log/build-final.log` 为前端检查；`embedded-light.png/embedded-dark.png/embedded-narrow.png` 展示当前布局。页面滚动应由工作区拥有，`.fc-scroller` 不产生独立纵向溢出；窄屏仅保留七列横向查看。浏览器远端注入 TimeCalendar，正式同步仍由真实 CalendarAdapter 执行；本轮未写真实飞书或构建发布包。
+
+#142 验证：前端完整 172 项通过，类型检查及生产构建通过（既有分包体积提示保留）。认证 WebSocket 浏览器验证同一新建同步记录连续三次改期、慢回执、页面滚动中的预览与落点一致，以及无内部纵向滚动/网格线、凌晨锚点、760/390/320px 周/单日。后端与原生壳代码未改，本轮不重复声明后端全量或发布包验收。

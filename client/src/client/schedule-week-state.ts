@@ -52,6 +52,7 @@ export class ScheduleWeekController {
   private serial=0;private eventSerial=new Map<string,number>();private listeners=new Set<()=>void>();
   private storageDamaged=false;
   private storageKey='tebb.schedule.week.pending.v1';
+  private interacting=false;
   constructor(private transport:WeekTransport,day:string,private storage?:StorageLike,private id=()=>crypto.randomUUID()){
     this.page=empty(day);
     try{const saved=JSON.parse(storage?.getItem(this.storageKey)||'[]');if(!Array.isArray(saved))throw Error();
@@ -61,6 +62,9 @@ export class ScheduleWeekController {
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
   private emit(){this.listeners.forEach(fn=>fn());}
   private persist(){if(this.unknown.size)this.storage?.setItem(this.storageKey,JSON.stringify([...this.unknown.values()]));else this.storage?.removeItem(this.storageKey);}
+  beginInteraction(){this.interacting=true;++this.serial;this.loading=false;
+    for(const key of this.checking)this.eventSerial.set(key,(this.eventSerial.get(key)||0)+1);this.checking.clear();}
+  endInteraction(){this.interacting=false;}
   private adopt(page:ScheduleWeekPage){
     for(const event of page.events){const key=calendarKey(event),old=this.event(key);
       if(old&&Date.parse(event.checked_at)>=Date.parse(old.checked_at)&&
@@ -80,6 +84,7 @@ export class ScheduleWeekController {
     ||this.page.links.find(l=>calendarKey(l.event)===key)?.event;}
   blocked(key:string){return this.storageDamaged||this.pending.has(key)||this.unknown.has(key);}
   async read(day=this.page.day,refresh=false){
+    if(this.interacting)return false;
     const serial=++this.serial;this.loading=true;if(!this.storageDamaged)this.error='';this.emit();
     try{
       const page=await this.transport('load_schedule_week',{day,refresh}) as ScheduleWeekPage;
@@ -99,10 +104,10 @@ export class ScheduleWeekController {
       try{if(!this.storageDamaged)this.persist();}catch{this.notice+=' 本机核对标记保存失败，重开后仍需读取核对。';}
       return true;
     }catch(error){if(serial===this.serial)this.error=String(error);return false;}
-    finally{if(serial===this.serial)this.loading=false;this.emit();}
+    finally{if(serial===this.serial){this.loading=false;this.emit();}}
   }
   async inspect(event:Pick<CalendarEvent,'calendar_id'|'event_id'>){
-    if(this.checking.has(calendarKey(event)))return false;
+    if(this.interacting||this.pending.has(calendarKey(event))||this.checking.has(calendarKey(event)))return false;
     const key=calendarKey(event),version=(this.eventSerial.get(key)||0)+1;this.eventSerial.set(key,version);
     this.checking.add(key);this.emit();
     try{
@@ -112,7 +117,7 @@ export class ScheduleWeekController {
       if(!result.ok){this.error=result.error||'日程核对失败，保留上次时间。';return false;}
       return true;
     }catch(error){if(version===this.eventSerial.get(key)){this.error=String(error);const old=this.event(key);if(old)this.inspections.set(key,{...old,editable:false,edit_reason:'读取失败，请重新核对',verification:'read_failed'});}return false;}
-    finally{if(version===this.eventSerial.get(key))this.checking.delete(key);this.emit();}
+    finally{if(version===this.eventSerial.get(key)){this.checking.delete(key);this.emit();}}
   }
   async prepareVisible(){
     const candidates=this.page.events.filter(e=>{const current=this.event(calendarKey(e));return e.eligible&&e.sync_state!=='local'&&
