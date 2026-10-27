@@ -6,7 +6,7 @@ import { ScheduleController, absoluteTime, beijingDay, beijingStamp, eventHealth
   type CalendarEvent, type ScheduleAction, type SchedulePage, type ScheduleTransport } from './schedule-state';
 import './schedule.css';
 
-export type ScheduleTarget={item_id?:string;calendar_id?:string;event_id?:string;day?:string};
+export type ScheduleTarget={item_id?:string;calendar_id?:string;event_id?:string;day?:string;create?:boolean};
 type Draft={summary:string;start:string;end:string};
 type Props={info:BackendInfo|null;debug?:boolean;transport?:ScheduleTransport;target:ScheduleTarget;onClose:()=>void;onReturn:(id:string)=>void;onWeek?:(target:ScheduleTarget)=>void;onChange:()=>void};
 const blank=(title:string,day:string):Draft=>{const start=day===beijingDay()?beijingStamp(new Date(Math.ceil((Date.now()+30*60000)/300000)*300000).toISOString()):day+'T09:00';return {summary:title,start,end:beijingStamp(new Date(new Date(absoluteTime(start)).getTime()+3600000).toISOString())};};
@@ -53,7 +53,7 @@ export function SchedulePane({info,debug=false,transport,target,onClose,onReturn
     }catch(error){setFormError(String(error));return false;}
   }
   function chooseDate(next:string){guard(()=>{initialLocate.current=false;setDraft(null);setDay(next);setSelection('');});}
-  function startDraft(){if(!item)return;guard(()=>{initialLocate.current=false;const next=blank(item.title,day);draftBase.current=JSON.stringify(next);setDraft(next);setFormError('');setPicker(null);});}
+  function startDraft(){if(!item)return;if(onWeek){guard(()=>onWeek({day,item_id:item.id,create:true}));return;}guard(()=>{initialLocate.current=false;const next=blank(item.title,day);draftBase.current=JSON.stringify(next);setDraft(next);setFormError('');setPicker(null);});}
   function updateStart(start:string){if(!draft)return;const duration=Math.max(5,(new Date(absoluteTime(draft.end)).getTime()-new Date(absoluteTime(draft.start)).getTime())/60000);
     setDraft({...draft,start,end:beijingStamp(new Date(new Date(absoluteTime(start)).getTime()+duration*60000).toISOString())});}
   function duration(minutes:number){if(draft)setDraft({...draft,end:beijingStamp(new Date(new Date(absoluteTime(draft.start)).getTime()+minutes*60000).toISOString())});}

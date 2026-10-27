@@ -9,7 +9,7 @@ export type TimeDraft={start:string;end:string};
 export const scheduleWireTime=(iso:string)=>new Date(iso).toISOString().replace(/\.\d{3}Z$/,'Z');
 export const timeCompleted=(op?:ScheduleOperation|null)=>!!op&&['retimed','observed','unchanged','not_started'].includes(op.state);
 export const timeEditable=(event?:CalendarEvent)=>!!event&&event.editable===true&&event.verification==='confirmed'
-  &&new Date(event.end).getTime()>Date.now()&&!!event.edit_checked_at&&Date.now()-new Date(event.edit_checked_at).getTime()<300000;
+  &&new Date(event.end).getTime()>Date.now()&&(event.sync_state==='local'||!!event.edit_checked_at&&Date.now()-new Date(event.edit_checked_at).getTime()<300000);
 export const minutesInDay=(iso:string)=>{const s=beijingStamp(iso);return Number(s.slice(11,13))*60+Number(s.slice(14,16));};
 export function validTimeDraft(event:CalendarEvent,draft:TimeDraft,now=Date.now()){
   const a=Date.parse(draft.start),b=Date.parse(draft.end),duration=b-a,old=Date.parse(event.end)-Date.parse(event.start);
@@ -64,7 +64,8 @@ export class ScheduleWeekController {
   private adopt(page:ScheduleWeekPage){
     for(const event of page.events){const key=calendarKey(event),old=this.event(key);
       if(old&&Date.parse(event.checked_at)>=Date.parse(old.checked_at)&&
-          (event.start!==old.start||event.end!==old.end||event.verification!==old.verification)){
+          (event.start!==old.start||event.end!==old.end||event.summary!==old.summary||event.local_version!==old.local_version
+            ||event.sync_state!==old.sync_state||event.editable!==old.editable||event.verification!==old.verification)){
         this.inspections.delete(key);this.eventSerial.set(key,(this.eventSerial.get(key)||0)+1);this.checking.delete(key);
       }}
     this.page=page;
@@ -101,6 +102,7 @@ export class ScheduleWeekController {
     finally{if(serial===this.serial)this.loading=false;this.emit();}
   }
   async inspect(event:Pick<CalendarEvent,'calendar_id'|'event_id'>){
+    if(this.checking.has(calendarKey(event)))return false;
     const key=calendarKey(event),version=(this.eventSerial.get(key)||0)+1;this.eventSerial.set(key,version);
     this.checking.add(key);this.emit();
     try{
@@ -111,6 +113,14 @@ export class ScheduleWeekController {
       return true;
     }catch(error){if(version===this.eventSerial.get(key)){this.error=String(error);const old=this.event(key);if(old)this.inspections.set(key,{...old,editable:false,edit_reason:'读取失败，请重新核对',verification:'read_failed'});}return false;}
     finally{if(version===this.eventSerial.get(key))this.checking.delete(key);this.emit();}
+  }
+  async prepareVisible(){
+    const candidates=this.page.events.filter(e=>{const current=this.event(calendarKey(e));return e.eligible&&e.sync_state!=='local'&&
+      !this.blocked(calendarKey(e))&&!this.checking.has(calendarKey(e))&&Date.parse(e.end)>Date.now()&&
+      (!current?.edit_checked_at||Date.now()-Date.parse(current.edit_checked_at)>=240000);});
+    let index=0;await Promise.all(Array.from({length:Math.min(2,candidates.length)},async()=>{
+      while(index<candidates.length){const event=candidates[index++];await this.inspect(event);}
+    }));
   }
   async retime(event:CalendarEvent,draft:TimeDraft){
     const key=calendarKey(event);

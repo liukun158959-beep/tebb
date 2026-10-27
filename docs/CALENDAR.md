@@ -1,0 +1,79 @@
+# 本地日程与飞书同步
+
+当前实现对应 [#140](https://github.com/liukun158959-beep/tebb/issues/140)、[#141](https://github.com/liukun158959-beep/tebb/issues/141)，用户已确认本地默认、单条/整体同步、交互及失败边界。旧 #136/#138 设计保留为历史，以本文为当前规则。本批不发布。
+
+## 使用与交互
+
+日程默认本周，周一至周日、北京时间 UTC+8；单日只显示所选一天。窄屏周视图保留七列，在日历内部横向滚动。今天是定位按钮，不再是独立汇总页；桌宠“今天的安排”定位当天的周日历。飞书待办及手动本周复盘在“更多”中，删除待办仍是真实删除。
+
+- 单击空白生成一份虚线临时草稿，默认一小时、15 分钟吸附；旁边无蒙层表单，窄屏放在时间轴下方。再次点击空白移动同一草稿并保留输入。标题必填，明确保存前不写本地或飞书。Escape/关闭时，已有输入须选择保存、放弃或继续编辑。
+- 单击日程条打开详情，再点同一条关闭，点其他条切换；不常驻底部详情。相同时段并排，纵向长度对应持续时间，相邻短日程不互相覆盖。短日程采用紧凑标题，完整时间在提示及详情可读。
+- 按住约 250ms 抬起卡片，原位淡化、落点预览，松手提交；无效落点、Escape、时间未变不写入。上下边缘缩放，15 分钟吸附；键盘空格抓取，方向键移动，Shift/Alt 加上下调整结束/开始，Enter 保存、Escape 取消。减少动效时取消弹动。
+- 默认显示 08:00–24:00。顶部留出 00:00–08:00 折叠入口，展开/收起保持当前时段位置，凌晨内容可向上滚动查看。草稿时间变化只让草稿轻弹，时间轴不跳转。同步和新建按钮等宽等高。
+- 日程与事项进度、截止日及 AI 执行相互独立。事项安排入口进入相同草稿表单并预选事项；一场日程至多关联一事项，解除只删关系。归档后需恢复才能新增/调整。
+
+## 事实与职责
+
+本地日程由 `LocalCalendarService` 拥有，和事项共用现有工作区 SQLite 短事务，不另建数据库。`SchedulingService` 合并日/周视图，处理既有远端改期与事件预留；`CalendarAdapter` 负责真实 lark-cli 协议、身份和完整参与人检查。Bridge 和认证 WebSocket 提供明确入口，不通过 GUI 或模型执行。
+
+本地身份固定为 `calendar_id=tebb-local, event_id=local_id`；同步映射单独保存在 `remote`，成功后保持同一身份及事项关系，合并远端显示时去重。原生飞书日程保留原身份。读取飞书更新绑定快照；范围内消失的绑定另查详情，区分改期、删除、不可访问及读取失败，不把缺席当删除。本地日程在飞书断网时仍可读写/拖动；远端错误单独显示，旧远端时间标为未核对。
+
+前端 `LocalCalendarController` 管保存/同步回执及固定清单，`ScheduleWeekController` 管时间调整、资格和乱序读取；组件拥有临时输入、日期与手势。复用 FullCalendar 的时间几何、并排与边缘缩放，正文抬起复用事项已有的 dnd-kit。可见远端事件分两路预先核对，使未选中的个人日程也能第一次直接拖动。
+
+## 同步、权限与故障
+
+默认只保存本地，勾选同步才创建飞书；成功后不提供取消绑定。未同步拖动只改本地，已同步拖动 PATCH 同一远端事件。修改前核对最新时间，有冲突先刷新提示。多人、全天、重复、跨日、已结束、其他组织者或无法完整核实的远端日程仍只读；仅本人组织、写权限、完整名单无其他参与人/资源的普通同日个人日程可调。主日历可写不等于任意事件可写；返回的可选 false 标记缺省不再误判身份未核实。
+
+整体同步预览所有未同步本地日程，确认后冻结 ID/版本清单及当前主日历/身份，逐条执行。日程改动或登录目标变化的条目拒绝；已同步不重复创建，部分失败保留成功项。每份清单最多 1000 条，不自动执行后续清单。
+
+同步先持久登记 `prepared → calling`，再真实创建飞书；取得身份后 `remote_created/register → synced/committed`。超时、断连或登记不明保留 `unconfirmed` 与编号，阻止该日程重复创建。重开先读，不自动重试。可输入/选择远端事件 ID 核对绑定，或明确确认没有创建并封存原编号；已知事件仍存在时不能声明没有创建。绑定前检查原身份、类型、唯一映射及事项归属。没有原回执也须明确封存，迟到请求不能再次执行。本地保存回执缺失同样支持登记当前状态，不盲目另建。
+
+同一事件/关联事项执行及收尾期间拒绝冲突写入，其他事项、AI、读取继续。网络不持数据库、宿主或全局写锁。前端保留一个本地保存/同步待核对标记期间暂停该控制器新写入；持久批次可明确继续仅 `queued` 条目，成功、失败或不明项不自动重发。已有改期继续采用按事件核对标记。
+
+原飞书删除入口移到详情“更多”，仍仅允许原今日快照已读取事件，保留真实删除及通知行为。本地事件本批未提供永久删除。飞书无条件版本，预检不能保证与外部同时修改的原子互斥。断连不承诺取消后台已发出的操作。
+
+## RPC 与调试
+
+沿用进程 token 认证和白名单。检查外层派发结果及业务 `ok`，失败看 `stage/change_state/operation`，不因超时重发。
+
+| RPC / 动作 | 输入 |
+| --- | --- |
+| `load_local_calendar` | 可选 `request_id`，返回 `events,operations,batches,operation` |
+| `change_local_calendar / create` | 新 `request_id`、可选稳定 `local_id`，`summary,start,end,item_id`（空表示独立）；起止含时区 |
+| `change_local_calendar / update` | 同上，另需 `local_id,version`；已绑定不在此修改标题/时间 |
+| `change_local_calendar / sync` | 新 `request_id,local_id,version`；不重建已有映射 |
+| `change_local_calendar / prepare_sync` | 新 `request_id,events:[{local_id,version}]`，返回固定目标 `batch` |
+| `calendar_sync_step` | `batch_id,local_id`，仅执行该清单尚未执行条目 |
+| `change_local_calendar / resolve_sync` | 新 `request_id,local_id,operation_id,resolution`；`link` 加 `event_id`，`absent` 加 `confirmed:true` |
+| `change_local_calendar / resolve_save` | 新 `request_id,local_id,operation_id,confirmed:true`；封存原保存，不重放 |
+| `load_schedule_week/load_schedule` | 沿用 `day,refresh,request_id`，合并本地与远端 |
+| `inspect_schedule_event/change_schedule` | 本地使用 `calendar_id=tebb-local,event_id=local_id`；`retime/reconcile_time/link/unlink` 原参数兼容 |
+
+复制以下命令只使用临时目录与假飞书，不向真实账户写入：
+
+```powershell
+@'
+from tests.test_local_calendar import LocalCalendarTests
+case = LocalCalendarTests()
+case.setUp()
+try:
+    event, request = case.create()
+    assert event['sync_state'] == 'local' and not case.calendar.creates
+    result, sync = case.sync(event)
+    assert result['ok'] and len(case.calendar.creates) == 1
+    print(event['local_id'], sync['request_id'], result['stage'])
+    assert case.local.load(sync['request_id'])['operation']['state'] == 'synced'
+finally:
+    case.doCleanups()
+'@ | python -
+
+python -m unittest tests.test_local_calendar tests.test_schedule_week tests.test_scheduling -v
+python -m unittest tests.test_local_api.LocalApiTests.test_local_calendar_authenticated_rpc_offline_sync_and_retime -v
+pnpm --dir client test
+pnpm --dir client exec tsc --noEmit
+pnpm --dir client build
+```
+
+日志使用 `desk_companion.local_calendar` 的 `calendar operation=<编号> local=<ID> type/stage/state`，与 RPC 调试关联；不打印 token 或日程正文。先查原操作，再查映射及远端事件。`remote_created/register` 不等于未创建；`observed` 只登记当前值，不证明原请求未执行。前端标记为 localStorage 的 `tebb.calendar.pending.v1` / `tebb.schedule.week.pending.v1`；损坏时保留并暂停该类写入，先查后台回执。
+
+实际组件隔离演示为 `client.html?debug=work` → 日程，明确标示演示数据。正式连接使用真实 CalendarAdapter，没有产品开关把同步伪装成成功。认证 WebSocket 与浏览器验收注入 `tests.schedule_fixture.TimeCalendar`，验证真实存储、RPC 和组件，仅远端模拟；不等于真实飞书写入验收。真实写入需用户指定未来个人测试日程，不能用已有会议自动回归。

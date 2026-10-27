@@ -465,3 +465,11 @@ pnpm --dir client build
 2026-10-22 最终验收：开启 DESK_TEST_ATLAS_SOURCE 的 Python 全量 640 项，627 通过、13 跳过，无超时或失败，582.449 秒；跳过为 12 项需显式启用的真实沙箱和 1 项 Windows 符号链接权限。前端 161 项通过，tsc 和生产构建通过。真实浏览器验证正文跨日拖动、上下边缘、15 分钟吸附（含原有不对齐短日程）、Escape 零写入、键盘、丢回执只读核对、24 小时及窄屏、跨周表单、单日/周定位、卡片时间更新及筛选清除；认证后台链路使用假飞书，原事件身份保持。清理重复侧栏组装、缓存刷新和未使用导入，周组件按需加载，未新增平行日历或任意执行接口。
 
 本机验收材料在 `output/week-planner-2026-10-22/`：`python-final-verified.log`、`client-final-pass.log`、`types-final-pass.log`、`build-final-pass.log`，以及 `production-qa-delivery.log`、`auth-browser-final.log`、`workboard-week-qa-final.log`；浏览器脚本与截图同目录。较早运行的编译错误、测试断言修正和手势修复记录保留，以上述最终文件为准，不把中间结果当最终验收。
+
+## 本地日程与显式同步（#140 / #141）
+
+当前接口、可复制隔离调用及排查见 [日程调试](CALENDAR.md#rpc-与调试)。新增 `load_local_calendar/change_local_calendar/calendar_sync_step` 沿用认证白名单，不持宿主锁等待网络。记录操作 ID、实际 stage/state、稳定 local_id 与 remote 映射；只读回执不会重试远端创建。正式产品使用真实 CalendarAdapter，只有明确 debug 界面和测试注入模拟飞书。
+
+本机浏览器验收材料在 `output/calendar-implementation-2026-10-27/`（跨日实施，最终运行日 2026-10-28）：`auth-ui-final.log`、`extra-ui-final.log`、`auth-wide.png`、`auth-narrow.png`、`calendar-light-final.png`、`calendar-dark-final.png`。覆盖认证 RPC、首次拖动、60 分钟精确位移、短日程几何、键盘/Escape、凌晨锚点、单条/批量同步与去重、760/390/320px 七列周视图和独立单日，以及临时草稿保存前零写入、移动/缩放、丢弃提示。远端为 TimeCalendar，未向真实飞书写入或发送通知；Rust 壳与发布包未重新验收。
+
+最终回归：Python 共 656 项，642 通过、14 跳过，无失败或超时；跳过为 12 项需显式启用的真实沙箱、1 项 Windows 符号链接权限、1 项需指定 Atlas 源码的发布归档验证。前端 170 项通过，类型检查和生产构建通过（保留既有分包体积提示）。最终文件 `backend-final.log/frontend-final.log/types-final.log/build-final.log`；以最终文件为准，中间定位日志不作为交付结果。冗余检查清理旧独立飞书创建组件、今天汇总样式、未使用的展示计数及传参，日程页以小接口接入现有待办/删除服务；旧桌面与后台兼容入口保留。

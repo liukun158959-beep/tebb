@@ -1,6 +1,6 @@
 import type { WorkPage } from './work-board-state';
 
-export type CalendarEvent={calendar_id:string;event_id:string;summary:string;start:string;end:string;status:string;eligible:boolean;reason:string;verification:string;error:string;checked_at:string;editable?:boolean;edit_reason?:string;edit_checked_at?:string};
+export type CalendarEvent={calendar_id:string;event_id:string;summary:string;start:string;end:string;status:string;eligible:boolean;reason:string;verification:string;error:string;checked_at:string;editable?:boolean;edit_reason?:string;edit_checked_at?:string;local_id?:string;local_version?:number;sync_state?:'local'|'synced'|'unconfirmed';sync_operation?:string;remote?:{calendar_id:string;event_id:string}|null};
 export type ScheduleLink={item_id:string;event:CalendarEvent};
 export type ScheduleOperation={id:string;item_id:string;type:string;state:string;stage:string;error:string;event?:CalendarEvent;summary?:string;start?:string;end?:string;calendar_id?:string;event_id?:string;original_start?:string;original_end?:string;current_event?:CalendarEvent;notice?:string;execution_result?:string};
 export type SchedulePage={ok:boolean;day:string;item_id:string;calendar?:{id:string;summary:string;writable:boolean};events:CalendarEvent[];events_valid:boolean;events_error:string;checked_at:string;links:ScheduleLink[];items:{id:string;title:string;version:number;archived:boolean}[];operations:ScheduleOperation[];operation?:ScheduleOperation|null;error?:string;change_state?:string;stage?:string};
@@ -21,7 +21,7 @@ export function beijingStamp(iso=new Date().toISOString()){const p=parts(iso);re
 export const beijingDay=(iso?:string)=>beijingStamp(iso).slice(0,10);
 export const absoluteTime=(stamp:string)=>{if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(stamp))throw Error('请选择日期与时间。');return stamp+':00+08:00';};
 export function eventTime(event:CalendarEvent){return event.start.includes('T')?`${beijingStamp(event.start).replace('T',' ')} → ${beijingStamp(event.end).replace('T',' ')}`:`${event.start||'时间未确认'}${event.end&&event.end!==event.start?' → '+event.end:''}`;}
-export function eventHealth(event:CalendarEvent){if(event.verification==='confirmed'&&(!event.checked_at||Date.now()-new Date(event.checked_at).getTime()>=300000))return '上次信息 · 未核对';return ({confirmed:'已核对',deleted:'已取消或删除',missing:'已不存在',unavailable:'不可访问',read_failed:'读取失败 · 未核对'} as Record<string,string>)[event.verification]||'未核对';}
+export function eventHealth(event:CalendarEvent){if(event.sync_state==='local')return '仅本地';if(event.sync_state==='unconfirmed')return '同步待核对';if(event.verification==='confirmed'&&(!event.checked_at||Date.now()-new Date(event.checked_at).getTime()>=300000))return '上次信息 · 未核对';return ({confirmed:'已核对',deleted:'已取消或删除',missing:'已不存在',unavailable:'不可访问',read_failed:'读取失败 · 未核对'} as Record<string,string>)[event.verification]||'未核对';}
 const empty=(day:string,item_id:string):SchedulePage=>({ok:true,day,item_id,events:[],events_valid:false,events_error:'',checked_at:'',links:[],items:[],operations:[]});
 
 // An explicit user action is the sole source of mutations; reads never replay a create.
@@ -91,8 +91,32 @@ export function createScheduleDemo(work:()=>WorkPage):ScheduleTransport {
       operations:[...operations.values()].filter(op=>op.type==='retime'&&unresolved(op))};
   }
   const timeFingerprints=new Map<string,string>();
+  const localOperations=new Map<string,ScheduleOperation>();
+  const batches=new Map<string,{id:string;created_at:string;entries:{local_id:string;version:number;request_id:string;state:string}[]}>();
   sync();
   return async(method,args)=>{
+    if(method==='load_local_calendar')return {...snapshot(day,''),events:structuredClone(events.filter(e=>e.local_id)),operations:[],batches:structuredClone([...batches.values()]),operation:localOperations.get(String(args.request_id||''))};
+    if(method==='calendar_sync_step'){
+      const batch=batches.get(String(args.batch_id)),entry=batch?.entries.find(e=>e.local_id===args.local_id),event=events.find(e=>e.local_id===args.local_id);
+      if(entry?.state==='queued'&&event){event.sync_state='synced';event.remote={calendar_id:'demo-calendar',event_id:'published-'+event.event_id};event.local_version=(event.local_version||1)+1;entry.state='synced';}
+      return {...snapshot(day,''),batch:structuredClone(batch)};
+    }
+    if(method==='change_local_calendar'){
+      const a=args.action as ScheduleAction&{local_id:string;events:{local_id:string;version:number}[]};
+      if(a.type as string==='prepare_sync'){
+        const batch={id:a.request_id,created_at:new Date().toISOString(),entries:a.events.map((e,i)=>({...e,request_id:a.request_id+'_'+i,state:'queued'}))};batches.set(batch.id,batch);return {...snapshot(day,''),batch};
+      }
+      let event=events.find(e=>e.local_id===a.local_id);
+      const previous=localOperations.get(a.request_id);if(previous)return {...snapshot(day,''),operation:previous,event:previous.event,change_state:'committed'};
+      if(a.type==='create'||a.type as string==='update'){
+        if(!event){event={...make(a.local_id,a.summary!,a.start!,a.end!),calendar_id:'tebb-local',local_id:a.local_id,local_version:0,sync_state:'local'};events.push(event);}
+        Object.assign(event,{summary:a.summary,start:a.start,end:a.end,local_version:(event.local_version||0)+1});
+        links=links.filter(l=>calendarKey(l.event)!==calendarKey(event!));if(a.item_id)links.push({item_id:a.item_id,event});sync();
+      }else if(a.type as string==='sync'&&event){event.sync_state='synced';event.remote={calendar_id:'demo-calendar',event_id:'published-'+event.event_id};event.local_version=(event.local_version||1)+1;}
+      if(!event)return {...snapshot(day,''),ok:false,error:'演示本地日程不存在。'};
+      const op={id:a.request_id,item_id:a.item_id||'',type:a.type,state:a.type as string==='sync'?'synced':'saved',stage:'committed',error:'',event:structuredClone(event)};
+      localOperations.set(a.request_id,op);return {...snapshot(day,''),event:structuredClone(event),operation:op,change_state:'committed'};
+    }
     if(method==='load_schedule_week')return weekSnapshot(String(args.day),String(args.request_id||''));
     if(method==='inspect_schedule_event'){
       const event=events.find(e=>e.calendar_id===args.calendar_id&&e.event_id===args.event_id);

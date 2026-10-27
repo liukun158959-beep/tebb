@@ -147,7 +147,7 @@ def item_schedule_view(state, item_id):
         try:
             checked = datetime.fromisoformat(event['checked_at'])
             a, b = datetime.fromisoformat(event['start']), datetime.fromisoformat(event['end'])
-            fresh = event.get('verification') == 'confirmed' and (now-checked).total_seconds() < 300
+            fresh = event.get('verification') == 'confirmed' and (event.get('sync_state') == 'local' or (now-checked).total_seconds() < 300)
             if not fresh: unchecked.append(event)
             elif a <= now < b: active.append(event)
             elif a > now: future.append(event)

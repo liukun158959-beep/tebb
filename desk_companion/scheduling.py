@@ -21,6 +21,8 @@ class SchedulingService:
     def __init__(self, work_board, calendar=None):
         self.board = work_board
         self.calendar = calendar or CalendarAdapter()
+        from .local_calendar import LocalCalendarService
+        self.local = LocalCalendarService(self)
 
     @contextmanager
     def hold_event(self, calendar_id, event_id):
@@ -52,7 +54,7 @@ class SchedulingService:
             checked_at=cached.get('checked_at', ''),
             operations=[self._public_operation(op) for op in state.get('schedule_operations', {}).values()
                         if op['type'] == 'retime' and op['state'] in UNRESOLVED])
-        return page
+        return self.local.project(page, state, week=True)
 
     def load_week(self, day, refresh=False, request_id=''):
         try:
@@ -67,6 +69,7 @@ class SchedulingService:
                 try:
                     calendar = self.calendar.primary()
                     events = self.calendar.week(calendar['id'], monday)
+                    events = self.local.refresh_missing(calendar, events, monday, week=True)
                 except Exception as exc:
                     error = str(exc)
                 with self.board.workspace_transaction() as (state, _):
@@ -84,6 +87,9 @@ class SchedulingService:
             return dict(ok=False, stage='read', error=f'周日程读取失败：{exc}。请重新核对。')
 
     def inspect_event(self, calendar_id, event_id):
+        from .local_calendar import LOCAL
+        if calendar_id == LOCAL:
+            return self.local.inspect(event_id)
         event = None
         try:
             identifier(calendar_id); identifier(event_id)
@@ -283,13 +289,14 @@ class SchedulingService:
         ops = state.get('schedule_operations', {})
         items = [dict(id=i['id'], title=i['title'], archived=i['archived'], version=i['version'])
                  for i in state.get('work_items', [])]
-        return dict(ok=True, day=day, item_id=item_id, calendar=cached.get('calendar'),
+        page = dict(ok=True, day=day, item_id=item_id, calendar=cached.get('calendar'),
             events=cached.get('events', []), events_valid=cached.get('valid', False),
             events_error=cached.get('error', ''), checked_at=cached.get('checked_at', ''),
             links=copy.deepcopy(state.get('schedule_links', [])), items=items,
             operations=[self._public_operation(op) for op in ops.values()
                         if (not item_id or op['item_id'] == item_id) and op['state'] in UNRESOLVED],
-            operation=self._public_operation(ops.get(request_id)))
+            operation=self._public_operation(ops.get(request_id) or state.get('local_calendar_operations', {}).get(request_id)))
+        return self.local.project(page, state)
 
     def _read(self, day, item_id='', request_id=''):
         with self.board.workspace_transaction() as (state, _):
@@ -313,12 +320,19 @@ class SchedulingService:
             try:
                 calendar = self.calendar.primary()
                 events = self.calendar.day(calendar['id'], day)
+                events = self.local.refresh_missing(calendar, events, day)
             except Exception as exc:
                 error = str(exc)
             if calendar and links:
                 def verify(link):
                     old = link['event']
                     try:
+                        from .local_calendar import LOCAL
+                        if old['calendar_id'] == LOCAL:
+                            result = self.local.inspect(old['event_id'])
+                            if result.get('event'):
+                                return result['event']
+                            raise ValueError(result.get('error', '本地日程核对失败。'))
                         if old['calendar_id'] != calendar['id']:
                             raise CalendarError('当前登录的主日历与原安排不同，未自动换绑。', 'unavailable')
                         return self.calendar.get(old['calendar_id'], old['event_id'])
@@ -384,6 +398,12 @@ class SchedulingService:
         return page
 
     def change(self, action):
+        from .local_calendar import LOCAL
+        if isinstance(action, dict) and action.get('calendar_id') == LOCAL:
+            if action.get('type') in {'retime', 'reconcile_time'}:
+                return self.local.retime(action)
+            if action.get('type') in {'link', 'unlink'}:
+                return self.local.link(action)
         if isinstance(action, dict) and action.get('type') in {'retime', 'reconcile_time'}:
             return self._change_time(action)
         operation, remote_started, event, local_commit, local_write = None, False, None, False, False

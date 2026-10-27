@@ -125,3 +125,5 @@ tebb 原名知行 · ZhiXing；仓库已更名为 `tebb`，旧仓库链接由 Gi
 本仓库目前尚未添加 `LICENSE`，暂不声明具体开源许可证。Atlas 和第三方依赖的授权以各自项目为准；模型权重与 Live2D 形象素材不随仓库提供。
 
 感谢 Atlas 及本项目使用的 Tauri、React、xterm.js、bubblewrap、yt-dlp 等项目。
+
+日程支持本地保存、周/单日安排及选择同步到飞书；操作与边界见 [日程说明](docs/CALENDAR.md)。

@@ -159,13 +159,17 @@ test('real week component keeps FullCalendar time-zone/gesture gates and guards 
   let calendarProps,closed=false,writes=0;
   const Calendar=React.forwardRef((props,ref)=>{calendarProps=props;React.useImperativeHandle(ref,()=>({getApi:()=>({changeView(){},updateSize(){}})}));return React.createElement('div',{'data-calendar-stub':true});});
   const Week=load('schedule-week.tsx',{'./api':{},'./page-stack':{usePageActive:()=>true},'./schedule-state':shared,'./schedule-week-state':state,'./schedule-week.css':{},
+    './calendar-interaction.css':{},'./local-calendar-state':load('local-calendar-state.ts'),
+    './calendar-event-editor':{CalendarEventEditor:()=>null},'./workspace-dialog':{WorkspaceDialog:({children})=>React.createElement('div',{},children)},
+    './calendar-drag':{CalendarDragSurface:({children})=>React.createElement('div',{},children),CalendarDragContent:({children})=>React.createElement('div',{},children)},
     '@fullcalendar/react':{default:Calendar},'@fullcalendar/timegrid':{},'@fullcalendar/interaction':{},'@fullcalendar/luxon3':{},'@fullcalendar/core/locales/zh-cn':{},
     'framer-motion':{useReducedMotion:()=>true},'./datetime-field':{DateTimeField:props=>React.createElement('input',{'aria-label':props.marker,value:props.value,onChange:e=>props.onChange(e.target.value)})}}).ScheduleWeekPane;
   const current=event();let view;
-  const transport=async(method,args)=>{if(method==='load_schedule_week')return page([current]);if(method==='inspect_schedule_event')return {ok:true,event:current};writes++;return receipt(args.action,{...current,start:args.action.start,end:args.action.end});};
+  const transport=async(method,args)=>{if(method==='load_local_calendar')return {ok:true,events:[],operations:[],batches:[]};if(method==='load_schedule_week')return page([current]);if(method==='inspect_schedule_event')return {ok:true,event:current};writes++;return receipt(args.action,{...current,start:args.action.start,end:args.action.end});};
   await act(async()=>{view=create(React.createElement(Week,{info:null,transport,target:{day},onClose:()=>closed=true,onReturn(){},onDay(){},onChange(){}}));});
   assert.equal(calendarProps.timeZone,'Asia/Shanghai');assert.equal(calendarProps.snapDuration,'00:15:00');assert.equal(calendarProps.eventResizableFromStart,true);
   const button=label=>view.root.findAllByType('button').find(b=>b.children.join('')===label);
+  act(()=>calendarProps.eventClick({jsEvent:{preventDefault(){}},event:{id:'cal/event_0'}}));
   act(()=>button('修改时间').props.onClick());
   act(()=>view.root.findByProps({'aria-label':'start'}).props.onChange({target:{value:day+'T10:30'}}));
   act(()=>button('返回工作看板').props.onClick());assert.equal(closed,false);assert(view.root.findByProps({role:'alertdialog'}));

@@ -226,10 +226,8 @@ export function App() {
   const rememberFeishuRef = useRef<(snap: FeishuSnap) => void>(() => {});
   const statusGen = useRef(0);
   const boardSeen = useRef(false);
-  const boardFetches = useRef(0);
-  const [fetchCount, setFetchCount] = useState(0);
   const { loading: boardLoading, loadError: boardLoadError, rowDeleting, agendaErrors, taskErrors,
-    createError, createNotice, createNonce, loadBoardSnapshot, deleteAgenda, deleteTask, createEvent } =
+    loadBoardSnapshot, deleteAgenda, deleteTask } =
     useBoardActions({ info, boardClock, setBoard, onLoaded: () => setBoardClock(null) });
   const openBoardRef = useRef<(refresh?: boolean) => void>(() => {});
   const [preview, setPreview] = useState<ChatItem[] | null>(debugRequested() ? DEBUG_FIXTURE : null);
@@ -1183,8 +1181,6 @@ export function App() {
       setStatuses(STATUS_KINDS.map((kind) => statusError(kind, "还没有连上本地后端。恢复：重启客户端。")));
       return;
     }
-    boardFetches.current += 1;
-    setFetchCount(boardFetches.current);
     loadStatuses(info);
     void loadBoardSnapshot(refresh);
   }
@@ -2325,24 +2321,17 @@ export function App() {
               data-page="calendar"
               className="flex min-h-0 flex-1 overflow-hidden"
             >
-              <CalendarWorkspace info={info} target={calendarTarget} onItem={openWorkItem} onRun={conversation=>{if(!info)return;void rpc(info,"collaboration_action",{action:{type:"select",id:conversation,conversation,request_id:crypto.randomUUID()}}).then(()=>setPane("collaboration")).catch(e=>setError(String(e)));}} onCreated={createEvent}
+              <CalendarWorkspace info={info} target={calendarTarget} onItem={openWorkItem}
                 data={board}
-                nowIso={boardClock}
                 loading={boardLoading}
                 loadError={boardLoadError}
                 debug={boardClock !== null}
                 onRefresh={() => { if(!debugKind)void loadBoardSnapshot(true); }}
-                statuses={statuses}
-                fetches={fetchCount}
-                onOpenFeishu={() => void openFeishu()}
                 deleting={rowDeleting}
                 deleteErrors={agendaErrors}
-                onDeleteEvent={(eventId) => void deleteAgenda(eventId)}
+                onDeleteEvent={deleteAgenda}
                 taskErrors={taskErrors}
                 onDeleteTask={(guid) => void deleteTask(guid)}
-                createError={createError}
-                createNotice={createNotice}
-                createNonce={createNonce}
 
               />
             </section>

@@ -1234,6 +1234,40 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(repaired['ok'],repaired);self.assertEqual(len(calendar.creates),1)
         self.assertIsNone(self.host._collaboration)
 
+    async def test_local_calendar_authenticated_rpc_offline_sync_and_retime(self):
+        import uuid
+        from websockets.exceptions import ConnectionClosed
+        from tests.schedule_fixture import TimeCalendar, DAY, START, END
+        from desk_companion.local_calendar import LOCAL
+        calendar = TimeCalendar(); self.host.scheduling.calendar = calendar
+        self.host.conversation.running = True
+        try:
+            with patch.object(calendar, 'primary', side_effect=RuntimeError('offline')):
+                made = await self.notebook_rpc('change_local_calendar', action=dict(type='create', request_id=uuid.uuid4().hex,
+                    summary='本地RPC', start=START, end=END, item_id=''))
+                self.assertTrue(made['ok'], made); event = made['event']
+                loaded = await self.notebook_rpc('load_schedule_week', day=DAY, refresh=True)
+                self.assertFalse(loaded['events_valid']); self.assertEqual(loaded['events'][0]['event_id'], event['event_id'])
+            local = await self.notebook_rpc('load_local_calendar')
+            self.assertEqual(len(local['events']), 1)
+            batch = await self.notebook_rpc('change_local_calendar', action=dict(type='prepare_sync', request_id=uuid.uuid4().hex,
+                events=[dict(local_id=event['local_id'], version=event['local_version'])]))
+            synced = await self.notebook_rpc('calendar_sync_step', batch_id=batch['batch']['id'], local_id=event['local_id'])
+            self.assertEqual(synced['batch']['entries'][0]['state'], 'synced', synced)
+            inspected = await self.notebook_rpc('inspect_schedule_event', calendar_id=LOCAL, event_id=event['event_id'])
+            self.assertTrue(inspected['event']['editable'], inspected)
+            moved = await self.notebook_rpc('change_schedule', action=dict(type='retime', request_id=uuid.uuid4().hex,
+                calendar_id=LOCAL, event_id=event['event_id'], day=DAY, original_start=START, original_end=END,
+                start=DAY+'T11:00:00+08:00', end=DAY+'T12:00:00+08:00'))
+            self.assertTrue(moved['ok'], moved); self.assertEqual(len(calendar.creates), 1); self.assertEqual(len(calendar.patches), 1)
+            self.assertIsNone(self.host._collaboration)
+            with self.assertRaises(ConnectionClosed):
+                async with connect(self.url.replace('test-token','bad-token'), proxy=None) as ws:
+                    await ws.send(json.dumps(dict(type='rpc',method='load_local_calendar',args={})))
+                    await ws.recv()
+        finally:
+            self.host.conversation.running = False
+
     async def test_week_retime_auth_disconnect_and_reconcile_do_not_replay_external_edit(self):
         import uuid, threading
         from tests.schedule_fixture import TimeCalendar, DAY, START, END

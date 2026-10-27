@@ -103,7 +103,9 @@ class CalendarAdapter:
         return dict(id=identifier(calendar.get('calendar_id')), summary=str(calendar.get('summary', '主日历')),
                     writable=calendar.get('role') in {'owner', 'writer'} and not calendar.get('is_deleted') and not calendar.get('is_third_party'),
                     owner_id=primary[0].get('user_id', ''),
-                    identity_verified=calendar.get('is_deleted') is False and calendar.get('is_third_party') is False)
+                    identity_verified=bool(primary[0].get('user_id'))
+                        and calendar.get('is_deleted', False) is False
+                        and calendar.get('is_third_party', False) is False)
 
     def week(self, calendar_id, day):
         from .schedule_domain import week_range

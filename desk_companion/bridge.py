@@ -54,6 +54,15 @@ class Bridge:
     def inspect_schedule_event(self, calendar_id, event_id) -> dict:
         return self._host.scheduling.inspect_event(calendar_id, event_id)
 
+    def load_local_calendar(self, request_id='') -> dict:
+        return self._host.scheduling.local.load(request_id)
+
+    def change_local_calendar(self, action: dict) -> dict:
+        return self._host.scheduling.local.change(action)
+
+    def calendar_sync_step(self, batch_id, local_id) -> dict:
+        return self._host.scheduling.local.batch_step(batch_id, local_id)
+
     def collaboration_action(self, action: dict) -> dict:
         return self._host.collaboration.action(action)
 

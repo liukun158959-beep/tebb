@@ -50,7 +50,7 @@ export function useBoardActions({ info, boardClock, setBoard, onLoaded }: {
   }
 
   async function deleteAgenda(eventId: string) {
-    if (!eventId || writing.current) return;
+    if (!eventId || writing.current) return false;
     writing.current = true;
     setLoading(false);
     setWriting(true);
@@ -72,16 +72,18 @@ export function useBoardActions({ info, boardClock, setBoard, onLoaded }: {
             },
           };
         });
-        return;
+        return true;
       }
       if (!info) {
         setAgendaErrors((cur) => ({ ...cur, [eventId]: "还没有连上本地后端。恢复：重启客户端。" }));
-        return;
+        return false;
       }
       const data = await request<BoardPayload>("delete_agenda", { event_id: eventId });
       setBoard(data);
+      return true;
     } catch (err) {
       setAgendaErrors((cur) => ({ ...cur, [eventId]: String(err) }));
+      return false;
     } finally {
       revision.current += 1;
       setLoading(false);

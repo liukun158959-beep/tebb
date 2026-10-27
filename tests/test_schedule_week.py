@@ -62,6 +62,13 @@ class AdapterTimeTests(unittest.TestCase):
             adapter, _ = self.adapter([dict(items=items, has_more=False)])
             self.assertTrue(adapter.inspect(adapter.primary(), 'existing_0')['editable'])
 
+    def test_primary_optional_false_flags_may_be_omitted_by_feishu(self):
+        adapter, _ = self.adapter(calendar=dict(calendar_id='calendar-one', type='primary', role='owner'))
+        self.assertTrue(adapter.inspect(adapter.primary(), 'existing_0')['editable'])
+        for flag in ('is_deleted', 'is_third_party'):
+            adapter, _ = self.adapter(calendar=dict(calendar_id='calendar-one', type='primary', role='owner', **{flag: True}))
+            self.assertFalse(adapter.inspect(adapter.primary(), 'existing_0')['editable'])
+
     def test_other_declined_removed_resources_and_unknown_attendees_are_readonly(self):
         for row in (dict(type='user', user_id='other', rsvp_status='decline'),
                     dict(type='resource', room_id='room', rsvp_status='removed'),
