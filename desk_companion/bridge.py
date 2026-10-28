@@ -21,6 +21,9 @@ class Bridge:
                         'error': f'会话操作已完成，但界面刷新失败：{exc}。请重新打开会话。'}
         return result
 
+    def check_automation_execution(self, job_id):
+        return self._host.automation.check_agent_execution(job_id)
+
     def tebb_operation(self, run_id, tool, args):
         from .tebb_operations import execute
         return execute(self._host, run_id, tool, args)
@@ -55,11 +58,11 @@ class Bridge:
     def change_schedule(self, action: dict) -> dict:
         return self._host.scheduling.change(action)
 
-    def load_schedule_month(self, day, refresh=False, request_id='') -> dict:
-        return self._host.scheduling.load_month(day, refresh, request_id)
-
     def load_schedule_week(self, day, refresh=False, request_id='') -> dict:
         return self._host.scheduling.load_week(day, refresh, request_id)
+
+    def load_schedule_month(self, day, refresh=False, request_id='') -> dict:
+        return self._host.scheduling.load_month(day, refresh, request_id)
 
     def inspect_schedule_event(self, calendar_id, event_id) -> dict:
         return self._host.scheduling.inspect_event(calendar_id, event_id)

@@ -9,7 +9,8 @@ from .logutil import log
 
 
 class AutomationService:
-    def __init__(self, *, review=None, tasks=None, busy=lambda: False, changed=lambda: None):
+    def __init__(self, *, review=None, tasks=None, busy=lambda: False, changed=lambda: None, execution=None):
+        self.execution = execution
         self.review = review
         self.tasks = tasks
         self.busy = busy
@@ -43,6 +44,14 @@ class AutomationService:
             with self._lock:
                 self._admit()
                 self._idle(str(payload.get('id') or '') if isinstance(payload, dict) else '')
+                if isinstance(payload,dict) and payload.get('action')=='tebb_task':
+                    if not self.execution:raise RuntimeError('通用AI执行服务未连接。')
+                    collaboration=self.execution()
+                    from .collaboration import transaction
+                    with collaboration.lock,transaction(collaboration.path) as (state,_):
+                        if not any(a['id']==payload.get('agent_id','tebb') for a in state['agents']):raise RuntimeError('AI负责人已移除。')
+                        project=payload.get('project_id','')
+                        if project and not any(p['id']==project for p in state['projects']):raise RuntimeError('项目已移除。')
                 return a.upsert_job(payload)
         return self._call(save, str(payload.get('id') or '') if isinstance(payload, dict) else '')
 
@@ -54,8 +63,8 @@ class AutomationService:
                 return a.delete_job(job_id)
         return self._call(delete, job_id)
 
-    def run_automation_job(self, job_id):
-        return self._call(lambda: self.run_now(job_id), job_id)
+    def run_automation_job(self, job_id, request_id=""):
+        return self._call(lambda: self.run_now(job_id, request_id), job_id)
 
     def _idle(self, job_id):
         if job_id and (job_id in self._active or job_id in self._news_active or job_id == self._running_job):
@@ -81,18 +90,23 @@ class AutomationService:
 
     def _accept(self, job):
         execution = dict(id=uuid.uuid4().hex, action=job['action'], doc=job['doc'], phase='queued',
-                         accepted_at=a._now().isoformat(timespec='seconds'))
+                         accepted_at=a._now().isoformat(timespec='seconds'),
+                         **({k:job.get(k,'') for k in ('goal','project_id','agent_id')} if job['action']=='tebb_task' else {}))
         job.update(last_result='queued', last_error='', alert_seen=True, execution=execution)
         return deepcopy(execution)
 
-    def run_now(self, job_id):
+    def run_now(self, job_id, request_id=""):
         with self._lock, a.transaction():
             self._admit()
             store = a.load_store()
             job = a._find(store, str(job_id or '').strip())
+            previous=job.get('execution',{})
+            if request_id and previous.get('request_id')==request_id:return dict(self.snapshot(),job_id=job['id'],execution=previous)
+            if job['action']=='tebb_task' and previous.get('phase')=='unconfirmed':raise RuntimeError('原AI执行结果未确认，请先核对，不会重新执行。')
             if job['action'] in self._occupied() or job['last_result'] in {'queued', 'running'}:
                 raise RuntimeError('同类任务正在跑、排队或收尾，不会叠第二趟。')
             execution = self._accept(job)
+            if request_id:execution['request_id']=request_id;job['execution']=deepcopy(execution)
             try:
                 a.save_store(store)
             except a.AutomationChangeError as exc:
@@ -170,7 +184,7 @@ class AutomationService:
         with self._lock:
             if self._stopping.is_set() or not self._queued or self._worker is not None:
                 return
-            if self.busy() and 'ai_news' not in self._queued:
+            if self.busy() and not {'ai_news','tebb_task'}.intersection(self._queued):
                 return
             self._worker = threading.Thread(target=self._loop, daemon=True, name='automation')
             self._worker.start()
@@ -181,7 +195,7 @@ class AutomationService:
             while not self._stopping.is_set():
                 busy = self.busy() or deferred
                 with self._lock:
-                    action = next((k for k in a.ACTION_ORDER if k in self._queued and (not busy or k=='ai_news')), '')
+                    action = next((k for k in a.ACTION_ORDER if k in self._queued and (not busy or k in {'ai_news','tebb_task'})), '')
                     if not action:
                         return
                     job_id = self._queued.pop(action)
@@ -226,6 +240,9 @@ class AutomationService:
                 return
         try:
             action = execution['action']
+            if action == 'tebb_task':
+                self._start_agent(job_id,execution)
+                return
             if action == 'ai_news':
                 self._start_news(job_id)
                 return
@@ -245,7 +262,49 @@ class AutomationService:
         except Exception as exc:
             result = dict(ok=False, stage='execution', change_state='unconfirmed',
                           error=f'执行结果未确认：{exc}。请核对记录和远端目标，不要直接重发。')
-        self._finish(job_id, result)
+        self._finish(job_id, result, phase='unconfirmed' if action=='tebb_task' and result.get('change_state')=='unconfirmed' else 'completed')
+
+    def _start_agent(self,job_id,execution):
+        if not self.execution:raise RuntimeError('通用AI执行服务未连接。')
+        result=self.execution().submit_execution(execution.get('agent_id') or 'tebb',execution['goal'],execution.get('project_id',''),
+            dict(kind='automation',id=job_id,execution_id=execution['id']),'automation-'+execution['id'])
+        with self._lock,a.transaction():
+            store=a.load_store();job=a._find(store,job_id)
+            execution.update(run_id=result['run_id'],conversation=result['conversation'])
+            job['execution']=deepcopy(execution);a.save_store(store)
+        self._watch_agent(job_id,execution)
+
+    def _watch_agent(self,job_id,execution):
+        def watch():
+            try:
+                while not self._stopping.wait(.5):
+                    run=self.execution().execution_status(execution.get('run_id',''),submission_key='automation-'+execution['id'])
+                    if not run:
+                        self._finish(job_id,dict(ok=False,error='AI执行记录未找到，请核对编号。'),phase='unconfirmed');return
+                    if run.get('delivery_state')=='running' or run['state'] in {'pending','waiting','queued','running','cancelling'}:continue
+                    succeeded=run['state']=='succeeded' and run.get('delivery_state','succeeded')=='succeeded'
+                    self._finish(job_id,dict(ok=succeeded,run_id=run['id'],conversation=run['conversation'],error='' if succeeded else run.get('error') or 'AI执行未完整完成，请查看执行记录。'))
+                    return
+            except Exception as exc:self._finish(job_id,dict(ok=False,error=str(exc)),phase='unconfirmed')
+            finally:
+                with self._lock:self._monitors.discard(threading.current_thread())
+                self._notify()
+        thread=threading.Thread(target=watch,daemon=True,name='automation-tebb')
+        with self._lock:self._monitors.add(thread)
+        thread.start()
+
+    def check_agent_execution(self,job_id):
+        def check():
+            with self._lock,a.transaction():
+                self._idle(job_id)
+                store=a.load_store();job=a._find(store,job_id);execution=deepcopy(job.get('execution',{}))
+                if job['action']!='tebb_task' or not execution:raise RuntimeError('没有通用AI执行回执。')
+            run=self.execution().execution_status(execution.get('run_id',''),submission_key='automation-'+execution['id'])
+            if not run:raise RuntimeError('执行记录未找到，结果仍待核对，不会重发。')
+            with self._lock:self._active[job_id]=execution
+            self._watch_agent(job_id,execution)
+            return dict(self.snapshot(),message='已连接原执行记录；不会重做目标。')
+        return self._call(check,job_id)
 
     def _finish(self, job_id, result, *, phase='completed', status=None, reset_slot=False, task_id=''):
         with self._lock:

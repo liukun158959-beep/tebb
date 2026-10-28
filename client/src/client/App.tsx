@@ -2293,7 +2293,7 @@ export function App() {
             <section key="automation" data-page="automation" className="flex-1 overflow-y-auto px-8 py-6">
               <h1 className="text-2xl font-semibold">自动化</h1>
               <p className="mt-2 text-sm text-muted-foreground">管理每日资讯、运行计划和执行记录。</p>
-              <AutomationPane info={info} debug={boardClock !== null} />
+              <AutomationPane info={info} debug={boardClock !== null} onOpenExecution={conversation => { if (!info) return; void rpc(info, 'collaboration_action', { action: { type: 'select', id: conversation, conversation, request_id: crypto.randomUUID() } }).then(() => { setPane('collaboration'); window.dispatchEvent(new CustomEvent('tebb-show-tasks')); }).catch(e => setError(String(e))); }} />
             </section>
           ) : pane === "video" ? (
             <section key="video" data-page="video" className="flex-1 overflow-y-auto px-8 py-6">

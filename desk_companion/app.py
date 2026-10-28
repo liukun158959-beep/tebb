@@ -98,7 +98,7 @@ class App(BoardWorkbench):
         self.knowledge_service = KnowledgeService(self.chat_sessions, start_guard=self._knowledge_start_guard)
         self._tasks = None
         self._tasks_lock = threading.Lock()
-        self.automation = AutomationService(review=self.weekly_review, tasks=lambda: self.tasks,
+        self.automation = AutomationService(review=self.weekly_review, tasks=lambda: self.tasks, execution=lambda: self.collaboration,
             busy=lambda: self._agent_running or bool(getattr(self.pet, 'busy', False)),
             changed=lambda: self.ui(lambda: self._eval_board('jobs_changed')))
         self.bridge = Bridge(self, session_changed=self._on_session_changed)

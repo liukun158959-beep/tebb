@@ -68,6 +68,43 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
                 if frame['type'] in ('done', 'error'):
                     return frame
 
+    async def test_tebb_worker_uses_authenticated_shared_calendar_and_automation_services(self):
+        from desk_companion.collaboration import Collaboration
+        from desk_companion.collaboration_worker import execute
+        from tests.test_collaboration import Queue, MODEL
+        from tests.schedule_fixture import TimeCalendar, DAY, START, END
+        patch('desk_companion.model_catalog.require_active',return_value=MODEL).start()
+        patch('desk_companion.model_catalog.require_item',return_value=MODEL).start()
+        self.host._collaboration=Collaboration(self.host.work_board.path,managers=dict(work=Queue(),chat=Queue()),start=False)
+        self.addCleanup(self.host._collaboration.shutdown)
+        self.addCleanup(lambda:self.host.automation.stop(0))
+        self.host.scheduling.calendar=TimeCalendar()
+        patch.dict(os.environ,DESK_TERMINAL_PORT=str(self.port),DESK_TERMINAL_TOKEN='test-token').start()
+        accepted=self.host.collaboration.submit_execution('tebb','创建明天学习日程','',dict(kind='test',id='rpc'),'tebb-rpc-one')
+        root=self.host.collaboration.execution_status(accepted['run_id'])
+        events=[]
+        class Model:
+            calls=0
+            def chat(model,messages,tools,on_delta):
+                model.calls+=1
+                if model.calls==1:
+                    return dict(message=dict(role='assistant',content='',tool_calls=[dict(id='calendar-call',type='function',function=dict(name='calendar_change',arguments=json.dumps(dict(action=dict(type='create',summary='学习安排',start=START,end=END,item_id='')))))]),usage={})
+                receipt=json.loads(next(m['content'] for m in reversed(messages) if m['role']=='tool'))
+                if not receipt.get('ok'):raise AssertionError(receipt)
+                return dict(message=dict(content='日程已保存到本地。'),usage={})
+        request=dict(kind='task',role=root['agent_config'],collab_run=root['id'],collab_path=str(self.host.collaboration.path),
+            text=root['input'],context=[],workspace=root['workspace'],model_id=MODEL['id'],budget=3)
+        with self.host.turn_lock:
+            await asyncio.wait_for(asyncio.to_thread(execute,request,lambda k,d:events.append((k,d)),Model()),15)
+        self.assertTrue(any(k=='tool_end' and d.get('status')=='success' for k,d in events))
+        page=await self.notebook_rpc('load_schedule_month',day=DAY,refresh=True)
+        event=next(e for e in page['events'] if e['summary']=='学习安排')
+        self.assertEqual(event['sync_state'],'local');self.assertEqual(self.host.scheduling.calendar.creates,[])
+        result=await self.notebook_rpc('tebb_operation',run_id=root['id'],tool='automation_save',args=dict(_call_id='auto-one',payload=dict(name='每日学习',action='tebb_task',goal='整理学习计划',cadence='daily',weekdays=[],hour=9,minute=0,enabled=False)))
+        self.assertTrue(result['ok'],result)
+        refused=await self.notebook_rpc('tebb_operation',run_id='missing',tool='calendar_change',args=dict(_call_id='nope',action=dict(type='delete')))
+        self.assertFalse(refused['ok'])
+
     async def test_automation_four_routes_skip_host_busy_and_keep_active_guards_and_auth(self):
         from unittest.mock import Mock
         from desk_companion import automation as a
@@ -1248,6 +1285,8 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(made['ok'], made); event = made['event']
                 loaded = await self.notebook_rpc('load_schedule_week', day=DAY, refresh=True)
                 self.assertFalse(loaded['events_valid']); self.assertEqual(loaded['events'][0]['event_id'], event['event_id'])
+            month = await self.notebook_rpc('load_schedule_month', day=DAY)
+            self.assertTrue(month['month']); self.assertEqual(month['events'][0]['event_id'], event['event_id'])
             local = await self.notebook_rpc('load_local_calendar')
             self.assertEqual(len(local['events']), 1)
             batch = await self.notebook_rpc('change_local_calendar', action=dict(type='prepare_sync', request_id=uuid.uuid4().hex,

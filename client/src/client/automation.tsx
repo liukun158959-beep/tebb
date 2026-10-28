@@ -7,21 +7,23 @@ type Settings = { profile: string; wiki_url: string; chat_id: string; base_url: 
   topics: string[]; lookback_days: number; highlights: number };
 type Report = { lead: string; candidate_count: number; items: { title: string; title_zh?: string; company?: string; url: string; category: string; summary: string; detail?: string; key_points?: string[]; value: string; caution: string; published: string; date_verified: boolean }[] };
 type Run = { id: string; day: string; status: string; error: string; doc_url?: string; report?: Report; warnings?: string[]; cover_ready?: boolean };
-type Job = { id?: string; name: string; action: string; enabled: boolean; cadence: string; weekdays: number[]; hour: number; minute: number; doc: string;
+type Job = { id?: string; name: string; action: string; enabled: boolean; cadence: string; weekdays: number[]; hour: number; minute: number; doc: string; goal?:string;project_id?:string;agent_id?:string;date?:string;execution?:{run_id?:string;conversation?:string;phase?:string};
   schedule_text?: string; last_result?: string; last_error?: string; last_task_id?: string; active?: boolean };
 type Event = { seq: number; kind: string; ts: number; data: string | { tool?: string; status?: string; duration_ms?: number } };
 type Task = { id: string; state: string; answer: string; error: string; source: { run_id?: string }; events?: Event[] };
-const labels: Record<string, string> = { ai_news: "AI/Agent 资讯日报", retro_gen: "生成本周复盘", retro_write: "覆盖写入复盘文档" };
+const labels: Record<string, string> = { tebb_task: "交给 tebb 执行目标", ai_news: "AI/Agent 资讯日报", retro_gen: "生成本周复盘", retro_write: "覆盖写入复盘文档" };
 const states: Record<string, string> = { collecting: "采集核实中", draft: "待发布预览", publishing: "正在归档和推送", published: "已发布", archived: "已归档，未推送群", failed: "未完成",
   queued: "排队中", running: "执行中", succeeded: "完成", timed_out: "超时", interrupted: "已中断", cancelled: "已停止", ok: "完成", fail: "失败", missed: "错过时段" };
 const blankJob = (): Job => ({ name: "每日 AI/Agent 工程资讯", action: "ai_news", enabled: false, cadence: "daily", weekdays: [], hour: 9, minute: 0, doc: "" });
 const active = (task?: Task) => task && ["queued", "running", "cancelling"].includes(task.state);
 const jobActive = (job: Job) => job.active || ['queued', 'running'].includes(job.last_result || '');
 
-export function AutomationPane({ info, debug = false }: { info: BackendInfo | null; debug?: boolean }) {
+export function AutomationPane({ info, debug = false, onOpenExecution }: { info: BackendInfo | null; debug?: boolean; onOpenExecution?:(conversation:string)=>void }) {
   const pageActive = usePageActive();
   const [form, setForm] = useState<Settings | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
+  const [catalog,setCatalog]=useState<{agents:{id:string;name:string}[];projects:{id:string;name:string}[]}>({agents:[],projects:[]});
+  useEffect(()=>{if(!info||debug||!pageActive)return;let live=true;void rpc<{agents:{id:string;name:string}[];projects:{id:string;name:string}[]}>(info,'load_work_board').then(data=>{if(live)setCatalog(data);}).catch(e=>{if(live)setError(String(e));});return()=>{live=false;};},[info,debug,pageActive]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [job, setJob] = useState<Job>(blankJob);
   const [selected, select] = useState("");
@@ -132,15 +134,16 @@ export function AutomationPane({ info, debug = false }: { info: BackendInfo | nu
         <button className={buttonClass} disabled={busy || debug || jobActive(j)} onClick={() => setJob(j)}>修改</button>
         <button className={buttonClass} disabled={busy || debug || jobActive(j)} onClick={() => void call("run_automation_job", { job_id: j.id })}>{j.action === 'ai_news' ? '立即发布' : '立即执行'}</button>
         <button className={buttonClass} disabled={busy || debug || jobActive(j)} onClick={() => void call("delete_automation_job", { job_id: j.id })}>删除定时</button>
-        {j.last_error && <p className="w-full text-xs text-red-500">{j.last_error}</p>}
+        {j.action==='tebb_task'&&j.execution?.phase==='unconfirmed'&&<button className={buttonClass} disabled={busy||jobActive(j)} onClick={()=>void call('check_automation_execution',{job_id:j.id})}>核对原AI执行</button>}{j.execution?.run_id&&<button className={buttonClass} onClick={()=>j.execution?.conversation&&onOpenExecution?.(j.execution.conversation)}>查看 AI 执行</button>}{j.last_error && <p className="w-full text-xs text-red-500">{j.last_error}</p>}
       </div>)}</div>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         <label className="text-sm">任务名称<input className={inputClass} value={job.name} onChange={e => setJob({ ...job, name: e.target.value })} /></label>
-        <label className="text-sm">任务动作<select className={inputClass} value={job.action} onChange={e => setJob({ ...job, action: e.target.value, doc: e.target.value === 'retro_write' ? job.doc : '' })}>{Object.entries(labels).map(([key,value]) => <option value={key} key={key}>{value}</option>)}</select></label>
-        <label className="text-sm">周期<select className={inputClass} value={job.cadence} onChange={e => setJob({ ...job, cadence: e.target.value, weekdays: e.target.value === 'daily' ? [] : [0] })}><option value="daily">每天</option><option value="weekly">每周</option></select></label>
+        <label className="text-sm">任务动作<select className={inputClass} value={job.action} onChange={e => setJob({ ...job, action: e.target.value, cadence:job.cadence==='once'&&e.target.value!=='tebb_task'?'daily':job.cadence, doc: e.target.value === 'retro_write' ? job.doc : '' })}>{Object.entries(labels).map(([key,value]) => <option value={key} key={key}>{value}</option>)}</select></label>
+        <label className="text-sm">周期<select className={inputClass} value={job.cadence} onChange={e => setJob({ ...job, cadence: e.target.value, weekdays: e.target.value === 'weekly' ? [0] : [] })}><option value="daily">每天</option><option value="weekly">每周</option>{job.action==='tebb_task'&&<option value="once">一次</option>}</select></label>
         <label className="text-sm">执行时间<input className={inputClass} type="time" value={`${String(job.hour).padStart(2,'0')}:${String(job.minute).padStart(2,'0')}`} onChange={e => { const [hour,minute] = e.target.value.split(':').map(Number); setJob({ ...job, hour, minute }); }} /></label>
         {job.cadence === 'weekly' && <div className="flex gap-2 md:col-span-2">{'一二三四五六日'.split('').map((day,index) => <label className="text-sm" key={index}><input type="checkbox" checked={job.weekdays.includes(index)} onChange={e => setJob({ ...job, weekdays: e.target.checked ? [...job.weekdays,index] : job.weekdays.filter(d => d !== index) })} /> 周{day}</label>)}</div>}
-        {job.action === 'retro_write' && <label className="text-sm md:col-span-2">复盘文档链接<input className={inputClass} value={job.doc} onChange={e => setJob({ ...job, doc: e.target.value })} /></label>}
+        {job.action==='tebb_task'&&<><label className="text-sm md:col-span-2">执行目标<textarea aria-label="自动化AI目标" className={inputClass} value={job.goal||''} onChange={e=>setJob({...job,goal:e.target.value})}/></label><label className="text-sm">AI 负责人<select className={inputClass} value={job.agent_id||'tebb'} onChange={e=>setJob({...job,agent_id:e.target.value})}>{catalog.agents.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label><label className="text-sm">项目 · 可选<select className={inputClass} value={job.project_id||''} onChange={e=>setJob({...job,project_id:e.target.value})}><option value="">未归属项目</option>{catalog.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>{job.cadence==='once'&&<label className="text-sm">执行日期<input type="date" className={inputClass} value={job.date||''} onChange={e=>setJob({...job,date:e.target.value})}/></label>}</>}
+        {job.action === 'retro_write'  && <label className="text-sm md:col-span-2">复盘文档链接<input className={inputClass} value={job.doc} onChange={e => setJob({ ...job, doc: e.target.value })} /></label>}
         <label className="text-sm"><input type="checkbox" checked={job.enabled} onChange={e => setJob({ ...job, enabled: e.target.checked })} /> 启用此定时任务</label>
       </div>
       <div className="mt-3 flex gap-2"><button className={buttonClass} disabled={busy || debug || jobs.some(j => j.id === job.id && jobActive(j))} onClick={() => void call("save_automation_job", { payload: job })}>保存定时任务</button><button className={buttonClass} onClick={() => setJob(blankJob())}>新增定时任务</button></div>

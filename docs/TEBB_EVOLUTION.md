@@ -1,0 +1,44 @@
+# 通用 tebb 与工作区演进
+
+2026-10-28 用户 Q1–Q7 已全部接受推荐方案，进入实施，无待确认产品分支。分批对应 #144、#145、#146、#147、#148；不发布。
+
+- #144：日/周固定 00:00–24:00，移除凌晨折叠，保留时间网格与页面滚动。月视图完整读可见范围；点事件看详情，日期进入单日，月格可建草稿；拥挤展开日列表。精确拖动只在日/周，不扩大只读类型编辑。
+- #146：事项负责人默认 tebb，可选职责伙伴，明确点击才执行。关联/拖动不启动。旧执行 links 是成果历史，不转成负责人，项目权限与每轮快照继续存在。
+- #145：默认显示 tebb·通用助手、研究助手、写作助手、编程助手；保留稳定 ID、历史、模型及自定义。tebb统一入口，保留直接找伙伴。tebb可发现使用全部伙伴、工具、Skill和已连接MCP；目录、编辑、终端沿用项目授权。一层委派，tebb亲自汇总，停止传递子任务，子任务不递归委派。
+- #147：共享界面与AI日程服务，任意日期本地和可编辑个人飞书日程CRUD。默认本地，明确飞书才同步；删除已同步/飞书记录真实删远端，保留事项和AI历史；歧义先问，既有只读范围保留。新增通用tebb自动化，支持一次/每天/每周，保存目标/项目/负责人，每轮独立执行。后台运行才触发，结果不明不盲目重做外部写入。
+- #148：左下角改为桌宠页，预览、显示/隐藏、三种圆点配色/大小及已安装凯尔希，复用原偏好及宠物窗；只迁桌宠设置，主界面主题/背景留设置。不新增任意素材导入。
+
+复用现有领域服务、SQLite执行队列、认证RPC、权限和回执。能力通过实际工具接入，不靠提示词宣称执行。界面/服务/执行任务分别验证，并覆盖并发、断连、失败及数据兼容。模拟外部边界，不向真实飞书做自动测试写入。
+
+## 实际调用链与调试
+
+事项 `change_work_item(type=execute)` → WorkExecutionService → Collaboration.create_execution → 原 TaskManager。通用自动化 `tebb_task` → AutomationService → Collaboration.submit_execution，提交键固定为 `automation-<execution.id>`，同轮不会重建根执行。
+
+tebb worker 工具 `calendar_query/calendar_change/automation_list/automation_save/automation_manage` → worker_rpc → 原带 token 的 WebSocket `tebb_operation` → 父后台活跃 tebb 身份校验 → 既有领域服务。`_call_id` 由实际模型工具调用传入，派生请求编号，不能靠回答正文声称已执行。工具错误保留结构化 stage/change_state/operation。MCP 先列已配置服务器与真实 schemas，再调用；不把配置密钥返给模型。Skill 复用 list/read，视频和事实复用既有工具，事实写入绑定本轮原始用户目标。
+
+用临时数据复现：
+
+```powershell
+# 仓库根目录，无真实模型或飞书写入
+python -m unittest tests.test_tebb_execution tests.test_calendar_writes tests.test_schedule_month -v
+python -m unittest tests.test_local_api.LocalApiTests.test_tebb_worker_uses_authenticated_shared_calendar_and_automation_services -v
+# 全量与前端
+python -m unittest discover -s tests -v
+pnpm --dir client test
+pnpm --dir client exec tsc --noEmit
+pnpm --dir client build
+```
+
+真实后台调试沿用 [Agent 调试](AGENT_DEBUG.md)。先记录事项 request_id、根 run_id 或自动化 execution.id，再看执行页父子关系、工具开始/结束、结构化失败和原回执。日程未知写入读取原编号；自动化 `check_automation_execution({job_id})` 只观察原任务，不重跑目标。
+
+界面演示 `client.html?debug=work`，左侧日程切换月/周/日，左下桌宠进入独立外观页，事项编辑选择 AI 负责人后在详情明确执行。演示数据不会调用真实模型或飞书，不能作为真实账户可用性的证据。
+
+职责和兼容决策见 [ADR 0020](adr/0020-tebb-owned-execution.md)。本批清理凌晨折叠状态/动画及未用的旧删除传参，保留旧桌面与已有外观入口的兼容适配。不更改 Atlas 接口、Rust 壳、版本或发布产物。
+
+## 验收记录
+
+2026-10-28：后端全量 672 项，658 通过、14 按原有环境开关/权限条件跳过，无失败；最终补充的执行/日程写入专项15项通过；负责人旧客户端兼容收尾后，事项/执行/日程合并专项23项通过。前端完整 172 项、TypeScript 和生产构建通过，既有分包体积提示保留。
+
+真实 Edge 浏览器通过完整24小时、月/日切换、月格无蒙层草稿、事项负责人、桌宠导航/外观及设置隔离；认证 RPC 的 TimeCalendar 组件通过同一新建同步日程连续拖动、慢回执、页面滚动落点一致。实际 worker 使用假模型经认证 WebSocket 调用真实共享日程与自动化服务。没有向真实飞书测试写入；真实模型编排质量、用户配置 MCP、原生宠物窗口和发布包未重新实机验收。
+
+本机日志位于 `E:/Learn_Project/output/calendar-stability-2026-10-28/`：以 `evolution-full-python-final.log`、`tebb-final.log`、`work-tebb-final.log`、`evolution-frontend-final.log`、`evolution-types-final.log`、`evolution-build-final.log`、`evolution-ui-final.log`、`repeat-evolution-final.log` 为准。较早全量日志曾随会话中断，不能把未结束日志当成失败或成功；已以上述最终日志完成复核。月、事项与桌宠截图为 `month-view.png/work-owner.png/pet-page.png`。

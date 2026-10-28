@@ -4,6 +4,7 @@ from __future__ import annotations
 from .paths import data_root
 
 import json
+import hashlib
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,9 +15,10 @@ from .memory import TZ
 from .resource_lock import ResourceLock
 
 CONFIG_NAME = "automation_jobs.json"
-ACTIONS = ("retro_gen", "retro_write", "ai_news")
+ACTIONS = ("retro_gen", "retro_write", "ai_news", "tebb_task")
 ACTION_ORDER = ACTIONS
 ACTION_LABELS = {
+    "tebb_task": "交给 tebb 执行目标",
     "retro_gen": "生成本周复盘",
     "retro_write": "覆盖写入飞书",
     "ai_news": "AI/Agent 资讯日报",
@@ -172,6 +174,13 @@ def upsert_job(payload: dict) -> dict:
             if existing is None:
                 raise RuntimeError("没有这条定时任务。")
             _idle(existing)
+        operation_id=payload.get('operation_id','')
+        operation_fingerprint=hashlib.sha256(json.dumps({k:v for k,v in payload.items() if k!='operation_id'},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+        if operation_id and not job_id:
+            found=next((j for j in store['jobs'] if j.get('operation_id')==operation_id),None)
+            if found:
+                if found.get('operation_fingerprint')!=operation_fingerprint:raise RuntimeError('操作编号已用于其他自动化目标。')
+                return _saved_snapshot(found['id'])
         name = str(payload.get("name") or "").strip()
         if not name:
             raise RuntimeError("任务名称不能空。")
@@ -182,8 +191,8 @@ def upsert_job(payload: dict) -> dict:
         if action not in ACTIONS:
             raise RuntimeError("请选择允许的定时动作。")
         cadence = str(payload.get("cadence") or "").strip()
-        if cadence not in {"daily", "weekly"}:
-            raise RuntimeError("周期只能是每天或每周。")
+        if cadence not in {"once", "daily", "weekly"}:
+            raise RuntimeError("周期只能是一次、每天或每周。")
         weekdays = _parse_weekdays(payload.get("weekdays"), cadence)
         hour = _as_hour_minute(payload.get("hour"), "小时", 0, 23)
         minute = _as_hour_minute(payload.get("minute"), "分钟", 0, 59)
@@ -196,6 +205,11 @@ def upsert_job(payload: dict) -> dict:
                 raise RuntimeError("定时写入飞书必须绑一篇文档的 url 或 token。")
         elif doc:
             raise RuntimeError("只有覆盖写入飞书才能填文档。")
+        fields = _goal_fields(payload) if action=='tebb_task' else {}
+        if cadence=='once':
+            if action!='tebb_task':raise RuntimeError('一次性仅支持通用AI目标。')
+            if datetime.fromisoformat(fields['date']+'T%02d:%02d'%(hour,minute)).replace(tzinfo=TZ)<=_now() and enabled:
+                raise RuntimeError('一次性执行时间须晚于当前时间。')
         now = _now()
         if existing is None:
             rec = {
@@ -226,7 +240,10 @@ def upsert_job(payload: dict) -> dict:
             existing["doc"] = doc
         if not store["last_alive_at"]:
             store["last_alive_at"] = now.isoformat(timespec="seconds")
-        job_id = rec['id'] if existing is None else existing['id']
+        target=rec if existing is None else existing
+        target.update(fields)
+        if operation_id:target.update(operation_id=operation_id,operation_fingerprint=operation_fingerprint)
+        job_id = target['id']
         try:
             save_store(store)
         except AutomationChangeError as exc:
@@ -277,6 +294,7 @@ def has_alert() -> bool:
 
 def _job_payload(job: dict) -> dict:
     return {**{key: job[key] for key in JOB_KEYS}, "last_task_id": job.get("last_task_id", ""),
+            **{k:job[k] for k in ("goal","project_id","agent_id","date","operation_id","operation_fingerprint") if k in job},
             **({"execution": job["execution"]} if "execution" in job else {})}
 
 
@@ -309,8 +327,9 @@ def _parse_job(item, path: Path, index: int) -> dict:
         raise RuntimeError(f"{path} 的 jobs[{index}].action 不是允许的动作。")
     if type(enabled) is not bool:
         raise RuntimeError(f"{path} 的 jobs[{index}].enabled 必须是 true/false。")
-    if cadence not in {"daily", "weekly"}:
+    if cadence not in {"once", "daily", "weekly"}:
         raise RuntimeError(f"{path} 的 jobs[{index}].cadence 只能是 daily 或 weekly。")
+    if cadence=='once' and action!='tebb_task':raise RuntimeError('一次性仅支持通用AI目标。')
     weekdays = _parse_weekdays(item["weekdays"], cadence, where=f"{path} 的 jobs[{index}]")
     if type(hour) is not int or hour < 0 or hour > 23:
         raise RuntimeError(f"{path} 的 jobs[{index}].hour 必须是 0 到 23 的整数。")
@@ -350,8 +369,22 @@ def _parse_job(item, path: Path, index: int) -> dict:
         "last_error": last_error,
         "alert_seen": alert_seen,
         "last_task_id": str(item.get("last_task_id", "")),
+        **(_goal_fields(item) if action=="tebb_task" else {}),
+        **({k:item.get(k,"") for k in ("operation_id","operation_fingerprint")} if item.get("operation_id") else {}),
         **({"execution": _parse_execution(item["execution"])} if "execution" in item else {}),
     }
+
+
+def _goal_fields(payload):
+    goal=payload.get('goal','')
+    if not isinstance(goal,str) or not 1<=len(goal.strip())<=4000:raise RuntimeError('AI目标须为1至4000字。')
+    result=dict(goal=goal.strip(),project_id=payload.get('project_id',''),agent_id=payload.get('agent_id','tebb'),date=payload.get('date',''))
+    if any(not isinstance(v,str) for v in result.values()):raise RuntimeError('AI目标配置字段无效。')
+    if not result['agent_id']:raise RuntimeError('请选择AI负责人。')
+    if payload.get('cadence')=='once':
+        from datetime import date
+        if date.fromisoformat(result['date']).isoformat()!=result['date']:raise RuntimeError('一次性日期格式无效。')
+    return result
 
 
 def _parse_execution(value):
@@ -380,7 +413,7 @@ def _parse_weekdays(raw, cadence: str, where: str = "任务") -> list[int]:
     if cadence == "daily":
         if days:
             raise RuntimeError(f"{where} 每天触发时 weekdays 必须是空数组。")
-    elif not days:
+    elif cadence=="weekly" and not days:
         raise RuntimeError(f"{where} 每周触发必须勾选至少一个星期。")
     return days
 
@@ -417,6 +450,7 @@ def _find(store: dict, job_id: str) -> dict:
 
 
 def _runs_on(job: dict, day: datetime) -> bool:
+    if job["cadence"]=="once":return day.date().isoformat()==job.get("date")
     if job["cadence"] == "daily":
         return True
     return day.weekday() in job["weekdays"]
@@ -432,6 +466,7 @@ def _slot_dt(day: datetime, job: dict) -> datetime:
 
 def _schedule_text(job: dict) -> str:
     clock = f"{job['hour']:02d}:{job['minute']:02d}"
+    if job["cadence"]=="once":return job.get("date", "")+" "+clock+"（一次）"
     if job["cadence"] == "daily":
         return f"每天 {clock}"
     days = "、".join("周" + WEEKDAY_NAMES[d] for d in job["weekdays"])
@@ -499,6 +534,7 @@ def _due_jobs(store: dict, now: datetime) -> list[dict]:
     for job in store["jobs"]:
         if not job["enabled"]:
             continue
+        if job["action"]=="tebb_task" and job.get("execution",{}).get("phase")=="unconfirmed":continue
         if job["action"] == "ai_news":
             latest = _latest_slot(now, job)
             if latest and job["last_run_slot"] != _slot_key(latest, job):

@@ -49,7 +49,7 @@ class HeadlessApp:
         self.knowledge_service = KnowledgeService(self.chat_sessions, start_guard=self._knowledge_start_guard)
         self.board_service = BoardService()
         self.weekly_review = WeeklyReviewService(self.chat_sessions, start_guard=self._review_start_guard)
-        self.automation = AutomationService(review=self.weekly_review, tasks=lambda: self.tasks,
+        self.automation = AutomationService(review=self.weekly_review, tasks=lambda: self.tasks, execution=lambda: self.collaboration,
             busy=lambda: self.conversation.running)
         self.bridge = Bridge(self)
         self.work_board = WorkBoardService()
