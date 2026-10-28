@@ -154,13 +154,13 @@ test('the day and week demo share creations, associations and revised event iden
 
 test('real week component keeps FullCalendar time-zone/gesture gates and guards dirty form navigation',async()=>{
   global.crypto=require('node:crypto').webcrypto;
-  global.window={setInterval:()=>1,clearInterval(){},setTimeout,localStorage:memory()};
+  global.window={setInterval:()=>1,clearInterval(){},setTimeout,clearTimeout,localStorage:memory()};
   const listeners=new Map();global.document={addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:name=>listeners.delete(name)};
   let calendarProps,closed=false,writes=0;
   const Calendar=React.forwardRef((props,ref)=>{calendarProps=props;React.useImperativeHandle(ref,()=>({getApi:()=>({changeView(){},updateSize(){}})}));return React.createElement('div',{'data-calendar-stub':true});});
   const Week=load('schedule-week.tsx',{'./api':{},'./page-stack':{usePageActive:()=>true},'./schedule-state':shared,'./schedule-week-state':state,'./schedule-week.css':{},
     './calendar-interaction.css':{},'./local-calendar-state':load('local-calendar-state.ts'),
-    './calendar-event-editor':{CalendarEventEditor:()=>null},'./workspace-dialog':{WorkspaceDialog:({children})=>React.createElement('div',{},children)},
+    './calendar-event-editor':{CalendarEventEditor:props=>React.createElement('div',{'data-editor':true,editor:props})},'./workspace-dialog':{WorkspaceDialog:({children})=>React.createElement('div',{},children)},
     './calendar-drag':{CalendarDragSurface:({children})=>React.createElement('div',{},children),CalendarDragContent:({children})=>React.createElement('div',{},children)},
     '@fullcalendar/react':{default:Calendar},'@fullcalendar/timegrid':{},'@fullcalendar/daygrid':{},'@fullcalendar/interaction':{},'@fullcalendar/luxon3':{},'@fullcalendar/core/locales/zh-cn':{},
     'framer-motion':{useReducedMotion:()=>true},'./datetime-field':{DateTimeField:props=>React.createElement('input',{'aria-label':props.marker,value:props.value,onChange:e=>props.onChange(e.target.value)})}}).ScheduleWeekPane;
@@ -182,9 +182,24 @@ test('real week component keeps FullCalendar time-zone/gesture gates and guards 
   // Pointer capture does not guarantee keyboard focus inside the component root.
   act(()=>listeners.get('keydown')({key:'Escape',preventDefault(){}}));
   await act(async()=>calendarProps.eventDrop({oldEvent:{extendedProps:{source:current}},event:{start:new Date(time('11:00')),end:new Date(time('12:00'))},revert:()=>reverted++}));
-  assert.equal(reverted,1);assert.equal(writes,0);
+  assert.equal(reverted,1);assert.equal(writes,0);await act(async()=>{calendarProps.eventDragStop();await new Promise(r=>setTimeout(r,5));});
   let selectedDay;await act(async()=>view.update(React.createElement(Week,{info:null,transport,target:{day},view:'month',onViewDay:date=>selectedDay=date,onClose(){},onReturn(){},onDay(){},onChange(){}})));
   assert.equal(calendarProps.initialView,'dayGridMonth');assert.equal(calendarProps.fixedWeekCount,false);assert.equal(calendarProps.eventAllow({},{extendedProps:{source:current}}),false);
   act(()=>calendarProps.navLinkDayClick(new Date(time('09:00'))));assert.equal(selectedDay,day);
+  for(const mode of ['week','day','month']){
+    await act(async()=>view.update(React.createElement(Week,{info:null,transport,target:{day},view:mode,onClose(){},onReturn(){},onDay(){},onChange(){}})));
+    const click=stamp=>calendarProps.dateClick({allDay:mode==='month',dateStr:mode==='month'?day:time('13:00'),date:new Date(time('13:00')),jsEvent:{timeStamp:stamp}});
+    act(()=>click(1000));assert.equal(view.root.findAllByProps({'data-editor':true}).length,0);
+    const double=stamp=>{view.root.findByProps({'data-week-view':true}).props.onDoubleClickCapture({button:0,timeStamp:stamp+1,target:{closest:selector=>['.sw-calendar','.fc-timegrid-slot-lane, .fc-timegrid-col, .fc-daygrid-day'].includes(selector)?{}:null},preventDefault(){}});click(stamp);};
+    await act(async()=>{double(1150);await new Promise(r=>setTimeout(r,5));});let editor=view.root.findByProps({'data-editor':true}).props.editor;
+    act(()=>editor.onChange({...editor.value,summary:'未保存的标题',sync:true}));
+    act(()=>view.root.findByProps({'data-editor':true}).props.editor.onClose());
+    assert.equal(view.root.findAllByProps({'data-editor':true}).length,0);assert.equal(view.root.findAllByProps({role:'alertdialog'}).length,0);
+    await act(async()=>{double(2150);await new Promise(r=>setTimeout(r,5));});editor=view.root.findByProps({'data-editor':true}).props.editor;
+    act(()=>editor.onChange({...editor.value,summary:'Escape也直接丢弃'}));
+    act(()=>view.root.findByProps({'data-week-view':true}).props.onKeyDownCapture({key:'Escape',preventDefault(){},stopPropagation(){}}));
+    assert.equal(view.root.findAllByProps({'data-editor':true}).length,0);assert.equal(view.root.findAllByProps({role:'alertdialog'}).length,0);
+  }
+  assert.equal(writes,0);
   act(()=>view.unmount());
 });
