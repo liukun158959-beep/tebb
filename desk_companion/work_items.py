@@ -50,6 +50,7 @@ def public_page(state):
     names = {p['id']: p['name'] for p in projects}
     items = copy.deepcopy(state.get('work_items', []))
     for item in items:
+        item.setdefault('agent_id','tebb')
         item['schedules'] = item_schedule_view(state, item['id'])
         item['project_name'] = names.get(item['project_id'], '')
         # Handle data restored from a snapshot without its original project too.
@@ -57,11 +58,11 @@ def public_page(state):
             item['removed_project'] = item.get('project_name_snapshot', '原项目')
             item['project_id'] = ''
     items.sort(key=lambda i: (PRIORITIES.index(i['priority']), i['due'] or '9999', i['created'], i['id']))
-    return dict(ok=True, revision=state.get('revision', 0), items=items, projects=projects, runs=runs)
+    return dict(ok=True, revision=state.get('revision', 0), items=items, projects=projects, runs=runs, agents=[{k:a.get(k,'') for k in ('id','name','role')} for a in state['agents']])
 
 
 def _fields(payload, state):
-    if not isinstance(payload, dict) or set(payload) - {'title', 'description', 'project_id', 'priority', 'due'}:
+    if not isinstance(payload, dict) or set(payload) - {'title', 'description', 'project_id', 'priority', 'due', 'agent_id'}:
         raise BoardRuleError('事项字段无效。')
     title, description = payload.get('title'), payload.get('description', '')
     if not isinstance(title, str) or not 1 <= len(title.strip()) <= 120:
@@ -80,9 +81,12 @@ def _fields(payload, state):
                 raise ValueError()
         except ValueError:
             raise BoardRuleError('截止日期须为 YYYY-MM-DD。') from None
+    agent_id=payload.get('agent_id','tebb')
+    if not isinstance(agent_id,str) or not any(a['id']==agent_id for a in state['agents']):
+        raise BoardRuleError('负责人已移除，请重新选择。')
     name = next((p['name'] for p in state['projects'] if p['id'] == project), '')
     return dict(title=title.strip(), description=description, project_id=project,
-                project_name_snapshot=name, removed_project='', priority=priority, due=due)
+                project_name_snapshot=name, removed_project='', priority=priority, due=due, agent_id=agent_id)
 
 
 def require_item(state, item_id):
@@ -116,7 +120,9 @@ def apply_change(state, action):
     item = require_item(state, action.get('id'))
     check_version(item, action.get('version'))
     if kind == 'save':
-        item.update(_fields(action.get('fields'), state))
+        fields=action.get('fields')
+        if isinstance(fields,dict):fields=dict({'agent_id':item.get('agent_id','tebb')},**fields)
+        item.update(_fields(fields, state))
     elif kind == 'move':
         if action.get('state') not in STATES:
             raise BoardRuleError('事项状态无效。')

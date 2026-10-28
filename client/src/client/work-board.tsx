@@ -14,7 +14,7 @@ const ScheduleWeekPane=lazy(()=>import('./schedule-week').then(module=>({default
 
 type Props={info:BackendInfo|null;debug?:boolean;onOpen:(conversation:string)=>Promise<void>|void;target?:{id:string;nonce:number}|null;onCalendar?:(target:ScheduleTarget)=>void};
 const priorities={high:'高',normal:'中',low:'低'};
-const blank=():WorkFields=>({title:'',description:'',project_id:'',priority:'normal',due:''});
+const blank=():WorkFields=>({title:'',description:'',project_id:'',priority:'normal',due:'',agent_id:'tebb'});
 const collision:CollisionDetection=args=>{const hits=pointerWithin(args);return hits.length?hits:closestCenter(args);};
 
 function ItemCard({item,controller,onSelect,onMove,onSchedule,overlay=false}:{item:WorkItem;controller:WorkBoardController;onSelect:()=>void;onMove:(id:string,state:WorkState)=>void;onSchedule:(item:WorkItem)=>void;overlay?:boolean}) {
@@ -34,6 +34,7 @@ function ItemCard({item,controller,onSelect,onMove,onSchedule,overlay=false}:{it
     {item.removed_project&&<p className="wb-removed">原项目已移除：{item.removed_project}</p>}
     <div className="wb-meta"><span className={item.priority==='high'?'wb-high':''}>⚑ {priorities[item.priority]}优先级</span><span>{item.due||'未设截止日'}</span></div>
     {!overlay&&!!item.schedules?.events.length&&<button type="button" className="wb-schedule-summary" onClick={()=>onSchedule(item)}>{arrangement?`◷ ${arrangement.start.includes('T')?beijingStamp(arrangement.start).slice(5).replace('T',' '):arrangement.start}${item.schedules.unchecked?' · 未核对':''}`:`◷ 历史安排 · ${item.schedules.events.length} 场`}</button>}
+    <div className="wb-ai">负责人：{controller.page.agents?.find(a=>a.id===(item.agent_id||'tebb'))?.name||'tebb · 通用助手'}</div>
     {!!item.links.length&&<div className="wb-ai"><span className="wb-avatar">{linked[0]?.agent.slice(0,1)||'AI'}</span><span>{linked[0]?`${linked[0].agent} · ${runStateLabel(linked[0])}`:'关联记录已失效'}{item.links.length>1?` · 共 ${item.links.length} 条`:''}</span></div>}
     {!overlay&&<div className="wb-card-bottom"><span role="status">{uncertain?'结果未确认':busy?'保存中…':controller.intents.has(item.id)?'待保存':''}</span>
       <label><span className="sr-only">移动 {item.title}</span><select value={item.state} aria-label={`移动 ${item.title}`} disabled={item.archived||uncertain}
@@ -139,6 +140,7 @@ export function WorkBoardPane({info,debug=false,onOpen,target,onCalendar}:Props)
         <div className="wb-detail-fields"><label>所属项目<select aria-label="事项所属项目" disabled={fieldBusy} value={draft.project_id} onChange={e=>setDraft({...draft,project_id:e.target.value})}><option value="">未归属项目</option>{draft.project_id&&!controller.page.projects.some(p=>p.id===draft.project_id)&&<option value={draft.project_id}>原项目已移除，请重新选择</option>}{controller.page.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
           <label>优先级<select aria-label="事项优先级" disabled={fieldBusy} value={draft.priority} onChange={e=>setDraft({...draft,priority:e.target.value as WorkFields['priority']})}>{Object.entries(priorities).map(([key,name])=><option key={key} value={key}>{name}</option>)}</select></label>
           <label>截止日期<input type="date" aria-label="事项截止日期" value={draft.due} disabled={fieldBusy} onChange={e=>setDraft({...draft,due:e.target.value})}/></label></div>
+        <label>AI 负责人<select aria-label="事项AI负责人" value={draft.agent_id||'tebb'} disabled={fieldBusy} onChange={e=>setDraft({...draft,agent_id:e.target.value})}>{(controller.page.agents||[{id:'tebb',name:'tebb · 通用助手',role:'通用助手'}]).map(a=><option value={a.id} key={a.id}>{a.name} · {a.role}</option>)}</select></label>
         <label>事项说明<textarea aria-label="事项说明" value={draft.description} maxLength={8000} rows={7} disabled={fieldBusy} onChange={e=>setDraft({...draft,description:e.target.value})}/></label>
         <p className="wb-detail-hint">截止日表示最晚完成日；实际工作的时间在事项详情中安排。</p>
         {formError&&<p role="alert" className="wb-error">{formError}</p>}
@@ -147,7 +149,8 @@ export function WorkBoardPane({info,debug=false,onOpen,target,onCalendar}:Props)
         {item.removed_project&&<p className="wb-removed">原项目已移除：{item.removed_project}。可重新关联。</p>}
         <section className="wb-detail-section"><h3>事项说明</h3>{item.description?<Markdown text={item.description}/>:<p>暂未添加说明。</p>}</section>
         <section className="wb-detail-section"><div className="wb-section-heading"><h3>时间安排</h3><button type="button" onClick={()=>openSchedule(item)}>{item.archived?'查看安排':'安排时间'}</button></div><p>{item.schedules?.unchecked?'有安排尚未完成核对，请打开日程读取确认。':item.schedules?.events.length?`已关联 ${item.schedules.events.length} 场日程。`:'尚未关联日程。'}</p></section>
-        <section className="wb-detail-section"><div className="wb-section-heading"><h3>关联 AI 执行</h3><button type="button" onClick={()=>setLinking(!linking)}>{linking?'收起选择':'＋ 关联记录'}</button></div>
+        <section className="wb-detail-section"><div className="wb-section-heading"><h3>AI 负责人 / 执行历史</h3><button type="button" onClick={()=>setLinking(!linking)}>{linking?'收起选择':'＋ 关联记录'}</button></div>
+          <p>负责人：{controller.page.agents?.find(a=>a.id===(item.agent_id||'tebb'))?.name||'tebb · 通用助手'}</p><button type="button" className="wb-primary" disabled={item.archived||controller.pending.has(item.id)||controller.uncertain.has(item.id)} onClick={()=>void controller.change({type:'execute',id:item.id})}>交给 AI 执行</button>
           {linking&&<div className="wb-link-picker"><label>选择执行记录<select aria-label="选择执行记录" value={runId} onChange={e=>setRunId(e.target.value)}><option value="">同项目记录优先排列</option>{candidates.map(run=><option value={run.id} key={run.id}>{run.project_name} / {run.agent} · {run.title}</option>)}</select></label><button type="button" disabled={!runId||controller.pending.has(item.id)||controller.uncertain.has(item.id)} onClick={()=>void controller.change({type:'link',id:item.id,run_id:runId}).then(ok=>{if(ok){setRunId('');setLinking(false);}})}>确认关联</button></div>}
           {!item.links.length&&<p>尚未关联执行记录。关联不会启动或取消任务。</p>}
           {item.links.map(link=>{const run=controller.page.runs.find(r=>r.id===link.id);return <article className="wb-run" key={link.id}><header><strong>{run?.title||link.title}</strong><button type="button" aria-label={`解除关联 ${link.title}`} disabled={controller.pending.has(item.id)||controller.uncertain.has(item.id)} onClick={()=>void controller.change({type:'unlink',id:item.id,run_id:link.id})}>解除</button></header>
@@ -155,7 +158,7 @@ export function WorkBoardPane({info,debug=false,onOpen,target,onCalendar}:Props)
             {run&&<><p>{run.error||run.status}</p>{run.answer&&<details><summary>查看执行成果</summary><Markdown text={run.answer}/></details>}<button type="button" onClick={()=>void openRun(run.conversation)}>回到来源对话</button></>}
           </article>;})}
         </section>{detailError&&<p role="alert" className="wb-error">{detailError}</p>}
-        <div className="wb-detail-actions"><button type="button" disabled={controller.pending.has(item.id)||controller.uncertain.has(item.id)} onClick={()=>{const next={id:item.id,version:item.version,title:item.title,description:item.description,project_id:item.project_id,priority:item.priority,due:item.due};draftBase.current=JSON.stringify(next);setDraft(next);setFormError('');}}>编辑事项</button>
+        <div className="wb-detail-actions"><button type="button" disabled={controller.pending.has(item.id)||controller.uncertain.has(item.id)} onClick={()=>{const next={id:item.id,version:item.version,title:item.title,description:item.description,project_id:item.project_id,priority:item.priority,due:item.due,agent_id:item.agent_id||'tebb'};draftBase.current=JSON.stringify(next);setDraft(next);setFormError('');}}>编辑事项</button>
           <button type="button" disabled={controller.pending.has(item.id)||controller.uncertain.has(item.id)} onClick={()=>void controller.change({type:'archive',id:item.id,archived:!item.archived})}>{item.archived?'恢复事项':'归档事项'}</button></div>
         <p className="wb-detail-hint">业务进度由你确认。归档保留内容和关联，不停止 AI 执行。</p>
       </>}

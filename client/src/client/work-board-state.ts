@@ -1,12 +1,12 @@
 import { createScheduleDemo, type ScheduleTransport, type CalendarEvent } from './schedule-state';
 export const WORK_STATES = [['todo','待办'],['doing','进行中'],['review','待验收'],['done','已完成']] as const;
 export type WorkState = typeof WORK_STATES[number][0];
-export type WorkFields = { title: string; description: string; project_id: string; priority: 'high'|'normal'|'low'; due: string };
+export type WorkFields = { title: string; description: string; project_id: string; priority: 'high'|'normal'|'low'; due: string; agent_id?:string };
 export type WorkLink = { id: string; title: string; conversation: string; project_name: string };
 export type WorkItem = WorkFields & { id: string; state: WorkState; archived: boolean; version: number; created: number; updated: number; links: WorkLink[]; project_name: string; removed_project: string; schedules?:{events:CalendarEvent[];next:CalendarEvent|null;unchecked:boolean;previous:CalendarEvent|null} };
 export type WorkRun = { id: string; title: string; conversation: string; conversation_title: string; project_id: string; project_name: string; agent: string; state: string; delivery_state: string; kind: string; status: string; error: string; answer: string; created: number };
 export type WorkReceipt = { request_id: string; item_id: string; version: number; operation: string };
-export type WorkPage = { ok: boolean; revision: number; items: WorkItem[]; projects: { id: string; name: string }[]; runs: WorkRun[]; receipt?: WorkReceipt|null; error?: string; conflict?: boolean; change_state?: string };
+export type WorkPage = { ok: boolean; revision: number; items: WorkItem[]; projects: { id: string; name: string }[]; runs: WorkRun[]; agents?:{id:string;name:string;role:string}[]; receipt?: WorkReceipt|null; error?: string; conflict?: boolean; change_state?: string };
 export type WorkAction = { type: string; request_id: string; id?: string; version?: number; state?: WorkState; fields?: WorkFields; archived?: boolean; run_id?: string };
 type Intent = { state: WorkState; sequence: number };
 type Uncertain = { action: WorkAction; message: string; desired?: WorkState };
@@ -112,7 +112,7 @@ export class WorkBoardController {
 }
 
 export function workBoardFixture():WorkPage {
-  const fields={description:'',project_id:'tebb',priority:'normal' as const,due:'2026-10-24'};
+  const fields={agent_id:'tebb',description:'',project_id:'tebb',priority:'normal' as const,due:'2026-10-24'};
   const cards:WorkItem[]=[
     {id:'demo-keyboard',...fields,title:'补齐工作看板键盘操作',description:'不用拖拽，也可以跨列推进事项。',state:'todo',archived:false,version:1,created:1,updated:1,links:[],project_name:'tebb',removed_project:''},
     {id:'demo-week',...fields,title:'整理本周学习清单',description:'先收集想法，再安排时间。',project_id:'',project_name:'',priority:'low',due:'',state:'todo',archived:false,version:1,created:2,updated:2,links:[],removed_project:''},
@@ -120,7 +120,7 @@ export function workBoardFixture():WorkPage {
     {id:'demo-review',...fields,title:'业务看板首轮验收',description:'核对拖动后的状态与实际保存结果。',priority:'high',due:'2026-10-23',state:'review',archived:false,version:1,created:4,updated:4,links:[],project_name:'tebb',removed_project:''},
     {id:'demo-done',...fields,title:'完成后台去 GUI 继承',state:'done',archived:false,version:1,created:5,updated:5,links:[],project_name:'tebb',removed_project:''}
   ];
-  return {ok:true,revision:1,projects:[{id:'tebb',name:'tebb'},{id:'atlas',name:'Atlas'}],items:cards,runs:[{id:'demo-run',title:'模型连接处理',conversation:'demo-chat',conversation_title:'码可私聊',project_id:'tebb',project_name:'tebb',agent:'码可',state:'running',delivery_state:'',kind:'task',status:'演示：正在检查错误回执',error:'',answer:'',created:1}]};
+  return {ok:true,revision:1,agents:[{id:'tebb',name:'tebb · 通用助手',role:'通用助手'},{id:'research',name:'研究助手',role:'研究'},{id:'writer',name:'写作助手',role:'写作'}],projects:[{id:'tebb',name:'tebb'},{id:'atlas',name:'Atlas'}],items:cards,runs:[{id:'demo-run',title:'模型连接处理',conversation:'demo-chat',conversation_title:'码可私聊',project_id:'tebb',project_name:'tebb',agent:'码可',state:'running',delivery_state:'',kind:'task',status:'演示：正在检查错误回执',error:'',answer:'',created:1}]};
 }
 export function demoWorkTransport():WorkTransport&{schedule:ScheduleTransport} {
   let page=workBoardFixture();const receipts=new Map<string,WorkReceipt>();let count=0;
@@ -131,6 +131,7 @@ export function demoWorkTransport():WorkTransport&{schedule:ScheduleTransport} {
     let item=page.items.find(i=>i.id===action.id);
     if(action.type==='create') {item={...action.fields!,id:'demo-new-'+(++count),state:'todo',archived:false,version:0,created:Date.now(),updated:Date.now(),links:[],project_name:'',removed_project:''};page.items.push(item);}
     else if(!item||item.version!==action.version)return {...page,ok:false,conflict:true,error:'演示事项已变化，请刷新。',change_state:'not_changed'};
+    if(action.type==='execute'){const run={id:'demo-execution-'+(++count),title:item!.title,conversation:'demo-execution-chat',conversation_title:'事项执行',project_id:item!.project_id,project_name:item!.project_name,agent:item!.agent_id||'tebb',state:'running',delivery_state:'',kind:'task',status:'隔离演示：不会调用真实模型',error:'',answer:'',created:Date.now()};page.runs.push(run);item!.links.push({id:run.id,title:run.title,conversation:run.conversation,project_name:run.project_name});}
     if(action.type==='save')Object.assign(item!,action.fields);
     if(action.type==='move')item!.state=action.state!;
     if(action.type==='archive')item!.archived=action.archived!;

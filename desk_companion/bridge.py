@@ -44,6 +44,9 @@ class Bridge:
         return self._host.work_board.load(request_id)
 
     def change_work_item(self, action: dict) -> dict:
+        if isinstance(action,dict) and action.get('type')=='execute':
+            from .work_execution import WorkExecutionService
+            return WorkExecutionService(self._host.work_board,self._host.collaboration).execute(action)
         return self._host.work_board.change(action)
 
     def load_schedule(self, day, item_id='', refresh=False, request_id='') -> dict:
