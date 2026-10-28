@@ -21,6 +21,10 @@ class Bridge:
                         'error': f'会话操作已完成，但界面刷新失败：{exc}。请重新打开会话。'}
         return result
 
+    def tebb_operation(self, run_id, tool, args):
+        from .tebb_operations import execute
+        return execute(self._host, run_id, tool, args)
+
     def load_onboarding(self) -> dict:
         from .onboarding import status
         return status()

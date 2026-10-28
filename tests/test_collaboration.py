@@ -111,7 +111,7 @@ class CollaborationTests(unittest.TestCase):
         reopened = Collaboration(path=self.service.path, managers=self.service.managers, start=False)
         try:
             agents = reopened.snapshot()["state"]["agents"]
-            self.assertEqual([a["name"] for a in agents], ["小缇", "自定义伙伴", "墨墨"])
+            self.assertEqual([a["name"] for a in agents], ["tebb · 通用助手", "自定义伙伴", "写作助手"])
             self.assertEqual(agents[1]["memory"], "KEEP_PRIVATE")
             self.assertEqual(agents[1]["model"], "custom-model")
             self.assertEqual(agents[1]["role"], "自定义职责")
@@ -543,7 +543,7 @@ class CollaborationTests(unittest.TestCase):
         self.action(type="send", text="研究并写作", target="", mode="task"); self.service.tick()
         self.work.complete(next(iter(self.work.items)), self.plan())
         self.service.tick(); state = self.state()
-        self.assertEqual([r["state"] for r in state["runs"]], ["succeeded", "pending", "waiting"])
+        self.assertEqual([r["state"] for r in state["runs"]], ["succeeded", "pending", "waiting", "waiting"])
         self.service.tick(); research = self.state()["runs"][1]
         task = "collab:"+research["id"]+":0"
         self.work.complete(task, "已有来源的真实研究结果", evidence=dict(query="官方来源",text="SOURCE_LEDGER_SENTINEL")); self.service.tick(); self.service.tick()
@@ -564,7 +564,8 @@ class CollaborationTests(unittest.TestCase):
         self.action(type="cancel", id=root["id"]); self.service.tick()
         rows = self.state()["runs"]
         self.assertEqual(rows[1]["state"], "cancelled"); self.assertEqual(rows[2]["state"], "cancelled")
-        self.assertEqual(rows[3]["state"], "queued")
+        self.assertEqual(rows[-1]["state"], "queued")
+        self.assertEqual(rows[3]["state"], "cancelled")
 
     def test_failed_dependency_never_dispatches_its_writer(self):
         self.action(type="send", text="团队任务", target="", mode="task"); self.service.tick()
@@ -649,7 +650,7 @@ class CollaborationTests(unittest.TestCase):
               dict(agent_id='research',title='公开资料',instructions='读外部资料',stage='collect',required_sources=['web'],source_topics=['框架甲','框架乙','平台丙'],depends_on=None),
               dict(agent_id='writer',title='最终对比',instructions='综合全部资料',stage='collect',depends_on=None)]
         self.work.complete('collab:'+root['id']+':0',json.dumps(dict(tasks=rows)));self.service.tick();self.service.tick()
-        repo,research,writer=self.state()['runs'][1:]
+        repo,research,writer=self.state()['runs'][1:4]
         self.assertEqual(writer['state'],'waiting');self.assertEqual(writer['stage'],'deliver')
         self.assertEqual(set(writer['dependencies']),{repo['id'],research['id']})
         self.assertEqual(self.state()['runs'][0]['delivery_state'],'running')

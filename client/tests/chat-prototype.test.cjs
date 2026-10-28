@@ -402,7 +402,7 @@ test('restoring legacy companion names keeps custom names, model, permissions an
   state.agents[0].name = 'tebb'; state.agents[1].name = '我自己的伙伴'; state.agents[1].memory = '私有偏好';
   state.agents[2].name = '写作者'; delete state.agents[2].avatar;
   const next = restoreDemo(JSON.stringify(state));
-  assert.deepEqual(next.agents.map(a => a.name), ['小缇', '我自己的伙伴', '墨墨']);
+  assert.deepEqual(next.agents.map(a => a.name), ['tebb · 通用助手', '我自己的伙伴', '写作助手']);
   assert.equal(next.agents[1].memory, '私有偏好');
   assert.equal(next.agents[2].avatar, 'cat');
   next.agents[2].name = '写作者';
@@ -584,14 +584,14 @@ test('@ member picker supports filtering, keyboard selection, multiple mentions 
   assert.equal(view.root.findAllByProps({role:'option'}).length,3);
   await act(async()=>composer().props.onKeyDown({key:'ArrowDown',nativeEvent:{},preventDefault(){}}));
   await act(async()=>composer().props.onKeyDown({key:'Enter',nativeEvent:{},preventDefault(){}}));
-  assert.equal(composer().props.value,'@阿探 ');
+  assert.equal(composer().props.value,'@研究助手 ');
   assert.equal(JSON.parse(saved.get(DEMO_STORAGE)).messages.length,before);
-  await act(async()=>composer().props.onChange({target:{value:'@阿探 @墨',selectionStart:7}}));
+  await act(async()=>composer().props.onChange({target:{value:'@研究助手 @写',selectionStart:'@研究助手 @写'.length}}));
   assert.equal(view.root.findAllByProps({role:'option'}).length,1);
   await act(async()=>composer().props.onKeyDown({key:'Enter',nativeEvent:{isComposing:true},preventDefault(){throw Error('IME must stay active');}}));
-  assert.equal(composer().props.value,'@阿探 @墨');
+  assert.equal(composer().props.value,'@研究助手 @写');
   await act(async()=>composer().props.onKeyDown({key:'Enter',nativeEvent:{},preventDefault(){}}));
-  assert.equal(composer().props.value,'@阿探 @墨墨 ');
+  assert.equal(composer().props.value,'@研究助手 @写作助手 ');
   assert.equal(JSON.parse(saved.get(DEMO_STORAGE)).messages.length,before);
   await act(async()=>view.unmount());
 });

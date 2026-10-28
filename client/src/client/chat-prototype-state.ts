@@ -44,22 +44,22 @@ export function initialDemo(): DemoState {
   return {
     version: 1, companionVersion: 1, next: 20, selected: "group-research", projects: [], notice: "", requests: [],
     agents: [
-      { id: "tebb", name: "小缇", avatar: "spark", personality: "温暖爽快，擅长把想法变成计划。", role: "协调目标、拆分工作、汇总成果", mark: "t", tone: "gold", model: "通用模型 · 演示", tools: ["文件"], memory: "演示偏好：先交付结论，再展开依据。" },
-      { id: "research", name: "阿探", avatar: "fox", personality: "好奇又敏锐，追问为什么，也坦率承认未知。", role: "查找一手来源，比较技术方案", mark: "R", tone: "sage", model: "研究模型 · 演示", tools: ["联网搜索", "文件"], memory: "演示偏好：比较项目时列出许可证和部署门槛。" },
-      { id: "writer", name: "墨墨", avatar: "cat", personality: "细腻有条理，喜欢把复杂的事讲清楚，有一点冷幽默。", role: "整理结构，将资料写成可交付文档", mark: "W", tone: "lavender", model: "写作模型 · 演示", tools: ["文件", "飞书"], memory: "演示偏好：英文技术名词旁保留中文解释。" },
+      { id: "tebb", name: "tebb · 通用助手", avatar: "spark", personality: "温暖爽快，擅长把想法变成计划。", role: "协调目标、拆分工作、汇总成果", mark: "t", tone: "gold", model: "通用模型 · 演示", tools: ["文件"], memory: "演示偏好：先交付结论，再展开依据。" },
+      { id: "research", name: "研究助手", avatar: "fox", personality: "好奇又敏锐，追问为什么，也坦率承认未知。", role: "查找一手来源，比较技术方案", mark: "R", tone: "sage", model: "研究模型 · 演示", tools: ["联网搜索", "文件"], memory: "演示偏好：比较项目时列出许可证和部署门槛。" },
+      { id: "writer", name: "写作助手", avatar: "cat", personality: "细腻有条理，喜欢把复杂的事讲清楚，有一点冷幽默。", role: "整理结构，将资料写成可交付文档", mark: "W", tone: "lavender", model: "写作模型 · 演示", tools: ["文件", "飞书"], memory: "演示偏好：英文技术名词旁保留中文解释。" },
     ],
     conversations: [
       { id: "group-research", title: "AI 研究室", kind: "group", members: ["tebb", "research", "writer"], coordinator: "tebb", goal: "一起研究开源 Agent，把结论整理成有依据的报告。" },
-      ...["tebb", "research", "writer"].map(id => ({ id: `dm-${id}`, title: id === "tebb" ? "小缇" : id === "research" ? "阿探" : "墨墨", kind: "dm" as const, members: [id], coordinator: id, goal: "独立会话，记忆按 Agent 展示。" })),
+      ...["tebb", "research", "writer"].map(id => ({ id: `dm-${id}`, title: id === "tebb" ? "tebb · 通用助手" : id === "research" ? "研究助手" : "写作助手", kind: "dm" as const, members: [id], coordinator: id, goal: "独立会话，记忆按 Agent 展示。" })),
     ],
     messages: [
-      { id: "m1", conversation: "group-research", sender: "notice", text: "你创建了 AI 研究室，邀请小缇、阿探和墨墨加入。所有内容均为本地演示。", kind: "notice" },
+      { id: "m1", conversation: "group-research", sender: "notice", text: "你创建了 AI 研究室，邀请tebb · 通用助手、研究助手和写作助手加入。所有内容均为本地演示。", kind: "notice" },
       { id: "m2", conversation: "group-research", sender: "user", text: "比较三个开源 Agent 项目，帮我看看哪个更适合自部署。", run: "r1" },
-      { id: "m3", conversation: "group-research", sender: "tebb", text: "我来协调。阿探先整理比较依据，墨墨收到资料后生成报告。你可以继续聊天，也可以给任务补充要求。", run: "r1" },
+      { id: "m3", conversation: "group-research", sender: "tebb", text: "我来协调。研究助手先整理比较依据，写作助手收到资料后生成报告。你可以继续聊天，也可以给任务补充要求。", run: "r1" },
     ],
     runs: [
-      { id: "r1", conversation: "group-research", agent: "research", title: "比较开源 Agent 的自部署方案", state: "running", step: 0, updates: [], applied: 0, events: ["小缇 → 阿探：整理项目比较依据（模拟委派）"] },
-      { id: "r2", conversation: "group-research", agent: "writer", title: "整理自部署比较报告", state: "waiting", step: 0, dependency: "r1", updates: [], applied: 0, events: ["小缇 → 墨墨：等待研究成果后成文（模拟委派）"] },
+      { id: "r1", conversation: "group-research", agent: "research", title: "比较开源 Agent 的自部署方案", state: "running", step: 0, updates: [], applied: 0, events: ["tebb · 通用助手 → 研究助手：整理项目比较依据（模拟委派）"] },
+      { id: "r2", conversation: "group-research", agent: "writer", title: "整理自部署比较报告", state: "waiting", step: 0, dependency: "r1", updates: [], applied: 0, events: ["tebb · 通用助手 → 写作助手：等待研究成果后成文（模拟委派）"] },
     ],
   };
 }
@@ -114,8 +114,8 @@ export function demoReducer(previous: DemoState, action: DemoAction): DemoState 
     state.conversations.push(dm); state.selected = dm.id;
   } else if (action.type === "add_coder") {
     if (!state.agents.some(a => a.id === 'coder')) {
-      state.agents.push({ id: 'coder', name: '码可', avatar: 'owl', personality: '务实细心，重视验证。', role: '实现代码与运行验证', tools: ['工作区读取','文件编辑','终端'], memory: '', model: '', mark: 'C', tone: 'sage' });
-      state.conversations.push({ id: 'dm-coder', title: '码可', kind: 'dm', coordinator: 'coder', members: ['coder'], goal: '' });
+      state.agents.push({ id: 'coder', name: '编程助手', avatar: 'owl', personality: '务实细心，重视验证。', role: '实现代码与运行验证', tools: ['工作区读取','文件编辑','终端'], memory: '', model: '', mark: 'C', tone: 'sage' });
+      state.conversations.push({ id: 'dm-coder', title: '编程助手', kind: 'dm', coordinator: 'coder', members: ['coder'], goal: '' });
     }
     state.selected = 'dm-coder';
   } else if (action.type === "select") {

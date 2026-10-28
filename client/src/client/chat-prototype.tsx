@@ -40,7 +40,7 @@ function AgentForm({ agent, agents, onSave, onClose, real = false, models = [], 
   return <Modal title={agent.id ? `${agent.name} 的设置` : "创建 Agent"} onClose={onClose}>
     <form className="cp-form" onSubmit={event => {
       event.preventDefault();
-      if (!form.name.trim() || /[\s@]/.test(form.name.trim()) || agents.some(a => a.id !== form.id && a.name === form.name.trim())) { setError("名称不能为空、重复，或包含空格和 @。"); return; }
+      if (!form.name.trim() || (/[\s@]/.test(form.name.trim()) && !(form.id==='tebb'&&form.name.trim()==='tebb · 通用助手')) || agents.some(a => a.id !== form.id && a.name === form.name.trim())) { setError("名称不能为空、重复，或包含空格和 @。"); return; }
       onSave(form);
     }}>
       <p className="cp-muted">{real ? "配置将用于之后的真实任务。此处不填写密钥；模型沿用设置页已有条目。" : "配置仅用于原型演示。请勿填写密钥或真实隐私信息。"}</p>
@@ -155,7 +155,7 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
   const options = picker === 'members' ? members.filter(a => a.name.toLowerCase().includes(pickerQuery.toLowerCase())).map(a => ({ id: a.id, name: a.name, detail: a.personality || a.role })) : (state.skills || []).filter(s => s.id.toLowerCase().includes(pickerQuery.toLowerCase())).map(s => ({ id: s.id, name: s.id, detail: s.description }));
   const member = (id: string) => state.agents.find(agent => agent.id === id);
   const mentioned = [...new Set((draft.match(/(?:^|\s)@[^\s@]+/g) || []).map(token => token.trim().slice(1)))];
-  const recipient = mentioned.length === 1 ? members.find(a => a.name === mentioned[0]) || member(conversation.coordinator) : member(conversation.coordinator);
+  const recipient = mentioned.length === 1 ? members.find(a => (a.name === mentioned[0]||a.id===mentioned[0])) || member(conversation.coordinator) : member(conversation.coordinator);
   const recipientModel = state.models?.find(model => model.id === (recipient?.model || state.active_model))?.model || '默认模型';
 
   useEffect(() => {
