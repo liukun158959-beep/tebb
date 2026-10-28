@@ -245,6 +245,7 @@ function installDebug(): void {
       dragBy: (dx: number, dy: number) => void;
       dismissIfDue: (now: number) => void;
       openMenu: () => void;
+      feedback: (progress:FeedbackProgress,runs:FeedbackRun[]) => void;
     };
   };
   pet.__petDebug = {
@@ -272,6 +273,7 @@ function installDebug(): void {
     },
     dismissIfDue: (now: number) => expire(now),
     openMenu: () => openMenu(24, 24),
+    feedback: (progress,runs) => {lastProgress=progress;lastRuns=runs;hasFeedbackSnapshot=true;refreshFeedback();},
   };
 }
 
@@ -283,6 +285,11 @@ async function main(): Promise<void> {
       const state=await invoke<{visible:boolean}>('get_pet_chat_state');chatVisible=state.visible;
     } catch { /* Native visibility is retried by the next user toggle. */ }
   }
+  bubbleEl.addEventListener('click',event=>{
+    if(!feedbackBubble||window.getSelection()?.toString().trim())return;
+    event.stopPropagation();feedback.dismiss();
+    feedbackBubble=false;bubble=dismissBubble(bubble);renderBubble();
+  });
   window.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("pointerup", onPointerUp);
