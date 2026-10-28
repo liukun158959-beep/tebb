@@ -42,3 +42,13 @@ pnpm --dir client build
 真实 Edge 浏览器通过完整24小时、月/日切换、月格无蒙层草稿、事项负责人、桌宠导航/外观及设置隔离；认证 RPC 的 TimeCalendar 组件通过同一新建同步日程连续拖动、慢回执、页面滚动落点一致。实际 worker 使用假模型经认证 WebSocket 调用真实共享日程与自动化服务。没有向真实飞书测试写入；真实模型编排质量、用户配置 MCP、原生宠物窗口和发布包未重新实机验收。
 
 本机日志位于 `E:/Learn_Project/output/calendar-stability-2026-10-28/`：以 `evolution-full-python-final.log`、`tebb-final.log`、`work-tebb-final.log`、`evolution-frontend-final.log`、`evolution-types-final.log`、`evolution-build-final.log`、`evolution-ui-final.log`、`repeat-evolution-final.log` 为准。较早全量日志曾随会话中断，不能把未结束日志当成失败或成功；已以上述最终日志完成复核。月、事项与桌宠截图为 `month-view.png/work-owner.png/pet-page.png`。
+
+## 日程请求规划修复（#151，2026-10-28）
+
+用户请求在 route 后进入 plan，但原规划请求没有工具，只要求正文 JSON。实际模型因阶段能力不明确回答无日历工具，又在纠正后输出解释混合 JSON，未通过 parse_plan，两回合耗尽后误报通用预算失败；没有进入日程调用，也没有创建日程。
+
+规划现在提供 submit_plan 结构化提交，明确本阶段只分配、执行阶段给tebb真实日程/自动化工具。仍校验成员、依赖、任务数量及一层边界，不提高预算、不重放旧请求。兼容合法正文 JSON；两回合纠正仍无效时明确“委派计划格式纠正后仍无效，未执行任何日程或其他业务操作”。新建缺少结束时间/时长先追问，不擅自扩大为飞书或多人会议。
+
+验收增加无工具误解→结构化纠正、非法成员有限失败及实际规划→自身任务→认证RPC→本地保存链路。另以当前 mimo-v2.6-flash 和隔离数据实测：缺时长的 route 先追问，时间明确的 plan 返回tebb自执行计划；不派发返回任务、不创建真实日程。
+
+#149–#151 最终验证：后端全量678项，664通过、14按既有条件跳过，无失败；前端172项、TypeScript、生产构建通过。日志位于 `E:/Learn_Project/output/calendar-fixes-2026-10-28/` 的 `backend-final.log/frontend-final.log/types-final.log/build-final.log/ui-final.log/real-model-readonly.log`。两周飞书只读核对和真实模型route/plan均完成，不重放用户失败任务、不对真实日程做测试写入。

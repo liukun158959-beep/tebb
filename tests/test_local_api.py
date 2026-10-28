@@ -81,7 +81,20 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         self.host.scheduling.calendar=TimeCalendar()
         patch.dict(os.environ,DESK_TERMINAL_PORT=str(self.port),DESK_TERMINAL_TOKEN='test-token').start()
         accepted=self.host.collaboration.submit_execution('tebb','创建明天学习日程','',dict(kind='test',id='rpc'),'tebb-rpc-one')
+        self.host.collaboration.tick()
         root=self.host.collaboration.execution_status(accepted['run_id'])
+        work=self.host.collaboration.managers['work']
+        planning=work.requests[root['task']]
+        planned=[]
+        class Planner:
+            def chat(_,messages,tools,on_delta):
+                self.assertEqual([t['function']['name'] for t in tools],['submit_plan'])
+                return dict(message=dict(role='assistant',tool_calls=[dict(id='self-plan',type='function',function=dict(name='submit_plan',arguments=json.dumps(dict(tasks=[dict(agent_id='tebb',title='安排学习',instructions='创建本地学习安排，开始结束时间已明确',depends_on=None)]))))]),usage={})
+        await asyncio.to_thread(execute,planning,lambda k,d:planned.append((k,d)),Planner())
+        work.complete(root['task'],next(d for k,d in planned if k=='result'))
+        self.host.collaboration.tick();self.host.collaboration.tick()
+        root=next(r for r in self.host.collaboration.snapshot()['state']['runs'] if r.get('parent')==root['id'] and r.get('stage')=='collect')
+        root=self.host.collaboration.execution_status(root['id'])
         events=[]
         class Model:
             calls=0

@@ -366,6 +366,31 @@ class CollaborationTests(unittest.TestCase):
         self.assertFalse(any(k=='tool_start' for k,d in events))
         self.assertFalse(any(k=='status' and '纠正' in d for k,d in events))
 
+    def test_plan_exposes_structured_submission_and_repairs_no_tool_prose_without_execution(self):
+        request=self.request();request.update(kind='plan',role=dict(self.request()['role'],id='tebb'),members=[dict(id='tebb',name='通用助手',role='日程和自动化')],budget=2)
+        events=[];calls=[]
+        plan=dict(tasks=[dict(agent_id='tebb',title='处理日程',instructions='核对时间后使用真实日程工具',depends_on=None,stage='collect')])
+        class LLM:
+            def chat(_,messages,tools,on_delta):
+                calls.append(1);self.assertEqual([t['function']['name'] for t in tools],['submit_plan'])
+                self.assertIn('执行阶段',messages[0]['content'])
+                if len(calls)==1:return dict(message=dict(content='当前没有日程工具，无法创建。'),usage={})
+                return dict(message=dict(role='assistant',tool_calls=[dict(id='plan',type='function',function=dict(name='submit_plan',arguments=json.dumps(plan)))]),usage={})
+        execute(request,lambda k,d:events.append((k,d)),llm=LLM())
+        self.assertEqual(json.loads(events[-1][1]),plan);self.assertEqual(len(calls),2)
+        self.assertFalse(any(k=='tool_start' for k,d in events))
+
+    def test_invalid_plan_has_bounded_specific_failure_and_no_business_side_effect(self):
+        from desk_companion.collaboration_worker import PublicFailure
+        request=self.request();request.update(kind='plan',members=[dict(id='tebb')],budget=2);calls=[];events=[]
+        class LLM:
+            def chat(_,messages,tools,on_delta):
+                calls.append(1)
+                return dict(message=dict(role='assistant',tool_calls=[dict(id='bad-plan',type='function',function=dict(name='submit_plan',arguments=json.dumps(dict(tasks=[dict(agent_id='missing',title='x',instructions='x')]))))]),usage={})
+        with self.assertRaisesRegex(PublicFailure,'委派计划格式纠正后仍无效'):
+            execute(request,lambda k,d:events.append((k,d)),llm=LLM())
+        self.assertEqual(len(calls),2);self.assertFalse(any(k in {'tool_start','result'} for k,d in events))
+
     def test_invalid_route_repair_is_bounded_and_cannot_dispatch(self):
         from desk_companion.collaboration_worker import PublicFailure
         request=self.request();request['kind']='route';calls=[];events=[]
