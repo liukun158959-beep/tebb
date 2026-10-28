@@ -55,6 +55,14 @@ def creation_fields(summary, start, end):
     return dict(summary=summary.strip(), start=a.astimezone(TZ).isoformat(), end=b.astimezone(TZ).isoformat())
 
 
+def instance_rows(data):
+    # Calendar instance_view returns a successful empty object when no instances exist.
+    if data == {}:return []
+    if not isinstance(data.get('items'),list):
+        raise CalendarError('飞书日程列表结构异常，未确认读取结果。')
+    return data['items']
+
+
 class CalendarAdapter:
     def __init__(self, run=None):
         if run is None:
@@ -113,9 +121,7 @@ class CalendarAdapter:
         data = self._call(['events', 'instance_view', '--calendar-id', identifier(calendar_id),
                           '--user-id-type', 'open_id', '--start-time', str(int(a.timestamp())),
                           '--end-time', str(int(b.timestamp()))])
-        if not isinstance(data.get('items'), list):
-            raise CalendarError('飞书周日程列表缺失，不能当作本周没有安排。')
-        rows = [event_view(row, calendar_id) for row in data['items']]
+        rows = [event_view(row, calendar_id) for row in instance_rows(data)]
         for row in rows:
             row.update(editable=False, edit_reason='选择后核对编辑权限及完整参与人')
         return sorted(rows, key=lambda row: (row['start'], row['event_id']))
@@ -191,9 +197,8 @@ class CalendarAdapter:
     def day(self, calendar_id, day):
         a, b = day_range(day)
         rows = self._call(['events', 'instance_view', '--calendar-id', identifier(calendar_id),
-                          '--start-time', str(int(a.timestamp())), '--end-time', str(int(b.timestamp()))]).get('items')
-        if not isinstance(rows, list):
-            raise CalendarError('飞书日程列表缺失，不能当作当天没有安排。')
+                          '--start-time', str(int(a.timestamp())), '--end-time', str(int(b.timestamp()))])
+        rows = instance_rows(rows)
         return sorted([event_view(r, calendar_id) for r in rows], key=lambda r: (r['start'], r['event_id']))
 
     def get(self, calendar_id, event_id):

@@ -42,6 +42,18 @@ class AdapterTimeTests(unittest.TestCase):
             return json.dumps(dict(ok=True, data=data))
         return CalendarAdapter(run), calls
 
+    def test_successful_empty_object_is_an_empty_day_and_week_but_malformed_data_still_fails(self):
+        for data in ({},{'items':[]}):
+            adapter=CalendarAdapter(lambda *args,**kwargs:json.dumps(dict(ok=True,data=data)))
+            self.assertEqual(adapter.week('calendar-one',DAY),[])
+            self.assertEqual(adapter.day('calendar-one',DAY),[])
+        for data in ({'items':None},{'items':{}},{'unexpected':'payload'}):
+            adapter=CalendarAdapter(lambda *args,**kwargs:json.dumps(dict(ok=True,data=data)))
+            with self.assertRaises(CalendarError):adapter.week('calendar-one',DAY)
+            with self.assertRaises(CalendarError):adapter.day('calendar-one',DAY)
+        adapter=CalendarAdapter(lambda *args,**kwargs:json.dumps(dict(ok=False,data={})))
+        with self.assertRaises(CalendarError):adapter.week('calendar-one',DAY)
+
     def test_week_is_seven_beijing_days_and_patch_changes_only_time_fields(self):
         adapter, calls = self.adapter()
         rows = adapter.week('calendar-one', DAY)

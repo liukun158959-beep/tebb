@@ -93,3 +93,11 @@ pnpm --dir client build
 删除先保存操作编号，调用结果不明时保留 `local_calendar_operations`，读取不自动重发。界面“核对删除结果”及 AI `resolve_delete` 读取同一回执；远端确认不存在后收尾。仍存在时可明确选择保留当前记录并封存原删除，不推断原请求是否执行；不可访问时保留未知状态，不误报已删除。
 
 月查询入口 `load_schedule_month({day,refresh,request_id})`，读取最多六个可见周并保留每周错误；局部失败不当作整月无日程。隔离验证：`python -m unittest tests.test_schedule_month tests.test_calendar_writes tests.test_schedule_week -v`。
+
+## 反馈修复（#149 / #150）
+
+- 空白日期/时段的双击在同一个时段内识别，单击已有条仍开关详情，不改拖动或松手保存。新建按钮仍明确点击即可使用。
+- 2026-09-28、2026-10-12 的实际 `instance_view` 请求成功返回 `data: {}`。适配器之前强制要求 items 数组而误报；现在仅把已确认的成功空对象和显式 items=[] 视为无日程。items=null、非数组、未知非空结构及真正失败仍报错并保留缓存。日、周共用此解析规则，月视图继续汇总真实错误。
+- 隔离验证：`python -m unittest tests.test_schedule_week tests.test_schedule_month -v`；真实两周只读重查为空，无外部写入。
+
+#149/#150 验收：前端172项、类型检查及生产构建通过；真实 Edge 日/周/月均验证单击零草稿、原生双击新建、填内容后取消/×/Escape直接丢弃及连续重开。原生双击延后到FullCalendar完成mouseup时段命中回调后消费，不依赖两次dateClick累计；切换日期或卸载清理待处理动作。
