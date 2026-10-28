@@ -52,3 +52,21 @@ pnpm --dir client build
 验收增加无工具误解→结构化纠正、非法成员有限失败及实际规划→自身任务→认证RPC→本地保存链路。另以当前 mimo-v2.6-flash 和隔离数据实测：缺时长的 route 先追问，时间明确的 plan 返回tebb自执行计划；不派发返回任务、不创建真实日程。
 
 #149–#151 最终验证：后端全量678项，664通过、14按既有条件跳过，无失败；前端172项、TypeScript、生产构建通过。日志位于 `E:/Learn_Project/output/calendar-fixes-2026-10-28/` 的 `backend-final.log/frontend-final.log/types-final.log/build-final.log/ui-final.log/real-model-readonly.log`。两周飞书只读核对和真实模型route/plan均完成，不重放用户失败任务、不对真实日程做测试写入。
+
+
+## 目标核对与主任务（#154，2026-10-28）
+
+当前行为取代 #151 之前的强制规划与自执行子任务：先用无业务工具的 route 核对目标，明确简单目标直接执行；确有独立职责工作时才计划，服务和 worker 双重拒绝自我委派。最多一层其他伙伴子任务，最终 tebb 汇总在原主任务完成。没有第二套模型循环或队列。
+
+目标不清楚时调用 request_clarification，原记录进入 needs_input（待补充），显示具体问题与“尚未开始执行”，不占模型执行名额、不读取项目/搜索/委派。主窗口、浮动聊天消息和任务卡提供“补充目标”；沿用 send＋run＋request_id，在原事务追加补充并继续同一根编号，可幂等重试或取消。事项不随执行自动改变业务状态；同一事项待补充时不重复派发。自动化显示“待补充目标”，不重复本轮目标、不占同类任务执行名额；停止与重启保留此状态并重新观察原记录，用户补充或取消后更新同一回执。
+
+默认聊天和执行页展示一个主任务，展开查看职责伙伴、任务目标、阶段、工具、耗时、结果与整链调用数。主任务自身的阶段不是自己的子任务。旧 route/plan/自任务历史保留，通过 chain 派生视图显示整体结果；子节点失败不能被成功的计划或后续取消掩盖。执行中的耗时由界面计算，不因读取时钟不断改变后端快照和同步哈希；旧历史没有真实结束时间则不伪造耗时。桌宠采用同一根任务状态，原有单击屏蔽整链继续生效。
+
+AI 调试复用认证 load_collaboration 的 run.chain、phases、clarification，以及原任务队列和调用日志。补充入口：collaboration_action({action:{type:"send",conversation:原conversation,run:原run_id,text:"具体目标与期望结果",request_id:新编号}})，重复相同编号不追加第二次。取消仍用 type:cancel、id:原run_id。等待期间 tick 不提交模型任务，重启可读取原状态；每阶段独立预算，calls 与 chain.calls 保留真实总数。
+
+验证命令：`python -m unittest tests.test_execution_flow tests.test_collaboration tests.test_tebb_execution tests.test_automation_service -v`；认证RPC用 `tests.test_local_api` 的 awaiting/search/tebb 三项。真实 mimo-v2.6-flash 的 test、缺结束时间、简单转换、明确职责分工4例各一次模型调用，前两例追问，后两例分别选择direct/delegate，业务工具调用均为0；不会把此只读路由验收当作真实飞书写入验收。Edge 验证搜索测试按钮、待补充入口、原任务续接与单张任务卡，模型与业务写入为隔离替身。记录在 `E:/Learn_Project/output/search-orchestration-2026-10-28/`。
+
+搜索已独立，见 [搜索服务与稳定性验收](SEARCH.md)；架构取舍见 [ADR0021](adr/0021-execution-readiness.md)。
+
+
+#154/#155 交付验证：后端全量691项（677通过、14按既有条件跳过，无失败）；最后消息顺序与日志收尾后，相关114项复核通过。前端174项、TypeScript和生产构建通过；Edge搜索设置及原主任务续接通过。日志以 `backend-final.log/backend-affected-delivery.log/frontend-final-delivery.log/types-final-delivery.log/build-final-delivery.log/flow-ui.log/model-readiness-live.json/search-live-final.json` 为准。保留首轮失败/旧测试适配记录，不把中间日志当最终结论；无真实飞书写入，不发布。

@@ -13,10 +13,10 @@ type Event = { seq: number; kind: string; ts: number; data: string | { tool?: st
 type Task = { id: string; state: string; answer: string; error: string; source: { run_id?: string }; events?: Event[] };
 const labels: Record<string, string> = { tebb_task: "交给 tebb 执行目标", ai_news: "AI/Agent 资讯日报", retro_gen: "生成本周复盘", retro_write: "覆盖写入复盘文档" };
 const states: Record<string, string> = { collecting: "采集核实中", draft: "待发布预览", publishing: "正在归档和推送", published: "已发布", archived: "已归档，未推送群", failed: "未完成",
-  queued: "排队中", running: "执行中", succeeded: "完成", timed_out: "超时", interrupted: "已中断", cancelled: "已停止", ok: "完成", fail: "失败", missed: "错过时段" };
+  needs_input:"待补充目标", queued: "排队中", running: "执行中", succeeded: "完成", timed_out: "超时", interrupted: "已中断", cancelled: "已停止", ok: "完成", fail: "失败", missed: "错过时段" };
 const blankJob = (): Job => ({ name: "每日 AI/Agent 工程资讯", action: "ai_news", enabled: false, cadence: "daily", weekdays: [], hour: 9, minute: 0, doc: "" });
 const active = (task?: Task) => task && ["queued", "running", "cancelling"].includes(task.state);
-const jobActive = (job: Job) => job.active || ['queued', 'running'].includes(job.last_result || '');
+const jobActive = (job: Job) => job.active || ['queued', 'running','needs_input'].includes(job.last_result || '');
 
 export function AutomationPane({ info, debug = false, onOpenExecution }: { info: BackendInfo | null; debug?: boolean; onOpenExecution?:(conversation:string)=>void }) {
   const pageActive = usePageActive();

@@ -10,7 +10,7 @@ import "./chat-prototype.css";
 import { ComposerPicker } from './composer-popover';
 import { StreamText } from "./stream-text";
 import { useAutoGrowInput } from './auto-grow-input';
-import { RunProgress, visibleChatMessage, hasCalendarContext } from './run-progress';
+import { ExecutionTree, executionMessage, visibleChatMessage, hasCalendarContext } from './run-progress';
 import { Markdown } from "./Markdown";
 import { ProjectMigration } from './project-migration';
 import { CompanionAvatar as Avatar, RailButton, AVATAR_NAMES, AppIcon, readDeveloperMode, saveDeveloperMode } from "./companion-ui";
@@ -138,7 +138,7 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
   const runs = state.runs.filter(run => run.conversation === conversation.id);
   const messages = state.messages.filter(message => message.conversation === conversation.id && visibleChatMessage(message, runs));
   const active = state.runs.filter(runActive);
-  const visibleRuns = developer ? runs : runs.filter(run => !["chat", "route", "compress"].includes(run.kind || ""));
+  const visibleRuns = developer ? runs : runs.filter(run => !run.parent && (run.require_execution || run.state==='needs_input' || run.chain?.children.length || runs.some(child=>child.parent===run.id) || !["chat", "route", "compress"].includes(run.kind || "")));
   const pending = state.requests.filter(request => request.state === "pending");
   const selectedRun = runs.find(run => run.id === updateRun);
   const currentArtifact = state.runs.find(run => run.id === artifactId);
@@ -262,14 +262,14 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
   }
   function runCard(run: DemoRun) {
     const owner = member(run.agent)!;
-    const displayState=run.delivery_state || run.state;
-    const chainLabel=run.delivery_state ? ({running:'协作进行中',succeeded:'协作已交付',failed:'协作未完成'} as const)[run.delivery_state] : '';
+    const displayState=run.chain?.state || run.delivery_state || run.state;
+    const chainLabel=run.chain ? ({running:'执行中',succeeded:'已完成',failed:'未完成',needs_input:'待补充',cancelled:'已停止'} as Record<string,string>)[run.chain.state] : run.delivery_state ? ({running:'协作进行中',succeeded:'协作已交付',failed:'协作未完成'} as const)[run.delivery_state] : '';
     return <article key={run.id} id={`cp-run-${run.id}`} className={`cp-task ${focusedRun === run.id ? "cp-task-focused" : ""}`} data-demo-run={run.id}>
       <div className="cp-task-meta"><span className={`cp-state cp-state-${displayState}`}><i />{real ? chainLabel || ({ running: "执行中", succeeded: "已完成", cancelled: "已停止" } as Record<string, string>)[run.state] || RUN_LABELS[run.state] : RUN_LABELS[run.state]}</span><span>{owner.name}</span></div>
       <h3>{run.title}</h3>
       {!real && <div className="cp-progress" aria-label={`演示进度 ${Math.min(100, Math.round(run.step / 3 * 100))}%`}><span style={{ width: `${run.step / 3 * 100}%` }} /></div>}
-      <p className="cp-task-step">{real ? run.error || (run.state === "waiting" ? "前序成果就绪后接续执行" : run.status || "等待调度") : run.state === "waiting" ? "前序成果就绪后接续执行" : run.state === "cancelled" ? "进度已保留" : run.state === "succeeded" ? "成果结构样例已就绪" : STEP_LABELS[Math.min(run.step, 2)]}</p>
-      {<p className="cp-run-usage">{run.model} · {run.calls || 0} 次调用<br />{(run.input_tokens || run.output_tokens) ? `输入 ${run.input_tokens || 0} / 输出 ${run.output_tokens || 0} tokens` : "暂无用量回执"}</p>}
+      <p className="cp-task-step">{real ? run.clarification || run.chain?.error || run.error || (run.state === "waiting" ? "前序成果就绪后接续执行" : run.status || "等待调度") : run.state === "waiting" ? "前序成果就绪后接续执行" : run.state === "cancelled" ? "进度已保留" : run.state === "succeeded" ? "成果结构样例已就绪" : STEP_LABELS[Math.min(run.step, 2)]}</p>
+      {<p className="cp-run-usage">{run.model} · {run.chain?.calls ?? run.calls ?? 0} 次调用（整链）<br />{(run.input_tokens || run.output_tokens) ? `输入 ${run.input_tokens || 0} / 输出 ${run.output_tokens || 0} tokens` : "暂无用量回执"}</p>}
       {real && run.delivery_check && <p className={run.delivery_check.ok ? 'cp-muted' : 'cp-error'}>交付检查 · {run.delivery_check.ok ? '已提交完整成果，请审阅' : `尚未完成：${[...(run.delivery_check.missing || []),...(run.delivery_check.missing_sources || [])].join('、') || '待修订'}`}</p>}
       {real && run.citation_check && <details><summary>来源核验 · {run.citation_check.ok ? "链接匹配" : "需修订"} · 已读 {run.citation_check.pages_read} 页</summary>
         <p className="cp-muted">仅核对来源读取记录；事实与结论仍需审阅。</p>
@@ -277,10 +277,10 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
         {!!run.citation_check.unverified.length && <p role="alert" className="cp-error">未取得的引用：{run.citation_check.unverified.join("、")}</p>}
       </details>}
       {!!run.updates.length && <p className="cp-update-receipt">补充 {run.updates.length} 条 · 已应用 {run.applied} 条{run.applied < run.updates.length && runActive(run) ? " · 等待下一步" : ""}</p>}
-      <div className="cp-task-actions">{runActive(run) ? <>{run.kind !== "chat" && <button onClick={() => supplement(run)} disabled={run.state === "cancelling"}>补充要求</button>}<button onClick={() => dispatch({ type: "cancel", id: run.id })} disabled={run.state === "cancelling"}>停止</button></> :
+      <div className="cp-task-actions">{(runActive(run)||run.state==='needs_input') ? <>{run.kind !== "chat" && <button onClick={() => supplement(run)} disabled={run.state === "cancelling"}>{run.state==='needs_input'?'补充目标':'补充要求'}</button>}<button onClick={() => dispatch({ type: "cancel", id: run.id })} disabled={run.state === "cancelling"}>停止</button></> :
         run.artifact ? <button onClick={() => setArtifactId(run.id)}>查看成果 ↗</button> : <span className="cp-muted">未生成成果</span>}</div>
       {real && run.kind === "plan" && state.runs.some(child => child.parent === run.id && runActive(child)) && <button className="cp-text-button" onClick={() => dispatch({ type: "cancel", id: run.id })}>停止整条协作链</button>}
-      <RunProgress run={run} />
+      <ExecutionTree run={run} runs={runs} agents={state.agents} />
       {!!run.changes?.length && <details><summary>文件改动 · {run.changes.length}</summary>{run.changes.map((change,i) => <div key={i}><strong>{change.path}</strong><pre>{change.diff}</pre></div>)}</details>}
       {!!run.checks?.length && <details><summary>实际命令回执 · {run.checks.length}</summary>{run.checks.map((check,i) => <div key={i}><code>{check.command}</code><p>{check.state} · 退出码 {check.exit_code ?? "无"}{check.stale ? " · 此后文件有修改，需要重新验证" : ""}</p>{check.diff_limited && <p>文本差异采集达到上限，部分文件未覆盖。</p>}<pre>{check.output}</pre></div>)}</details>}
     </article>;
@@ -325,11 +325,11 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
           {messages.map(item => item.kind === "notice" ? <p key={item.id} className="cp-system-message">{item.text}</p> : <article key={item.id} className={`cp-message ${item.sender === "user" ? "cp-message-user" : ""}`}>
             {item.sender === "user" ? <span className="cp-user-avatar">你</span> : <Avatar agent={member(item.sender)} />}
             <div className="cp-message-content"><div className="cp-message-author"><strong>{item.sender === "user" ? "你" : member(item.sender)?.name}</strong>{item.kind === "result" && <span className="cp-result-tag">成果</span>}</div>
-              {item.sender !== 'user' && <><RunProgress run={runs.find(r=>r.id===item.run)} />{onCalendar&&hasCalendarContext(runs.find(r=>r.id===item.run))&&<button type="button" className="cp-message-reference" onClick={onCalendar}>查看相关日程 →</button>}</>}
-              {(item.text || !real) && <div className="cp-markdown"><StreamText text={item.text} active={!!item.run && runs.some(r=>r.id===item.run && runActive(r))} externalLinks={standalone} /></div>}
-              {item.sender !== 'user' && item.run && <div className="cp-message-footer">{(developer || !["chat","route","compress"].includes(runs.find(run => run.id===item.run)?.kind || "")) && <button className="cp-message-reference" onClick={() => { setFocusedRun(item.run!); setInspector(true); setTab("tasks"); }}>↗ 关联任务</button>}
+              {item.sender !== 'user' && <>{runs.find(r=>r.id===item.run)&&<ExecutionTree run={runs.find(r=>r.id===item.run)!} runs={runs} agents={state.agents}/>}{onCalendar&&hasCalendarContext(runs.find(r=>r.id===item.run))&&<button type="button" className="cp-message-reference" onClick={onCalendar}>查看相关日程 →</button>}</>}
+              {(item.text || runs.find(r=>r.id===item.run)?.chain?.answer || !real) && <div className="cp-markdown"><StreamText text={executionMessage(item,runs)} active={!!item.run && runs.some(r=>r.id===item.run && runActive(r))} externalLinks={standalone} /></div>}
+              {item.sender !== 'user' && item.run && <div className="cp-message-footer">{runs.find(r=>r.id===item.run)?.state==='needs_input'&&<button className="cp-message-reference" onClick={()=>supplement(runs.find(r=>r.id===item.run)!)}>补充目标</button>}{(developer || runs.find(run=>run.id===item.run)?.state==='needs_input' || !["chat","route","compress"].includes(runs.find(run => run.id===item.run)?.kind || "")) && <button className="cp-message-reference" onClick={() => { setFocusedRun(item.run!); setInspector(true); setTab("tasks"); }}>↗ 关联任务</button>}
               {real && <small className="cp-message-usage" title="本条消息的执行模型与输入／输出 token 用量">{runs.find(r => r.id===item.run)?.model} · ↑ {runs.find(r => r.id===item.run)?.input_tokens || 0} / ↓ {runs.find(r => r.id===item.run)?.output_tokens || 0}</small>}
-              {real && backend && backend.scope!=='collaboration' && item.sender!=='user' && item.run && runs.some(r=>r.id===item.run && r.state==='succeeded' && ['task','chat','route'].includes(r.kind || '') && !runs.some(child=>child.parent===r.id)) && <button className="cp-message-reference" title={currentProject?'保存到知识库并共享为本项目资料':'保存到知识库'} onClick={async()=>{try { const result=await rpc<{ok:boolean;error?:string}>(backend,'save_collaboration_note',{run_id:item.run}); if(!result.ok) throw new Error(result.error || '收藏失败'); setStorageError(currentProject?`已收藏到知识库，并加入「${currentProject.name}」项目资料。`:'已收藏到知识库的「伙伴成果」笔记，可继续作为资料使用。'); window.dispatchEvent(new Event('tebb-notebooks-changed')); } catch(error){setStorageError(String(error));} }}>{currentProject?'收藏到项目笔记':'收藏到笔记'}</button>}
+              {real && backend && backend.scope!=='collaboration' && item.sender!=='user' && item.run && runs.some(r=>r.id===item.run && r.state==='succeeded' && ['task','chat','route'].includes(r.kind || '') && (r.kind==='task'||!runs.some(child=>child.parent===r.id))) && <button className="cp-message-reference" title={currentProject?'保存到知识库并共享为本项目资料':'保存到知识库'} onClick={async()=>{try { const result=await rpc<{ok:boolean;error?:string}>(backend,'save_collaboration_note',{run_id:item.run}); if(!result.ok) throw new Error(result.error || '收藏失败'); setStorageError(currentProject?`已收藏到知识库，并加入「${currentProject.name}」项目资料。`:'已收藏到知识库的「伙伴成果」笔记，可继续作为资料使用。'); window.dispatchEvent(new Event('tebb-notebooks-changed')); } catch(error){setStorageError(String(error));} }}>{currentProject?'收藏到项目笔记':'收藏到笔记'}</button>}
               {item.kind === "result" && runs.find(run => run.id === item.run)?.artifact && <button className="cp-artifact-link" onClick={() => setArtifactId(item.run!)} title="打开完整成果文档"><span>▤</span><strong>{real ? "成果文档" : "成果文档 · 演示"}</strong><span>↗</span></button>}</div>}
             </div></article>)}
           <div ref={end} />
@@ -350,7 +350,7 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
             <div className="cp-selection-chips">{skills.map(skill => <button type="button" key={skill} onClick={() => setSelectedSkills(old => ({ ...old, [conversation.id]: skills.filter(s => s!==skill) }))}>/{skill} ×</button>)}{attachments.map(file => <button type="button" key={file.id} onClick={() => removeAttachment(file.id)}>{file.name} ×</button>)}</div>
             <div className="cp-composer-bottom"><div className="cp-composer-controls"><button type="button" aria-label="添加附件" disabled={!onAttach} onClick={onAttach}>＋ 附件</button><button type="button" onClick={() => recipient && setEditingAgent(recipient)}>工具</button><button type="button" aria-label="选择技能" onClick={() => { changeDraft(draft+(draft && !draft.endsWith(' ') ? ' ' : '')+'/'); input.current?.focus(); }}>/ Skill</button><button type="button" aria-label="选择成员" onClick={() => { changeDraft(draft+(draft && !draft.endsWith(' ') ? ' ' : '')+'@'); input.current?.focus(); }}>@</button>
               <label><select aria-label="本轮模型" title="本轮模型" value={modelPick} onChange={e => setModelPick(e.target.value)}><option value="">{recipientModel}（默认）</option>{state.models?.map(model => <option key={model.id} value={model.id}>{model.model}</option>)}</select></label></div>
-              <button type="submit" className="cp-send" disabled={live?.busy || !draft.trim() || (!!selectedRun && !runActive(selectedRun))}>{updateRun ? '提交补充' : '发送'}<span>↑</span></button></div>
+              <button type="submit" className="cp-send" disabled={live?.busy || !draft.trim() || (!!selectedRun && !runActive(selectedRun)&&selectedRun.state!=='needs_input')}>{updateRun ? '提交补充' : '发送'}<span>↑</span></button></div>
             {developer && <details className="cp-parameter-debug"><summary>参数与上下文调试</summary><label>推理力度<select value={sampling.reasoning_effort} onChange={e => setSampling({ ...sampling, reasoning_effort:e.target.value })}>{['low','high','max'].map(v => <option key={v}>{v}</option>)}</select></label><label>温度<input type="number" min="0" max="1" step="0.1" value={sampling.temperature} onChange={e => setSampling({ ...sampling, temperature:Number(e.target.value) })} /></label><label>top_p<input type="number" min="0.01" max="1" step="0.01" value={sampling.top_p} onChange={e => setSampling({ ...sampling, top_p:Number(e.target.value) })} /></label><button type="button" onClick={() => dispatch({ type:'compress' })}>整理当前会话上下文</button></details>}
 
           </form>

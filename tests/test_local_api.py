@@ -87,6 +87,29 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             async with connect(self.url.replace('test-token','bad-token'),proxy=None) as ws:
                 await ws.send(json.dumps(dict(type='rpc',method='test_search')));await ws.recv()
 
+    async def test_awaiting_goal_resumes_same_root_over_authenticated_rpc(self):
+        from desk_companion.collaboration import Collaboration
+        from tests.test_collaboration import Queue,MODEL
+        import uuid
+        patch('desk_companion.model_catalog.require_active',return_value=MODEL).start()
+        patch('desk_companion.model_catalog.require_item',return_value=MODEL).start()
+        c=Collaboration(self.host.work_board.path,managers=dict(work=Queue(),chat=Queue()),start=False)
+        self.host._collaboration=c;self.addCleanup(c.shutdown)
+        result=await self.notebook_rpc('collaboration_action',action=dict(type='send',conversation='dm-tebb',text='test',mode='task',request_id=uuid.uuid4().hex))
+        root=result['state']['runs'][-1];c.tick();saved=c.execution_status(root['id'])
+        c.managers['chat'].complete(saved['task'],json.dumps(dict(mode='clarify',text='请说明目标与结果。')));c.tick()
+        page=await self.notebook_rpc('load_collaboration')
+        self.assertEqual(page['state']['runs'][-1]['state'],'needs_input');self.assertFalse(c.managers['work'].items)
+        action=dict(type='send',conversation='dm-tebb',run=root['id'],text='请把Hello变成小写',request_id='rpc-resume-goal-one')
+        await self.notebook_rpc('collaboration_action',action=action)
+        await self.notebook_rpc('collaboration_action',action=action)
+        self.assertEqual(len(c.execution_status(root['id'])['updates']),1)
+        c.tick();saved=c.execution_status(root['id'])
+        c.managers['chat'].complete(saved['task'],json.dumps(dict(mode='task',instructions='变成小写',strategy='direct')),applied=1);c.tick()
+        page=await self.notebook_rpc('load_collaboration')
+        self.assertEqual(len(page['state']['runs']),1);self.assertEqual(page['state']['runs'][0]['id'],root['id'])
+        self.assertEqual(page['state']['runs'][0]['kind'],'task')
+
     async def test_tebb_worker_uses_authenticated_shared_calendar_and_automation_services(self):
         from desk_companion.collaboration import Collaboration
         from desk_companion.collaboration_worker import execute
@@ -102,17 +125,9 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         accepted=self.host.collaboration.submit_execution('tebb','创建明天学习日程','',dict(kind='test',id='rpc'),'tebb-rpc-one')
         self.host.collaboration.tick()
         root=self.host.collaboration.execution_status(accepted['run_id'])
-        work=self.host.collaboration.managers['work']
-        planning=work.requests[root['task']]
-        planned=[]
-        class Planner:
-            def chat(_,messages,tools,on_delta):
-                self.assertEqual([t['function']['name'] for t in tools],['submit_plan'])
-                return dict(message=dict(role='assistant',tool_calls=[dict(id='self-plan',type='function',function=dict(name='submit_plan',arguments=json.dumps(dict(tasks=[dict(agent_id='tebb',title='安排学习',instructions='创建本地学习安排，开始结束时间已明确',depends_on=None)]))))]),usage={})
-        await asyncio.to_thread(execute,planning,lambda k,d:planned.append((k,d)),Planner())
-        work.complete(root['task'],next(d for k,d in planned if k=='result'))
+        chat=self.host.collaboration.managers['chat']
+        chat.complete(root['task'],json.dumps(dict(mode='task',instructions='创建本地学习安排，开始结束时间已明确',strategy='direct')))
         self.host.collaboration.tick();self.host.collaboration.tick()
-        root=next(r for r in self.host.collaboration.snapshot()['state']['runs'] if r.get('parent')==root['id'] and r.get('stage')=='collect')
         root=self.host.collaboration.execution_status(root['id'])
         events=[]
         class Model:

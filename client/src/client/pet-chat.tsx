@@ -6,7 +6,7 @@ import { backendInfo, rpc, type BackendInfo } from './api';
 import { runActive, type DemoState } from './chat-prototype-state';
 import { StreamText } from './stream-text';
 import { useAutoGrowInput } from './auto-grow-input';
-import { RunProgress, visibleChatMessage } from './run-progress';
+import { ExecutionTree, executionMessage, visibleChatMessage } from './run-progress';
 import { CollaborationSync, loadCollaboration } from './collaboration-sync';
 import { composerTrigger, applyComposerChoice } from './composer-picker';
 import { AppIcon } from './companion-ui';
@@ -19,7 +19,7 @@ export function PetChat({ backend }: { backend?: BackendInfo }) {
   const [menu, setMenu] = useState<{x:number;y:number} | null>(null), [progress, setProgress] = useState<Progress | null>(null);
   const [model, setModel] = useState(''), [pollError, setPollError] = useState('');
   const [pinned,setPinned]=useState(false),[pinBusy,setPinBusy]=useState(false);
-  const [creating,setCreating]=useState(false);
+  const [creating,setCreating]=useState(false),[resumeRun,setResumeRun]=useState('');
   const newRequest=useRef<{id:string;agent:string;conversation:string} | null>(null);
   const [cursor,setCursor]=useState(0),[pickerIndex,setPickerIndex]=useState(0),[dismissed,setDismissed]=useState(false);
   const [skillMap,setSkillMap]=useState<Record<string,string[]>>({});
@@ -63,7 +63,7 @@ export function PetChat({ backend }: { backend?: BackendInfo }) {
     if (following.current && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
   }, [state?.revision, progress?.task?.answer, progress?.task?.status, cid, visible]);
   useEffect(()=>{setPickerIndex(0);},[trigger?.query,trigger?.kind,cid,options.length]);
-  useEffect(()=>{setDismissed(false);setCursor(drafts[cid]?.length || 0);},[cid]);
+  useEffect(()=>{setDismissed(false);setResumeRun('');setCursor(drafts[cid]?.length || 0);},[cid]);
   function changeDraft(value:string, position=value.length) {setDrafts(old=>({...old,[cid]:value}));setCursor(position);setDismissed(false);}
   function choose(index:number) {
     const option=options[index];if(!trigger || !option) return;
@@ -93,14 +93,14 @@ export function PetChat({ backend }: { backend?: BackendInfo }) {
   async function send() {
     if (!info || !cid || !draft.trim() || busy) return;
     const text = draft, selected = cid, stamp = ++generation.current;
-    const body = { type: 'send', conversation: selected, text, target: '', mode: 'auto', model_id: model, skills };
+    const body = { type: 'send', conversation: selected, text, target: '', mode: 'auto', model_id: model, skills, ...(resumeRun?{run:resumeRun}:{}) };
     const fingerprint = JSON.stringify(body);
     if (pending.current?.fingerprint !== fingerprint) pending.current = { fingerprint, id: crypto.randomUUID() };
     setBusy(true); setError('');
     try {
       const result = await rpc<{ state: DemoState }>(info, 'collaboration_action', { action: { ...body, request_id: pending.current.id } });
       if (!alive.current || stamp !== generation.current) return;
-      accept(result.state); pending.current = null;
+      accept(result.state); pending.current = null;setResumeRun('');
       setSkillMap(old=>old[selected]===skills ? {...old,[selected]:[]} : old);setDismissed(true);
       setDrafts(old => old[selected] === text ? { ...old, [selected]: '' } : old); following.current = true;
     } catch (e) { if (alive.current) setError(String(e) + '；重试相同内容会沿用提交编号。'); }
@@ -112,12 +112,13 @@ export function PetChat({ backend }: { backend?: BackendInfo }) {
     catch(e) { setError(String(e)); }
   }
   return <main className="pet-chat-window" onContextMenu={event => { if ((event.target as HTMLElement).closest('input,textarea')) return; event.preventDefault(); setMenu({x:Math.max(8,Math.min(event.clientX,window.innerWidth-160)), y:Math.max(8,Math.min(event.clientY,window.innerHeight-76))}); }}>
-    <header className="pet-chat-title" data-tauri-drag-region><strong data-tauri-drag-region>tebb.</strong><span data-tauri-drag-region>{active.length ? '正在执行' : '随时聊聊'}</span><div className="pet-chat-window-actions" role="toolbar" aria-label="浮动聊天窗口操作"><button type="button" aria-label="创建新对话" title="创建新对话，保留当前任务和草稿" disabled={!info || creating || busy} onClick={()=>void newChat()}><AppIcon name="new_chat" /></button><button type="button" className="pet-chat-pin" aria-label={pinned?'取消置顶':'置顶对话框'} title={pinned?'取消置顶：点击其他界面时收起':'置顶：点击其他界面时保持显示'} aria-pressed={pinned} disabled={pinBusy} onClick={()=>void togglePin()}><AppIcon name="pin" /></button><button type="button" title="在主窗口打开" aria-label="在主窗口打开" onClick={() => void openMain()}><AppIcon name="expand" /></button><button type="button" aria-label="关闭对话框" title="关闭，任务继续执行" onClick={() => void close()}><AppIcon name="close" /></button></div></header>
+    <header className="pet-chat-title" data-tauri-drag-region><strong data-tauri-drag-region>tebb.</strong><span data-tauri-drag-region>{active.length ? '正在执行' : runs.some(r=>r.state==='needs_input')?'待补充':'随时聊聊'}</span><div className="pet-chat-window-actions" role="toolbar" aria-label="浮动聊天窗口操作"><button type="button" aria-label="创建新对话" title="创建新对话，保留当前任务和草稿" disabled={!info || creating || busy} onClick={()=>void newChat()}><AppIcon name="new_chat" /></button><button type="button" className="pet-chat-pin" aria-label={pinned?'取消置顶':'置顶对话框'} title={pinned?'取消置顶：点击其他界面时收起':'置顶：点击其他界面时保持显示'} aria-pressed={pinned} disabled={pinBusy} onClick={()=>void togglePin()}><AppIcon name="pin" /></button><button type="button" title="在主窗口打开" aria-label="在主窗口打开" onClick={() => void openMain()}><AppIcon name="expand" /></button><button type="button" aria-label="关闭对话框" title="关闭，任务继续执行" onClick={() => void close()}><AppIcon name="close" /></button></div></header>
+    {resumeRun&&<div role="status">补充原任务目标<button type="button" onClick={()=>setResumeRun('')}>改发新消息</button></div>}
     <div className="pet-chat-controls"><select aria-label="当前会话" value={cid} onChange={e => { setConversation(e.target.value); setModel(''); following.current = true; }}>{state?.conversations.map(c => <option value={c.id} key={c.id}>{c.title}</option>)}</select><select aria-label="本轮模型" value={model} onChange={e => setModel(e.target.value)}><option value="">默认模型</option>{state?.models?.map(m => <option key={m.id} value={m.id}>{m.model}</option>)}</select></div>
     <div className="pet-chat-scroll" ref={scroller} onScroll={e => { const el=e.currentTarget; following.current = el.scrollHeight-el.scrollTop-el.clientHeight < 40; }} aria-label="聊天与任务过程">
       {!state && <p className="pet-chat-placeholder">正在连接当前会话…</p>}
       {state && !messages.length && <p className="pet-chat-placeholder">{current?.title || '当前会话'}<br/>可以直接提问，也可以 @ 伙伴安排任务。</p>}
-      {messages.map(message => { const run=runs.find(r=>r.id===message.run);return <article key={message.id} className={`pet-chat-message ${message.sender==='user'?'from-user':''}`}><small>{message.sender==='user'?'你':state?.agents.find(a=>a.id===message.sender)?.name || 'tebb'}</small>{message.sender!=='user' && <RunProgress run={run}/>}<StreamText text={message.text} active={!!run && runActive(run) && !!message.text} />{message.sender!=='user' && run && runActive(run) && <button className="pet-chat-stop" onClick={()=>void stop(run.id)}>停止任务</button>}</article>; })}
+      {messages.map(message => { const run=runs.find(r=>r.id===message.run);return <article key={message.id} className={`pet-chat-message ${message.sender==='user'?'from-user':''}`}><small>{message.sender==='user'?'你':state?.agents.find(a=>a.id===message.sender)?.name || 'tebb'}</small>{message.sender!=='user' && run && <ExecutionTree run={run} runs={runs} agents={state?.agents||[]}/>}{run?.state==='needs_input'&&message.sender!=='user'&&<button type="button" onClick={()=>{setResumeRun(run.id);input.current?.focus();}}>补充目标</button>}<StreamText text={executionMessage(message,runs)} active={!!run && runActive(run) && !!message.text} />{message.sender!=='user' && run && (runActive(run)||run.state==='needs_input') && <button className="pet-chat-stop" onClick={()=>void stop(run.id)}>停止任务</button>}</article>; })}
       {progress?.enabled && progress.task && <details className="pet-chat-task" open><summary>其他通道 · {progress.task.text}</summary><ol>{progress.task.events?.map((event,index)=><li key={index}><span className="tebb-stream-new">{event}</span></li>)}</ol><StreamText text={progress.task.answer || progress.task.status} active={['running','queued','cancelling'].includes(progress.task.state)} /></details>}
     </div>
     {(error || pollError) && <p className="pet-chat-error" role="alert">{error || pollError}</p>}

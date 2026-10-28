@@ -23,7 +23,7 @@ ACTION_LABELS = {
     "retro_write": "覆盖写入飞书",
     "ai_news": "AI/Agent 资讯日报",
 }
-RESULTS = ("", "ok", "fail", "missed", "queued", "running")
+RESULTS = ("", "ok", "fail", "missed", "queued", "running", "needs_input")
 JOB_KEYS = (
     "id",
     "name",
@@ -534,7 +534,7 @@ def _due_jobs(store: dict, now: datetime) -> list[dict]:
     for job in store["jobs"]:
         if not job["enabled"]:
             continue
-        if job["action"]=="tebb_task" and job.get("execution",{}).get("phase")=="unconfirmed":continue
+        if job["action"]=="tebb_task" and job.get("execution",{}).get("phase") in {'unconfirmed','needs_input'}:continue
         if job["action"] == "ai_news":
             latest = _latest_slot(now, job)
             if latest and job["last_run_slot"] != _slot_key(latest, job):

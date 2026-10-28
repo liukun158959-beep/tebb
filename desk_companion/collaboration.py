@@ -14,8 +14,8 @@ from pathlib import Path
 
 from .paths import data_root
 from .tasks import TaskManager, TERMINAL
+from .execution_flow import ACTIVE, OPEN, advance, phase_calls, chain_view
 
-ACTIVE = {"pending", "queued", "running", "waiting", "cancelling"}
 METHODS = {"load_collaboration", "collaboration_action"}
 COMPANIONS = {
     "tebb": ("tebb", "小缇", "spark", "温暖爽快，善于把模糊的想法变成可执行的计划。"),
@@ -28,11 +28,13 @@ AVATARS = {"spark", "fox", "cat", "owl"}
 
 def parse_route(text):
     decision = json.loads(re.sub(r'^```(?:json)?\s*|\s*```$', '', text.strip()))
-    if not isinstance(decision, dict) or decision.get('mode') not in {'answer', 'task'}:
+    if not isinstance(decision, dict) or decision.get('mode') not in {'answer', 'task', 'clarify'}:
         raise ValueError('无效路由模式')
-    content = decision.get('text') if decision['mode'] == 'answer' else decision.get('instructions')
+    content = decision.get('instructions') if decision['mode'] == 'task' else decision.get('text')
     if not isinstance(content, str) or not content.strip() or len(content) > 24000:
         raise ValueError('无效路由内容')
+    if decision.get('strategy', 'direct') not in {'direct', 'delegate'}:
+        raise ValueError('无效执行方式')
     return decision
 
 
@@ -228,6 +230,8 @@ class Collaboration:
             result.pop(key, None)
         # Internal snapshots/keys/worker requests never cross the browser boundary.
         for run in result["runs"]:
+            if not run.get('parent'):
+                run['chain'] = chain_view(run, result['runs'])
             for key in ("input", "agent_config", "members", "context", "cursor", "task", "attempt", "parent_draft", "source_evidence", "selection", "compress_ids", "public_answer"):
                 run.pop(key, None)
         catalog = public_catalog()
@@ -311,7 +315,7 @@ class Collaboration:
     def execution_status(self,run_id='',submission_key=''):
         with self.lock,transaction(self.path) as (state,_):
             run=next((r for r in state['runs'] if (r['id']==run_id if run_id else r.get('submission_key')==submission_key)),None)
-            return copy.deepcopy(run)
+            return {**copy.deepcopy(run), 'chain':chain_view(run,state['runs'])} if run else None
 
     def create_execution(self, state, agent_id, text, project_id='', source=None):
         """Create an execution inside the caller's shared workspace transaction/lock."""
@@ -330,11 +334,10 @@ class Collaboration:
         else:
             conversation.update(members=list(dict.fromkeys(conversation['members']+[agent_id])),coordinator=agent_id,project_id=project_id)
         self._message(state,cid,'user',text)
-        planned=agent_id=='tebb' and len(state['agents'])>1
-        run=self._run(state,conversation,agent_id,text,'plan' if planned else 'task')
+        run=self._run(state,conversation,agent_id,text,'route')
+        run['require_execution']=True
         run['source']=copy.deepcopy(source)
-        if planned:
-            run['members']=[{k:a[k] for k in ('id','name','role','tools')} for a in state['agents']]
+        run['members']=[{k:a[k] for k in ('id','name','role','tools')} for a in state['agents'] if a['id']!=agent_id] if agent_id=='tebb' else []
         return run
 
     def action(self, action, readonly=False):
@@ -459,8 +462,8 @@ class Collaboration:
             if conversation["title"] == "新对话": conversation["title"] = text.replace("\n", " ")[:40]
             if action.get("run"):
                 run = next((r for r in state["runs"] if r["id"] == action["run"] and r["conversation"] == conversation["id"]), None)
-                if not run or run["state"] not in ACTIVE or run["kind"] == "chat": raise ValueError("此任务已结束或不支持补充")
-                if len(run["updates"]) >= 3: raise ValueError("本轮最多补充3次，请等待结束后创建新任务")
+                if not run or run["state"] not in OPEN or run["kind"] == "chat": raise ValueError("此任务已结束或不支持补充")
+                if len(run["updates"]) >= 3 and run['state']!='needs_input': raise ValueError("本轮最多补充3次，请等待结束后创建新任务")
                 selection = dict(skills=action.get('skills', []), attachments=action.get('attachments', []))
                 if not all(isinstance(values,list) and len(values)<=10 and all(isinstance(v,str) for v in values) for values in selection.values()): raise ValueError('补充资料参数无效')
                 from .skill_catalog import skill_turn_block
@@ -472,6 +475,18 @@ class Collaboration:
                 if any(len(v)>10 for v in previous.values()): raise ValueError('单项任务最多10个技能或附件')
                 run["updates"].append(text); run["events"].append("补充要求已接收，等待调用边界应用")
                 self._message(state, conversation["id"], "user", text, run["id"])
+                if run['state']=='needs_input':
+                    if sum(r['state'] in ACTIVE for r in state['runs'])>=12:raise ValueError('已有较多任务，请稍后补充。')
+                    run['context'].append(dict(sender=run['agent'],text=run['answer']))
+                    # The continuing reply belongs after the human supplement.
+                    # Keep its identity and task link, rather than duplicating it.
+                    reply=next((m for m in state['messages'] if m.get('run')==run['id'] and m['sender']==run['agent']),None)
+                    if reply:
+                        state['messages'].remove(reply);state['messages'].append(reply)
+                    run['input'] += '\n用户补充目标：'+text
+                    run['title'] = text[:160]
+                    advance(run,'route',status='已收到目标补充，重新核对后执行')
+                    run['clarification']=''
                 return
             if action.get("mode", "auto") not in {"auto", "task", "message"}: raise ValueError("消息类型无效")
             target = action.get("target") or conversation["coordinator"]
@@ -503,18 +518,17 @@ class Collaboration:
             if (mode == 'auto' and not selected and not additions
                     and re.fullmatch(r'(?:hello|hi|hey|你好|您好|嗨|哈喽)[!！.。?？\s]*', text, re.IGNORECASE)):
                 mode = 'message'
-            is_plan = mode == "task" and ((target=="tebb" and len(state["agents"])>1) or (conversation["kind"]=="group" and target==conversation["coordinator"] and len(conversation["members"])>1))
             reserved = sum((2 if r["kind"] in {"plan", "route"} else 1) for r in state["runs"] if r["state"] in ACTIVE)
-            if reserved + (2 if is_plan or mode == "auto" else 1) > 12: raise ValueError("已有较多待处理工作，请先完成或停止部分任务")
-            run = self._run(state, conversation, target, text, "route" if mode == "auto" else "plan" if is_plan else "chat" if mode == "message" else "task", context=history, model_id=action.get("model_id", ""))
+            if reserved + (2 if mode != "message" else 1) > 12: raise ValueError("已有较多待处理工作，请先完成或停止部分任务")
+            run = self._run(state, conversation, target, text, 'chat' if mode=='message' else 'route', context=history, model_id=action.get("model_id", ""))
+            run['require_execution']=mode=='task'
             run["selection"] = selection
-            run["multi_mention"] = len(selected)>1
             if action.get('sampling'):
                 from .sampling import parse_sampling
                 run['sampling'] = parse_sampling(action['sampling'])
             run['participants'] = selected or ([a['id'] for a in state['agents']] if target=='tebb' else conversation['members'])
-            if is_plan or mode == "auto":
-                run["members"] = [dict(id=a["id"], name=a["name"], role=a["role"], tools=a['tools']) for a in state["agents"] if a["id"] in run['participants'] and (target=='tebb' or a["id"] != target or len(selected)>1)]
+            if mode != 'message':
+                run["members"] = [dict(id=a["id"], name=a["name"], role=a["role"], tools=a['tools']) for a in state["agents"] if a["id"] in run['participants'] and a['id'] != target]
             # Keep the user message before the streaming reply.
             reply = state["messages"].pop()
             self._message(state, conversation["id"], "user", text, run["id"])
@@ -528,10 +542,11 @@ class Collaboration:
                 if expanded == stop_ids: break
                 stop_ids = expanded
             for item in state["runs"]:
-                if item["id"] in stop_ids and item["state"] in ACTIVE:
-                    item["state"] = "cancelling" if item.get("task") else "cancelled"
+                if item["id"] in stop_ids and item["state"] in OPEN:
+                    item["state"] = "cancelling" if item.get("task") and item['state'] in ACTIVE else "cancelled"
                     item["events"].append("已请求停止，不再派发后续任务")
-                    if item.get("task"): self._manager(item).cancel(item["task"])
+                    if item['state']=='cancelling': self._manager(item).cancel(item["task"])
+                    else:item['finished']=time.time()
         elif kind == "new_chat":
             agent = next((a for a in state['agents'] if a['id'] == action.get('agent_id', 'tebb')), None)
             if not agent: raise ValueError("伙伴不存在")
@@ -602,6 +617,7 @@ class Collaboration:
 
     def _finish(self, state, run, status, error=""):
         run["state"] = status; run["error"] = error
+        if status not in OPEN:run['finished']=time.time()
         for message in state["messages"]:
             if message.get("run") == run["id"] and message["sender"] == run["agent"]:
                 message["text"] = run["answer"] + ("\n\n[未完成："+error+"]" if error and run["answer"] else "") if run["answer"] else error
@@ -630,7 +646,7 @@ class Collaboration:
                         run['status'] = '等待工作目录的编码任务完成'; continue
                     request = dict(workflow="collaboration", collab_path=str(self.path), collab_run=run["id"],
                         role=run["agent_config"], kind=run["kind"], model_id=run["model_id"], context=run["context"], workspace=run.get("workspace"), selection=run.get("selection", {}),
-                        members=run.get("members", []), applied=run["applied"], draft=run.get("parent_draft", ""), budget=max(0, call_budget(run['agent'],run['kind'])-run["calls"]),
+                        members=run.get("members", []), require_execution=run.get('require_execution',False), applied=run["applied"], draft=run.get("parent_draft", ""), budget=max(0, call_budget(run['agent'],run['kind'])-phase_calls(run)),
                         objective=run.get('objective',run['input']),stage=run.get('stage','collect'),required_sources=run.get('required_sources',[]),
                         search_budget=max(0, run.get('search_limit',2)-run.get("search_calls",0)),fetch_budget=max(0,run.get('fetch_limit',4)-run.get("fetch_calls",0)),
                         source_topics=run.get('source_topics',[]),
@@ -676,7 +692,7 @@ class Collaboration:
                     self._finish(state, run, task["state"], task["error"])
                     continue
                 if run["applied"] < len(run["updates"]):
-                    if run["calls"] >= call_budget(run['agent'],run['kind']):
+                    if phase_calls(run) >= call_budget(run['agent'],run['kind']):
                         self._finish(state, run, "failed", "调用预算已用完，最新补充尚未应用；请参考部分结果新建任务")
                     else:
                         run.update(state="pending", attempt=run["attempt"]+1, cursor=0, parent_draft=run["answer"])
@@ -685,32 +701,27 @@ class Collaboration:
                 if run['kind'] == 'route':
                     try:
                         decision = parse_route(run['answer'])
-                        content = decision.get('text') if decision['mode']=='answer' else decision.get('instructions')
+                        content = decision.get('instructions') if decision['mode']=='task' else decision.get('text')
                     except (ValueError, TypeError):
                         self._finish(state,run,'failed','未取得有效的回答或任务路由，请重试'); continue
-                    if run.get('multi_mention'):
-                        decision = dict(mode='task',instructions=run['input'])
-                        content = run['input']
+                    if decision['mode']=='clarify' or decision['mode']=='answer' and run.get('require_execution'):
+                        question=decision.get('text') or '请补充要完成的目标、对象与期望结果。'
+                        run.update(answer=question,clarification=question)
+                        run['events'].append('待补充，尚未开始执行：'+question)
+                        self._finish(state,run,'needs_input');continue
                     if decision['mode']=='answer':
-                        run['answer'] = content
-                    else:
-                        conversation = next(c for c in state['conversations'] if c['id']==run['conversation'])
-                        is_group = bool(run.get('members')) and (run['agent']=='tebb' or conversation['kind']=='group' and run['agent']==conversation['coordinator'])
-                        # Routing classifies; it cannot replace or narrow the human request.
-                        child = self._run(state, conversation, run['agent'], run['input'], 'plan' if is_group else 'task', parent=run['id'], context=run['context']+[dict(sender='user',text=t) for t in run['updates']], model_id=run['model_id'])
-                        child['workspace'] = run['workspace']
-                        child['members'] = run.get('members', [])
-                        child['selection'] = run.get('selection', {})
-                        if run.get('sampling'): child['sampling'] = run['sampling']
-                        run['answer'] = ''
-                        run['handoff'] = child['id']
-                    self._finish(state,run,'succeeded'); continue
+                        run['answer']=content
+                        self._finish(state,run,'succeeded');continue
+                    # Same root owns readiness, direct work and final delivery.
+                    delegate=decision.get('strategy')=='delegate' and bool(run.get('members'))
+                    advance(run,'plan' if delegate else 'task',status='目标明确，准备职责分工' if delegate else '目标明确，直接执行')
+                    continue
                 if run['kind'] == 'compress':
                     conversation = next(c for c in state['conversations'] if c['id']==run['conversation'])
                     conversation['summary'] = run['answer']; conversation['summary_ids'] = run.get('compress_ids', [])
                 if run["kind"] == "plan":
                     try:
-                        plans = parse_plan(run["answer"], {m["id"] for m in run["members"]})
+                        plans = parse_plan(run["answer"], {m["id"] for m in run["members"] if m["id"]!=run["agent"]})
                     except (ValueError, TypeError):
                         self._finish(state, run, "failed", "协调者未返回有效委派计划，未执行任何子任务")
                         continue
@@ -734,13 +745,10 @@ class Collaboration:
                         child.update(source_topics=topics,search_limit=max(2,len(topics)),fetch_limit=max(4,len(topics)*2))
                         if stage=='deliver': child['required_sources']=list(dict.fromkeys(child['required_sources']+[s for previous in children for s in previous.get('required_sources',[])]))
                         child["workspace"] = run["workspace"]; child["title"] = plan["title"]; child["selection"] = run.get("selection", {}); children.append(child)
-                    if run['agent']=='tebb' and children:
-                        final = self._run(state, conversation, 'tebb', run['input'], parent=run['id'], dependency=children[-1]['id'],
-                            context=run['context'], model_id=run['model_id'])
-                        final.update(dependencies=[c['id'] for c in children], objective=run['input'], stage='deliver',
-                                     workspace=run['workspace'], selection=run.get('selection', {}), title='tebb 汇总交付：'+run['title'])
-                    run["answer"] = "已委派：\n" + "\n".join(next(a["name"] for a in state["agents"] if a["id"] == p["agent_id"]) + "：" + p["title"] for p in plans)
-                    run["events"].append("委派计划已校验；子任务不能继续委派")
+                    run['events'].append('委派已校验：'+ '；'.join(next(a['name'] for a in state['agents'] if a['id']==p['agent_id'])+'：'+p['title'] for p in plans))
+                    advance(run,'task',state='waiting',status='等待职责伙伴成果，再由负责人汇总')
+                    run.update(dependencies=[c['id'] for c in children],stage='deliver',objective=run['input'])
+                    continue
                 self._finish(state, run, "succeeded")
             by_parent={}
             for child in state['runs']:

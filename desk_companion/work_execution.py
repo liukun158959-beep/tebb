@@ -25,7 +25,7 @@ class WorkExecutionService:
                         if len(item['links'])>=50:raise ValueError('执行历史已达50条，请先解除不需要的关联。')
                         if item['archived']:raise ValueError('请先恢复事项，再交给AI执行。')
                         if any(r.get('source',{}).get('kind')=='work_item' and r['source']['id']==item['id']
-                               and (r['state'] in ACTIVE or r.get('delivery_state')=='running') for r in state['runs']):
+                               and (r['state'] in ACTIVE or r['state']=='needs_input' or r.get('delivery_state')=='running') for r in state['runs']):
                             raise ValueError('此事项已有未结束的AI执行，请先完成或停止。')
                         text=item['title']+'\n\n'+item['description']+'\n\n请完成这件事项并报告实际成果和验证；业务进度由用户确认。'
                         run=self.collaboration.create_execution(state,item.get('agent_id','tebb'),text,item['project_id'],

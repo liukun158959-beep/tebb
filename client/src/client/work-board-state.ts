@@ -14,7 +14,7 @@ export type WorkTransport = (method: string, args?: Record<string, unknown>) => 
 const empty = (): WorkPage => ({ok:true,revision:-1,items:[],projects:[],runs:[]});
 export const workStateLabel = (state: string) => WORK_STATES.find(row=>row[0]===state)?.[1] || state;
 export function runStateLabel(run: WorkRun) {
-  const labels: Record<string,string> = {pending:'待执行',queued:'排队中',running:'执行中',waiting:'等待依赖',cancelling:'停止中',succeeded:'执行成功',failed:'执行失败',cancelled:'已停止',timed_out:'已超时',interrupted:'已中断'};
+  const labels: Record<string,string> = {pending:'待执行',queued:'排队中',needs_input:'待补充',running:'执行中',waiting:'等待依赖',cancelling:'停止中',succeeded:'执行成功',failed:'执行失败',cancelled:'已停止',timed_out:'已超时',interrupted:'已中断'};
   if (run.kind==='plan' && run.delivery_state) return ({running:'已委派 · 交付进行中',succeeded:'整体已交付',failed:'交付未完整完成'} as Record<string,string>)[run.delivery_state] || labels[run.state] || run.state;
   return labels[run.state] || run.state;
 }

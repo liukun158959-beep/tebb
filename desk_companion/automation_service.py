@@ -83,9 +83,14 @@ class AutomationService:
             if a._abandon_queued(store):
                 a.save_store(store)
             self._booted = True
+            for job in store['jobs']:
+                execution=job.get('execution',{})
+                if job['action']=='tebb_task' and execution.get('phase')=='needs_input' and self.execution:
+                    self._active[job['id']]=deepcopy(execution)
+                    self._watch_agent(job['id'],deepcopy(execution))
 
     def _occupied(self):
-        return {e['action'] for e in self._active.values()} | set(self._queued) | (
+        return {e['action'] for e in self._active.values() if e.get('phase')!='needs_input'} | set(self._queued) | (
             {self._running_action} if self._running_action else set()) | ({'ai_news'} if self._news_active else set())
 
     def _accept(self, job):
@@ -102,6 +107,7 @@ class AutomationService:
             job = a._find(store, str(job_id or '').strip())
             previous=job.get('execution',{})
             if request_id and previous.get('request_id')==request_id:return dict(self.snapshot(),job_id=job['id'],execution=previous)
+            if previous.get('phase')=='needs_input':raise RuntimeError('原任务待补充，请进入原AI执行补充或取消，不会重复派发。')
             if job['action']=='tebb_task' and previous.get('phase')=='unconfirmed':raise RuntimeError('原AI执行结果未确认，请先核对，不会重新执行。')
             if job['action'] in self._occupied() or job['last_result'] in {'queued', 'running'}:
                 raise RuntimeError('同类任务正在跑、排队或收尾，不会叠第二趟。')
@@ -281,8 +287,20 @@ class AutomationService:
                     run=self.execution().execution_status(execution.get('run_id',''),submission_key='automation-'+execution['id'])
                     if not run:
                         self._finish(job_id,dict(ok=False,error='AI执行记录未找到，请核对编号。'),phase='unconfirmed');return
+                    chain=run.get('chain',{})
+                    current=chain.get('state',run['state'])
+                    if current=='needs_input' or execution.get('phase')=='needs_input' and current in {'pending','waiting','queued','running'}:
+                        target='needs_input' if current=='needs_input' else 'running'
+                        if execution.get('phase')!=target:
+                            with self._lock,a.transaction():
+                                store=a.load_store();job=a._find(store,job_id)
+                                execution['phase']=target
+                                self._active[job_id]=deepcopy(execution)
+                                job.update(last_result=target,last_error=run.get('clarification','') if target=='needs_input' else '',execution=deepcopy(execution))
+                                a.save_store(store)
+                        continue
                     if run.get('delivery_state')=='running' or run['state'] in {'pending','waiting','queued','running','cancelling'}:continue
-                    succeeded=run['state']=='succeeded' and run.get('delivery_state','succeeded')=='succeeded'
+                    succeeded=current=='succeeded' and run.get('delivery_state','succeeded')=='succeeded'
                     self._finish(job_id,dict(ok=succeeded,run_id=run['id'],conversation=run['conversation'],error='' if succeeded else run.get('error') or 'AI执行未完整完成，请查看执行记录。'))
                     return
             except Exception as exc:self._finish(job_id,dict(ok=False,error=str(exc)),phase='unconfirmed')
@@ -435,6 +453,7 @@ class AutomationService:
             for jid in list(self._active):
                 if jid not in queued and jid not in self._pending_results:
                     owned = deepcopy(self._active[jid])
+                    if owned.get('phase')=='needs_input':continue
                     self._finish(jid, dict(ok=False, stage='stop', change_state='unconfirmed',
                         error='退出时执行结果未确认，请先核对正文、任务与远端目标，不要直接重发。'), phase='unconfirmed')
                     # The ongoing call still owns its identity until it actually finishes.

@@ -3,7 +3,8 @@ export type DemoAgent = { id: string; name: string; role: string; mark: string; 
 export type DemoProject = { id: string; name: string; primary?: string; instructions?: string; sources?: {id:string;title:string;text:string;truncated?:boolean}[] };
 export type DemoConversation = { id: string; title: string; kind: "dm" | "group"; members: string[]; coordinator: string; goal: string; legacy?: boolean; summary?: string; project_id?: string };
 export type DemoMessage = { id: string; conversation: string; sender: string; text: string; run?: string; kind?: "result" | "notice" };
-export type DemoRun = { id: string; conversation: string; agent: string; title: string; state: "running" | "waiting" | "succeeded" | "cancelled" | "pending" | "queued" | "cancelling" | "failed" | "timed_out" | "interrupted";
+export type DemoRun = { id: string; conversation: string; agent: string; title: string; state: "running" | "waiting" | "succeeded" | "cancelled" | "pending" | "queued" | "cancelling" | "failed" | "timed_out" | "interrupted" | "needs_input";
+  require_execution?:boolean;clarification?:string;created?:number;finished?:number;phases?:{kind:string;calls:number;started:number;ended:number}[];chain?:{state:DemoRun['state'];calls:number;tool_calls:number;elapsed_ms:number|null;error:string;answer:string;children:string[]};
   step: number; dependency?: string; dependencies?: string[]; delivery_state?: "running" | "succeeded" | "failed"; delivery_check?: { ok: boolean; missing?: string[]; missing_sources?: string[] }; updates: string[]; applied: number; events: string[]; artifact?: string;
   kind?: string; parent?: string; answer?: string; error?: string; status?: string; calls?: number; model?: string; input_tokens?: number; output_tokens?: number;
   changes?: { path: string; diff: string }[]; checks?: { command: string; state: string; exit_code: number | null; output: string; stale?: boolean; diff_limited?: boolean }[];
@@ -37,7 +38,7 @@ export type DemoAction =
 
 export const DEMO_STORAGE = "tebb.chat-prototype.v1";
 export const runActive = (run: DemoRun) => ["pending", "queued", "running", "waiting", "cancelling"].includes(run.state);
-export const RUN_LABELS: Record<DemoRun["state"], string> = { running: "模拟执行中", waiting: "等待前序成果", succeeded: "演示完成", cancelled: "已停止演示", pending: "待执行", queued: "排队中", cancelling: "正在停止", failed: "失败", timed_out: "超时", interrupted: "运行中断" };
+export const RUN_LABELS: Record<DemoRun["state"], string> = { running: "模拟执行中", waiting: "等待前序成果", succeeded: "演示完成", cancelled: "已停止演示", pending: "待执行", queued: "排队中", cancelling: "正在停止", failed: "失败", timed_out: "超时", interrupted: "运行中断",needs_input:'待补充' };
 export const STEP_LABELS = ["整理任务与资料范围", "核对资料并提炼要点", "整理成果与交接"];
 
 export function initialDemo(): DemoState {

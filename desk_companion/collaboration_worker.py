@@ -73,7 +73,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
         prompt += ('\n判断本次用户请求：普通交流直接回答；需要检索、读取附件/工作区、编辑、运行命令或执行技能时转后台任务。'
             '编写代码示例、算法讲解或代码片段可直接回答，不要求工作目录；明确需要保存文件、修改项目或运行验证时才转执行任务。'
             '当前用户请求是本轮目标，历史中的失败、未授权或来源缺失仅是当时状态，不得据此删减本轮范围。需要协作时保留全部目标和@成员要求，不在这里编造执行结果。'
-            '日程新建缺少结束时间或持续时长、目标不明确时，先用普通回答追问，不自行默认一小时或同步飞书。无需执行工具时直接输出Markdown回答，不要用JSON包裹。需要执行时只申请一次start_background_task，instructions填写用户完整目标、材料、限制和验收条件，具体分工交给后续规划；这里不会实际执行工具。')
+            '任何目标、对象或期望结果不清楚（如仅test/测试/帮我处理一下）时调用request_clarification，说明具体缺项并暂停；禁止先读项目、搜索或委派。日程缺结束时间或时长也先追问，不默认一小时或同步飞书。无需执行工具时直接输出Markdown回答，不要用JSON包裹。需要执行时只申请一次start_background_task，instructions填写用户完整目标、材料、限制和验收条件，strategy默认direct：明确简单任务由自己直接完成，不能强行拆分。只有确有独立职责分工或明确@多位伙伴才选delegate；这里不执行业务工具。')
     elif kind == "compress":
         prompt += '\n仅整理提供的会话为后续上下文，保留目标、决定、来源、未完成事项，输出Markdown摘要。'
     elif kind == "plan":
@@ -88,7 +88,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
             '具有联网能力的成员取得外部项目一手正文（required_sources=["web"]），两项可并行；再由综合写作成员交付对比（stage=deliver，depends_on=[0,1]）。'
             '自己的项目未指定本机路径时，可通过已登录GitHub发现准确仓库；无需克隆或终端权限。按成员已有工具分工，不能扩大权限。'
             '采集任务仅交付精炼证据包、源码抽象、短摘述和原始链接，不抢先写整篇最终报告；不要只交付空白框架。')
-        if role.get('id')=='tebb':prompt+='\n当前只做规划，不实际执行操作；规划阶段没有日程工具不表示产品没有此能力。执行阶段会给tebb提供calendar_query/calendar_change和automation工具。日程和自动化直接分给tebb，信息不全则让tebb先追问。你也可以把一项任务分给自己，以实际调用日程/自动化/工具完成目标；只在确有必要时委派职责伙伴。系统在所有任务结束后让你汇总，请不要把操作日程误转为研究报告。'
+        prompt+='\n只在确需独立分工时进入本阶段，禁止委派自己；自己能直接完成的工作不创建子任务，最终负责人在同一主任务中综合，禁止额外创建tebb汇总子任务。'
         prompt+='\n联网采集任务必须把本轮需比较的外部对象分别填入source_topics。先覆盖每个对象的定位与核心机制，再补可选细节，不要把有限请求耗在同一对象的多个首页、版本号或许可证查询。'
     elif kind == "task":
         prompt += "\n交付可阅读的Markdown成果，保留实际来源、证据缺口和适用限制，不要只返回执行承诺。"
@@ -142,10 +142,12 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
             '通用操作任务按实际回执简洁报告结果和失败阶段，无需写成长篇研究报告；不要重复执行前序已经完成的外部写入。'
             '技术结论优先依据实际取得的一手正文；未使用的搜索结果不必堆入来源清单。仓库可读取不代表获得开源许可，未核实许可时不要称其已开源。')
     if kind == 'route':
-        extra['start_background_task'] = dict(type='function', function=dict(name='start_background_task', description='用户要求实际检索、读取资料、读写项目或运行命令时，申请创建可追踪的后台任务。代码示例和普通回答直接输出文字。', parameters=dict(type='object', properties={'instructions': {'type':'string'}}, required=['instructions'], additionalProperties=False)))
+        extra['start_background_task'] = dict(type='function', function=dict(name='start_background_task', description='目标明确后开始执行。简单工作选direct；确需独立职责分工才选delegate。不执行业务工具。', parameters=dict(type='object', properties={'instructions': {'type':'string'}, 'strategy':{'type':'string','enum':['direct','delegate']}}, required=['instructions'], additionalProperties=False)))
+        extra['request_clarification'] = dict(type='function',function=dict(name='request_clarification',description='缺少目标、对象、范围或必要参数时说明具体问题并暂停，不搜索、不读取项目、不委派。',parameters=dict(type='object',properties={'question':{'type':'string'}},required=['question'],additionalProperties=False)))
+        if request.get('require_execution'):messages[0]['content']+='\n这是显式执行请求：必须调用start_background_task或request_clarification，不以普通回答冒充任务完成。'
     if kind=='plan':
-        extra['submit_plan']=dict(type='function',function=dict(name='submit_plan',description='提交有限的一层分工计划，不执行业务操作。日程/自动化操作可以交给tebb自己，在执行阶段使用真实工具；缺信息先安排追问，不能猜结束时间。',parameters=dict(type='object',properties=dict(tasks=dict(type='array',minItems=1,maxItems=3,items=dict(type='object',properties=dict(
-            agent_id=dict(type='string',enum=[m['id'] for m in request.get('members',[])]),title=dict(type='string'),instructions=dict(type='string'),
+        extra['submit_plan']=dict(type='function',function=dict(name='submit_plan',description='提交有限的一层分工计划，不执行业务操作。只分派给其他职责伙伴，禁止自己给自己创建子任务。',parameters=dict(type='object',properties=dict(tasks=dict(type='array',minItems=1,maxItems=3,items=dict(type='object',properties=dict(
+            agent_id=dict(type='string',enum=[m['id'] for m in request.get('members',[]) if m['id']!=role.get('id')]),title=dict(type='string'),instructions=dict(type='string'),
             stage=dict(type='string',enum=['collect','deliver']),required_sources=dict(type='array',items=dict(type='string',enum=['repository','web'])),
             source_topics=dict(type='array',maxItems=4,items=dict(type='string')),depends_on=dict(anyOf=[dict(type='null'),dict(type='integer',minimum=0),dict(type='array',maxItems=2,items=dict(type='integer',minimum=0))])),required=['agent_id','title','instructions','depends_on'],additionalProperties=False))),required=['tasks'],additionalProperties=False)))
     changes, checks = [], []
@@ -296,7 +298,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                 try:
                     if len(calls)!=1 or calls[0]['function']['name']!='submit_plan':raise ValueError('只能提交一次计划')
                     submitted=calls[0]['function'].get('arguments') or '{}'
-                    parse_plan(submitted,{m['id'] for m in request['members']})
+                    parse_plan(submitted,{m['id'] for m in request['members'] if m['id']!=role.get('id')})
                 except (ValueError,TypeError,KeyError):
                     if turn>=budget-1:raise PublicFailure('委派计划格式纠正后仍无效，未执行任何日程或其他业务操作。')
                     messages.extend([dict(answer,role='assistant'),*[dict(role='tool',tool_call_id=c.get('id',''),content='计划未通过成员/依赖校验，请重新调用submit_plan提交合法分工；这里不执行业务操作。') for c in calls]])
@@ -304,14 +306,16 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                 emit('result',submitted);return
             if kind == 'route':
                 try:
-                    if not 1<=len(calls)<=3 or any(c['function']['name']!='start_background_task' for c in calls): raise ValueError()
-                    decisions=[parse_route(json.dumps(dict(mode='task',instructions=json.loads(c['function'].get('arguments') or '{}').get('instructions')))) for c in calls]
-                    # These are intent signals, not executed tools. Coalesce a
-                    # model's duplicate requests into one graph of the human goal.
-                    decision=decisions[0] if len(decisions)==1 else dict(mode='task',instructions=request['text'])
+                    if len(calls)==1 and calls[0]['function']['name']=='request_clarification':
+                        question=json.loads(calls[0]['function'].get('arguments') or '{}').get('question')
+                        decision=parse_route(json.dumps(dict(mode='clarify',text=question)))
+                    else:
+                        if not 1<=len(calls)<=3 or any(c['function']['name']!='start_background_task' for c in calls): raise ValueError()
+                        decisions=[parse_route(json.dumps(dict(mode='task',**json.loads(c['function'].get('arguments') or '{}')))) for c in calls]
+                        decision=decisions[0] if len(decisions)==1 else dict(mode='task',instructions=request['text'],strategy='direct')
                 except (ValueError, TypeError, KeyError, AttributeError):
                     if turn >= budget - 1: raise PublicFailure('模型任务请求格式无效，未执行工具。')
-                    messages.append(dict(role='user',content='任务请求格式无效。请只调用一次start_background_task，提供非空instructions；无需工具则直接回答。'))
+                    messages.append(dict(role='user',content='任务请求格式无效。请只调用一次start_background_task提供明确目标和strategy，或调用request_clarification提问；无需执行的普通聊天可直接回答。'))
                     continue
                 emit('result', json.dumps(decision, ensure_ascii=False)); return
             names=[(call.get("function") or {}).get("name") for call in calls]
@@ -414,10 +418,10 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
             text += '\n\n### 实际验证回执\n'+status+'\n'+receipts
         if kind == "plan":
             try:
-                parse_plan(text, {m["id"] for m in request["members"]})
+                parse_plan(text, {m["id"] for m in request["members"] if m["id"]!=role.get("id")})
             except (ValueError, TypeError):
                 if turn>=budget-1:raise PublicFailure("委派计划格式纠正后仍无效，未执行任何日程或其他业务操作。")
-                messages.extend([{"role": "assistant", "content": text}, {"role": "user", "content": "规划只提交分工，业务工具在执行阶段提供；请调用submit_plan，成员可选tebb自身，依赖只能指向前序。"}])
+                messages.extend([{"role": "assistant", "content": text}, {"role": "user", "content": "规划只提交分工，业务工具在执行阶段提供；请调用submit_plan，只能选其他职责伙伴，不能选自己；依赖只能指向前序。"}])
                 continue
         if kind == 'route':
             if not text.startswith(('{', '```json')):

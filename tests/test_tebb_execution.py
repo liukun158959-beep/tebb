@@ -44,7 +44,7 @@ class ExecutionTests(unittest.TestCase):
         result,action=self.execute(item);self.assertTrue(result['ok'],result)
         runid=result['receipt']['run_id'];run=self.c.execution_status(runid)
         self.assertEqual(run['source']['id'],item['id']);self.assertEqual(run['agent'],'tebb')
-        self.assertEqual(run['kind'],'plan')
+        self.assertEqual(run['kind'],'route')
         self.assertTrue(self.executor.execute(action)['ok'])
         self.assertEqual(len(self.c.snapshot()['state']['runs']),1)
         self.assertFalse(self.execute(result['items'][0])[0]['ok'])
@@ -56,7 +56,7 @@ class ExecutionTests(unittest.TestCase):
         legacy=self.b.change(dict(type='save',id=item['id'],version=item['version'],request_id=uuid.uuid4().hex,fields=dict(title='旧客户端编辑')))
         self.assertTrue(legacy['ok'],legacy);item=legacy['items'][0];self.assertEqual(item['agent_id'],'writer')
         result,_=self.execute(item)
-        self.assertEqual(self.c.execution_status(result['receipt']['run_id'])['kind'],'task')
+        self.assertEqual(self.c.execution_status(result['receipt']['run_id'])['kind'],'route')
         other=self.item(agent_id='research')
         changed=self.b.change(dict(type='archive',id=other['id'],version=other['version'],archived=True,request_id=uuid.uuid4().hex))
         self.assertTrue(changed['ok'],changed);self.assertFalse(self.execute(other)[0]['ok'])
@@ -64,16 +64,18 @@ class ExecutionTests(unittest.TestCase):
         self.assertFalse(self.execute(archived)[0]['ok'])
         self.assertFalse(self.b.change(dict(type='create',request_id=uuid.uuid4().hex,fields=dict(title='x',agent_id='gone')))['ok'])
 
-    def test_tebb_private_execution_plans_once_then_synthesizes_and_cancel_reaches_children(self):
-        accepted=self.c.submit_execution('tebb','明天安排学习',project_id='',source=dict(kind='test',id='one'),request_id='execution-test-one')
+    def test_tebb_delegates_only_to_specialists_and_keeps_final_in_root(self):
+        accepted=self.c.submit_execution('tebb','研究并总结明确主题',project_id='',source=dict(kind='test',id='one'),request_id='execution-test-one')
         self.c.tick();root=self.c.execution_status(accepted['run_id'])
-        plan=json.dumps(dict(tasks=[dict(agent_id='tebb',title='安排日程',instructions='使用日程服务创建本地安排',depends_on=None)]))
+        self.chat.complete(root['task'],json.dumps(dict(mode='task',instructions=root['input'],strategy='delegate')));self.c.tick();self.c.tick()
+        root=self.c.execution_status(root['id'])
+        plan=json.dumps(dict(tasks=[dict(agent_id='research',title='核实来源',instructions='核对一手资料并返回摘要',depends_on=None)]))
         self.work.complete(root['task'],plan);self.c.tick()
-        children=[r for r in self.c.snapshot()['state']['runs'] if r.get('parent')==root['id']]
-        self.assertEqual(len(children),2);self.assertTrue(all(r['kind']=='task' for r in children))
-        self.assertEqual(children[-1]['agent'],'tebb');self.assertEqual(children[-1]['dependencies'],[children[0]['id']])
+        state=self.c.snapshot()['state'];children=[r for r in state['runs'] if r.get('parent')==root['id']]
+        self.assertEqual(len(children),1);self.assertEqual(children[0]['agent'],'research')
+        saved=self.c.execution_status(root['id']);self.assertEqual(saved['kind'],'task');self.assertEqual(saved['state'],'waiting')
         self.c.action(dict(type='cancel',id=root['id'],conversation=accepted['conversation'],request_id=uuid.uuid4().hex))
-        self.assertTrue(all(r['state'] in {'cancelled','cancelling'} for r in self.c.snapshot()['state']['runs'] if r.get('parent')==root['id']))
+        self.assertTrue(all(r['state'] in {'cancelled','cancelling'} for r in self.c.snapshot()['state']['runs']))
 
     def test_execution_saved_then_refresh_failure_reports_committed(self):
         item=self.item()
@@ -124,6 +126,31 @@ class ExecutionTests(unittest.TestCase):
         with patch.object(fresh,'_watch_agent') as watch:
             result=fresh.check_agent_execution(jid)
         self.assertTrue(result['ok'],result);self.assertEqual(watch.call_args.args[1]['run_id'],original['run_id'])
+        self.assertEqual(len(self.c.snapshot()['state']['runs']),1)
+
+    def test_waiting_automation_does_not_retry_and_survives_restart_until_same_root_resumes(self):
+        s=self.automation();jid,_=self.save_job(s,goal='test')
+        self.assertTrue(s.run_automation_job(jid)['ok'])
+        def wait_for(predicate):
+            until=time.monotonic()+5
+            while time.monotonic()<until:
+                value=predicate()
+                if value:return value
+                time.sleep(.03)
+            self.fail('automation observation did not settle')
+        saved=wait_for(lambda:next(j for j in a.load_store()['jobs'] if j['id']==jid).get('execution',{}).get('run_id'))
+        self.c.tick();root=self.c.execution_status(saved)
+        self.chat.complete(root['task'],json.dumps(dict(mode='clarify',text='具体目标是什么？')));self.c.tick()
+        wait_for(lambda:next(j for j in a.load_store()['jobs'] if j['id']==jid)['last_result']=='needs_input')
+        self.assertNotIn('tebb_task',s._occupied());self.assertFalse(s.run_automation_job(jid)['ok'])
+        s.stop(1)
+        job=next(j for j in a.load_store()['jobs'] if j['id']==jid)
+        self.assertEqual(job['execution']['phase'],'needs_input')
+        fresh=self.automation();fresh._recover()
+        self.c.action(dict(type='send',conversation=root['conversation'],run=root['id'],text='把Hello转为小写',request_id='automation-resume-one'))
+        with self.c.lock,transaction(self.c.path) as (state,_):
+            run=next(r for r in state['runs'] if r['id']==root['id']);run.update(state='succeeded',answer='hello')
+        wait_for(lambda:next(j for j in a.load_store()['jobs'] if j['id']==jid)['last_result']=='ok')
         self.assertEqual(len(self.c.snapshot()['state']['runs']),1)
 
     def test_once_schedule_enqueues_one_slot_without_consuming_manual_schedule(self):

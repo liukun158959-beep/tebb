@@ -30,16 +30,18 @@ def _catalog(state):
     agents = {a['id']: a['name'] for a in state['agents']}
     runs = []
     for run in state['runs']:
-        if run.get('kind') in EXCLUDED_RUNS:
+        if run.get('kind') in EXCLUDED_RUNS and run.get('state')!='needs_input' and not run.get('source'):
             continue
         conversation = conversations.get(run['conversation'], {})
         project = run.get('workspace', {}).get('project_id', conversation.get('project_id', ''))
+        from .execution_flow import chain_view
+        chain=chain_view(run,state['runs'])
         runs.append(dict(id=run['id'], title=run['title'], conversation=run['conversation'],
             conversation_title=conversation.get('title', '原对话已移除'),
             project_id=project, project_name=names.get(project, '原项目已移除' if project else '未归属项目'),
-            agent=agents.get(run['agent'], '原伙伴已移除'), state=run['state'],
+            agent=agents.get(run['agent'], '原伙伴已移除'), state=chain['state'],
             delivery_state=run.get('delivery_state', ''), kind=run.get('kind', 'task'),
-            status=run.get('status', ''), error=run.get('error', ''),
+            status=run.get('clarification') or run.get('status', ''), error=chain['error'],
             answer=run.get('answer', ''), created=run.get('created', 0)))
     return projects, runs
 

@@ -50,7 +50,15 @@ class CollaborationTests(unittest.TestCase):
     def state(self): return self.service.snapshot()["state"]
 
     def action(self, **values):
-        return self.service.action(dict(request_id=uuid.uuid4().hex, conversation="group-research", **values))["state"]
+        result=self.service.action(dict(request_id=uuid.uuid4().hex, conversation="group-research", **values))["state"]
+        # Execution-layer fixtures begin after readiness. End-to-end readiness and
+        # the same-root transition are covered separately in test_execution_flow.
+        if values.get('type')=='send' and values.get('mode')=='task' and not values.get('run'):
+            with transaction(self.service.path) as (state,_):
+                run=next(r for r in state['runs'] if r['id']==result['runs'][-1]['id'])
+                run['kind']='plan' if run['agent']=='tebb' and run.get('members') else 'task'
+            result=self.state()
+        return result
 
     def plan(self, dependency=0):
         return json.dumps({"tasks": [dict(agent_id="research", title="研究", instructions="根据提供材料研究", depends_on=None),
@@ -68,8 +76,8 @@ class CollaborationTests(unittest.TestCase):
         task.update(state='succeeded',answer=json.dumps(dict(mode='task',instructions='control only')))
         self.service.tick();state=self.state()
         route=next(r for r in state['runs'] if r['id']==run['id'])
-        self.assertEqual(route['answer'],'');self.assertEqual(state['runs'][-1]['parent'],run['id'])
-        self.assertEqual(route['handoff'],state['runs'][-1]['id'])
+        self.assertEqual(route['answer'],'');self.assertIsNone(route['parent'])
+        self.assertEqual(route['kind'],'task');self.assertEqual(len(state['runs']),1)
         self.assertNotIn('已开始处理，任务进度会持续更新。',str(state['messages']))
 
     def test_public_snapshot_delta_updates_orders_deletions_and_redacts_internal_data(self):
@@ -350,7 +358,7 @@ class CollaborationTests(unittest.TestCase):
         self.service.tick(); root=self.state()['runs'][-1]
         self.chat.complete('collab:'+root['id']+':0',json.dumps(dict(mode='task',instructions='研究并写成报告')))
         self.service.tick(); child=self.state()['runs'][-1]
-        self.assertEqual(child['kind'],'plan');self.assertEqual(child['parent'],root['id'])
+        self.assertEqual(child['kind'],'task');self.assertIsNone(child['parent']);self.assertEqual(child['id'],root['id'])
         self.assertIn('研究并写成报告',child['input'] if 'input' in child else child['title'])
 
     def test_route_accepts_plain_code_in_one_call_without_executing_tools(self):
@@ -358,7 +366,7 @@ class CollaborationTests(unittest.TestCase):
         code='```python\ndef bubble_sort(a):\n    pass\n```';calls=[];events=[]
         class LLM:
             def chat(_,messages,tools,on_delta):
-                calls.append(copy.deepcopy(messages)); self.assertEqual([t['function']['name'] for t in tools],['start_background_task'])
+                calls.append(copy.deepcopy(messages)); self.assertEqual([t['function']['name'] for t in tools],['start_background_task','request_clarification'])
                 return dict(message=dict(content=code if len(calls)==1 else json.dumps(dict(mode='answer',text=code))),usage={})
         execute(request,lambda k,d:events.append((k,d)),llm=LLM())
         self.assertEqual(len(calls),1)
@@ -367,13 +375,13 @@ class CollaborationTests(unittest.TestCase):
         self.assertFalse(any(k=='status' and '纠正' in d for k,d in events))
 
     def test_plan_exposes_structured_submission_and_repairs_no_tool_prose_without_execution(self):
-        request=self.request();request.update(kind='plan',role=dict(self.request()['role'],id='tebb'),members=[dict(id='tebb',name='通用助手',role='日程和自动化')],budget=2)
+        request=self.request();request.update(kind='plan',role=dict(self.request()['role'],id='tebb'),members=[dict(id='research',name='研究助手',role='研究')],budget=2)
         events=[];calls=[]
-        plan=dict(tasks=[dict(agent_id='tebb',title='处理日程',instructions='核对时间后使用真实日程工具',depends_on=None,stage='collect')])
+        plan=dict(tasks=[dict(agent_id='research',title='核对资料',instructions='读取一手资料后核对结论',depends_on=None,stage='collect')])
         class LLM:
             def chat(_,messages,tools,on_delta):
                 calls.append(1);self.assertEqual([t['function']['name'] for t in tools],['submit_plan'])
-                self.assertIn('执行阶段',messages[0]['content'])
+                self.assertIn('禁止委派自己',messages[0]['content'])
                 if len(calls)==1:return dict(message=dict(content='当前没有日程工具，无法创建。'),usage={})
                 return dict(message=dict(role='assistant',tool_calls=[dict(id='plan',type='function',function=dict(name='submit_plan',arguments=json.dumps(plan)))]),usage={})
         execute(request,lambda k,d:events.append((k,d)),llm=LLM())
@@ -432,7 +440,7 @@ class CollaborationTests(unittest.TestCase):
         execute(request,lambda k,d:events.append((k,d)),llm=LLM())
         self.assertEqual(len(calls),1)
         results=[json.loads(d) for k,d in events if k=='result']
-        self.assertEqual(results,[dict(mode='task',instructions=request['text'])])
+        self.assertEqual(results,[dict(mode='task',instructions=request['text'],strategy='direct')])
         self.assertFalse(any(k=='tool_start' for k,d in events))
 
     def test_chat_artifact_can_be_saved_once_as_note_and_read_as_full_attachment(self):
@@ -557,9 +565,11 @@ class CollaborationTests(unittest.TestCase):
         action = dict(type="send", conversation="group-research", text="比较材料", target="", mode="task", request_id="same-request-0001")
         self.service.action(action); self.service.action(action)
         self.assertEqual(len(self.state()["runs"]), 1)
-        self.service.tick(); self.assertEqual(len(self.work.items), 1)
+        self.service.tick(); route=self.state()['runs'][0]
+        self.chat.complete('collab:'+route['id']+':0',json.dumps(dict(mode='task',instructions='比较材料',strategy='direct')))
+        self.service.tick();self.service.tick();self.assertEqual(len(self.work.items),1)
         self.action(type="send", text="现在能聊天吗", target="", mode="message")
-        self.service.tick(); self.assertEqual(len(self.chat.items), 1)
+        self.service.tick(); self.assertEqual(len(self.chat.items), 2)
         self.assertEqual(len(self.work.items), 1)
         with self.assertRaisesRegex(ValueError, "另一项操作"):
             self.service.action({**action, "text": "不同消息"})
@@ -568,7 +578,7 @@ class CollaborationTests(unittest.TestCase):
         self.action(type="send", text="研究并写作", target="", mode="task"); self.service.tick()
         self.work.complete(next(iter(self.work.items)), self.plan())
         self.service.tick(); state = self.state()
-        self.assertEqual([r["state"] for r in state["runs"]], ["succeeded", "pending", "waiting", "waiting"])
+        self.assertEqual([r["state"] for r in state["runs"]], ["waiting", "pending", "waiting"])
         self.service.tick(); research = self.state()["runs"][1]
         task = "collab:"+research["id"]+":0"
         self.work.complete(task, "已有来源的真实研究结果", evidence=dict(query="官方来源",text="SOURCE_LEDGER_SENTINEL")); self.service.tick(); self.service.tick()
@@ -590,7 +600,7 @@ class CollaborationTests(unittest.TestCase):
         rows = self.state()["runs"]
         self.assertEqual(rows[1]["state"], "cancelled"); self.assertEqual(rows[2]["state"], "cancelled")
         self.assertEqual(rows[-1]["state"], "queued")
-        self.assertEqual(rows[3]["state"], "cancelled")
+        self.assertEqual(rows[3]["state"], "queued")
 
     def test_failed_dependency_never_dispatches_its_writer(self):
         self.action(type="send", text="团队任务", target="", mode="task"); self.service.tick()
@@ -678,7 +688,7 @@ class CollaborationTests(unittest.TestCase):
         repo,research,writer=self.state()['runs'][1:4]
         self.assertEqual(writer['state'],'waiting');self.assertEqual(writer['stage'],'deliver')
         self.assertEqual(set(writer['dependencies']),{repo['id'],research['id']})
-        self.assertEqual(self.state()['runs'][0]['delivery_state'],'running')
+        self.assertEqual(self.state()['runs'][0]['chain']['state'],'running')
         research_req=self.work.requests['collab:'+research['id']+':0']
         self.assertEqual((research_req['search_budget'],research_req['fetch_budget']),(3,6))
         self.work.complete('collab:'+repo['id']+':0','源码结果',evidence=dict(kind='github',sources=[dict(kind='github',url='https://github.com/u/r/blob/main/core.py',level='body',text='SOURCE_CODE')]))
@@ -690,7 +700,7 @@ class CollaborationTests(unittest.TestCase):
         self.assertEqual(set(req['required_sources']),{'repository','web'})
         self.assertEqual(req['objective'],'完整对比报告')
         self.work.complete('collab:'+writer['id']+':0','最终报告',state='failed');self.service.tick()
-        self.assertEqual(self.state()['runs'][0]['delivery_state'],'failed')
+        self.assertEqual(self.state()['runs'][0]['chain']['state'],'failed')
 
     def test_citation_repair_has_a_reserved_call_and_no_extra_fetch_is_executed(self):
         request=self.request();request['budget']=4;events=[];calls=[];queries=[]

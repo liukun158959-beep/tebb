@@ -71,18 +71,18 @@ test('a frontend hot reload stays compatible with the previous backend without h
   await assert.rejects(()=>broken.loadCollaboration(info,''),/database unavailable/);
 });
 
-test('normal chat shows actual execution progress and tools while route handoff does not create a canned reply',()=>{
+test('normal chat shows one root task with expandable real child progress',()=>{
   environment();const state=initialDemo();state.selected='dm-tebb';state.revision=1;
   state.runs=[{id:'route',conversation:state.selected,agent:'tebb',state:'succeeded',kind:'route',events:[],updates:[],applied:0,title:'路由',step:0},
-    {id:'task',parent:'route',conversation:state.selected,agent:'tebb',state:'running',kind:'task',title:'研究',step:0,updates:[],applied:0,status:'正在调用：web_search',events:['正在思考与组织回答。','tool_start: web_search Agent docs','tool_end: web_search success']}];
+    {id:'task',parent:'route',conversation:state.selected,agent:'tebb',state:'running',kind:'task',title:'研究',answer:'正在整理来源。',step:0,updates:[],applied:0,status:'正在调用：web_search',events:['正在思考与组织回答。','tool_start: web_search Agent docs','tool_end: web_search success']}];
   state.messages=[{id:'route-message',conversation:state.selected,sender:'tebb',run:'route',text:'已开始处理，任务进度会持续更新。'},
     {id:'task-message',conversation:state.selected,sender:'tebb',run:'task',text:'正在整理来源。'}];
   const {ChatPrototype}=load('chat-prototype');let view;
   act(()=>{view=create(React.createElement(ChatPrototype,{developerMode:false,live:{state,act:async()=>true,busy:false,error:''}}));});
   const chat=view.root.findByProps({'aria-label':'协作聊天记录'});
-  assert(!text(chat).includes('已开始处理，任务进度会持续更新。'));
-  assert(text(chat).includes('正在思考与组织回答。'));assert(text(chat).includes('联网搜索 · 开始'));assert(text(chat).includes('联网搜索 · 结束'));
-  assert(text(chat).includes('正在整理来源。'));act(()=>view.unmount());
+  assert.equal(chat.findAll(node=>node.type==='article').length,1);act(()=>view.root.findByProps({'aria-label':'当前任务'}).props.onClick());const tasks=view.root.findAll(node=>node.props.className?.includes?.('cp-task')&&node.type==='article');assert.equal(tasks.length,1);
+  assert(text(view.root).includes('正在思考与组织回答。'));assert(text(view.root).includes('联网搜索 · 开始'));assert(text(view.root).includes('联网搜索 · 结束'));
+  assert(text(view.root).includes('正在整理来源。'));act(()=>view.unmount());
 });
 
 test('chat stays available during work; task supplements are scoped and applied at the next step', () => {
@@ -664,4 +664,16 @@ test('composer menu fits narrow and short viewports and is anchored by the avail
  assert.equal(small.bottom,128);assert(small.maxHeight<=284);
  const low=pickerBounds({left:10,top:20,bottom:60,width:300},{width:600,height:500});
  assert.equal(low.top,68);assert.equal(low.bottom,'auto');assert(low.maxHeight<=424);
+});
+
+
+test('awaiting goal offers supplement without spinning and keeps human message unchanged',()=>{
+  environment();const state=initialDemo();state.selected='dm-tebb';
+  const root={id:'clarify',conversation:state.selected,agent:'tebb',state:'needs_input',kind:'route',title:'test',step:0,updates:[],applied:0,calls:1,answer:'请补充具体目标',clarification:'请补充具体目标',events:['待补充'],chain:{state:'needs_input',calls:1,tool_calls:0,elapsed_ms:null,error:'',answer:'请补充具体目标',children:[]}};
+  state.runs=[root];state.messages=[{id:'human',conversation:state.selected,sender:'user',run:root.id,text:'test'},{id:'answer',conversation:state.selected,sender:'tebb',run:root.id,text:root.answer}];
+  const {ChatPrototype}=load('chat-prototype');let view;
+  act(()=>{view=create(React.createElement(ChatPrototype,{developerMode:false,live:{state,act:async()=>true,busy:false,error:''}}));});
+  const chat=view.root.findByProps({'aria-label':'协作聊天记录'});assert(text(chat).includes('test'));assert(text(chat).includes('尚未开始执行'));
+  const supplement=chat.findAllByType('button').find(node=>text(node)==='补充目标');assert(supplement);
+  act(()=>supplement.props.onClick());assert(text(view.root).includes('提交补充'));act(()=>view.unmount());
 });

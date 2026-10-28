@@ -1,9 +1,9 @@
 // Keep background progress separate from chat-window lifetime and gesture lines.
-export type FeedbackRun = { id:string; state:string; parent?:string; created?:number; kind?:string; title?:string; status?:string; answer?:string; error?:string; events?:string[] };
+export type FeedbackRun = { id:string; state:string; parent?:string; created?:number; kind?:string; title?:string; status?:string; answer?:string; error?:string; events?:string[];chain?:{state:string;error:string;answer:string} };
 export type FeedbackProgress = { enabled:boolean; task?:FeedbackRun & {text?:string} | null };
 export type Feedback = { key:string; text:string; error:boolean; working:boolean };
 const active = (run:FeedbackRun) => ['pending','queued','running','waiting','cancelling'].includes(run.state);
-const labels:Record<string,string> = {pending:'已收到',queued:'排队中',running:'处理中',waiting:'等待前序任务',cancelling:'正在停止',succeeded:'已完成',failed:'失败',timed_out:'超时',cancelled:'已停止',interrupted:'已中断'};
+const labels:Record<string,string> = {pending:'已收到',queued:'排队中',running:'处理中',waiting:'等待前序任务',cancelling:'正在停止',succeeded:'已完成',failed:'失败',timed_out:'超时',cancelled:'已停止',interrupted:'已中断',needs_input:'待补充 · 尚未开始执行'};
 const brief = (value:string, limit=150) => value.length>limit ? value.slice(0,limit)+'…' : value;
 
 export class PetFeedback {
@@ -19,7 +19,15 @@ export class PetFeedback {
       while(current.parent && !visited.has(current.id)) {visited.add(current.id);const parent=runs.find(r=>r.id===current.parent);if(!parent)break;current=parent;}
       return current;
     };
-    const candidates = runs.map((run,index)=>{const ancestor=root(run);return {run,key:'collab:'+ancestor.id,order:ancestor.created || runs.indexOf(ancestor),step:run.created || index};});
+    const roots=[...new Map(runs.map(run=>{const ancestor=root(run);return [ancestor.id,ancestor];})).values()];
+    const candidates:{run:FeedbackRun;key:string;order:number;step:number}[]=roots.map(ancestor=>{
+      const chain=runs.filter(run=>root(run).id===ancestor.id);
+      const failed=chain.find(run=>['failed','timed_out','interrupted'].includes(run.state));
+      const waiting=chain.find(run=>run.state==='needs_input');
+      const state=ancestor.chain?.state || (waiting?'needs_input':chain.some(active)?'running':failed?.state || (chain.some(run=>run.state==='cancelled')?'cancelled':ancestor.state));
+      const run={...ancestor,state,error:ancestor.chain?.error||failed?.error||ancestor.error,answer:ancestor.chain?.answer||ancestor.answer};
+      return {run,key:'collab:'+ancestor.id,order:ancestor.created||runs.indexOf(ancestor),step:0};
+    });
     if(progress.task)candidates.push({run:{...progress.task,title:progress.task.text},key:'task:'+progress.task.id,order:progress.task.created || 0,step:0});
     for(const {run,key} of candidates){
       if((this.started && !this.seen.has(key)) || active(run))this.eligible.add(key);

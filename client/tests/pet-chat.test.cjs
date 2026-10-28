@@ -148,3 +148,15 @@ test('floating toolbar creates a new conversation without cancelling work, prese
   await act(async()=>view.root.findByProps({'aria-label':'当前会话'}).props.onChange({target:{value:'old'}}));
   assert.equal(input().props.value,'保留旧草稿');assert(!calls.some(a=>a.type==='cancel'));await act(async()=>view.unmount());
 });
+
+
+test('floating clarification resumes the original root instead of creating another task',async()=>{
+  const bus=new EventTarget();bus.setInterval=()=>1;bus.clearInterval=()=>{};global.window=bus;const calls=[];
+  const state={revision:1,selected:'dm',agents:[{id:'tebb',name:'tebb'}],conversations:[{id:'dm',title:'对话',coordinator:'tebb'}],messages:[{id:'question',conversation:'dm',sender:'tebb',run:'root',text:'请说明目标'}],runs:[{id:'root',conversation:'dm',agent:'tebb',kind:'route',state:'needs_input',answer:'请说明目标',events:[],updates:[],calls:1}],models:[]};
+  const {PetChat}=load('pet-chat',{'./stream-text':{StreamText:({text})=>React.createElement('p',null,text)},'./api':{rpc:async(_i,method,args)=>{if(method==='load_task_progress')return {enabled:true};if(method==='collaboration_action')calls.push(args.action);return {state};}},'@tauri-apps/api/core':{isTauri:()=>false,invoke:async()=>false},'@tauri-apps/api/event':{listen:async()=>()=>{}}});let view;
+  await act(async()=>{view=create(React.createElement(PetChat,{backend:{port:1,token:'test'}}));});
+  const supplement=view.root.findAllByType('button').find(node=>text(node)==='补充目标');assert(supplement);
+  await act(async()=>supplement.props.onClick());await act(async()=>view.root.findByProps({'aria-label':'浮动聊天消息'}).props.onChange({target:{value:'把Hello改小写',selectionStart:10}}));
+  await act(async()=>view.root.findByType('form').props.onSubmit({preventDefault(){}}));
+  assert.equal(calls[0].run,'root');assert.equal(calls[0].conversation,'dm');await act(async()=>view.unmount());
+});
