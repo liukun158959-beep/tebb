@@ -63,6 +63,7 @@ class CalendarWrites:
                     start,end=(row['start'],row['end']) if row else (action.get('original_start'),action.get('original_end'))
                     if not domain.same_time(event,start,end):raise ValueError('远端时间已变化，请重新读取再删除。')
                 else:event=local_event
+                if datetime.fromisoformat(event['end'])<=datetime.now(TZ):raise ValueError('已结束日程支持编辑，删除范围本轮未扩大。')
                 op=dict(id=rid,type='delete',fingerprint=fingerprint(action),local_id=row['id'] if row else '',
                     local_event=local_event,remote=remote,event=event,calendar_id=remote['calendar_id'] if remote else LOCAL,
                     event_id=remote['event_id'] if remote else eid,state='prepared',stage='prepare',error='')

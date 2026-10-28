@@ -101,3 +101,9 @@ pnpm --dir client build
 - 隔离验证：`python -m unittest tests.test_schedule_week tests.test_schedule_month -v`；真实两周只读重查为空，无外部写入。
 
 #149/#150 验收：前端172项、类型检查及生产构建通过；真实 Edge 日/周/月均验证单击零草稿、原生双击新建、填内容后取消/×/Escape直接丢弃及连续重开。原生双击延后到FullCalendar完成mouseup时段命中回调后消费，不依赖两次dateClick累计；切换日期或卸载清理待处理动作。
+
+## 历史日程编辑（#152）
+
+用户确认开放已结束普通个人日程的标题和时间编辑。身份、组织者与完整参与人仍须核实；多人、全天、重复、跨日和归档事项等现行限制继续。未同步本地编辑不触碰飞书，已同步或原生飞书编辑核对原值后更新同一事件；历史编辑仍适用短时长、冲突及未知结果核对规则。新建/首次同步过去日程仍拒绝；本轮不开放已结束日程删除。
+
+#152 验证：日程/本地保存/删除完整相关48项通过；真实浏览器经认证RPC修改2026-10-23的历史日程标题，保持原时间并确认删除仍禁用。完整前端172项、类型及生产构建通过。复制验收入口：`python -m unittest tests.test_schedule_week tests.test_local_calendar tests.test_calendar_writes -v`。本轮无真实飞书写入，浏览器远端为隔离TimeCalendar。

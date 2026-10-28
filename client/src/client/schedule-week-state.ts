@@ -9,14 +9,12 @@ export type TimeDraft={start:string;end:string;summary?:string};
 export const scheduleWireTime=(iso:string)=>new Date(iso).toISOString().replace(/\.\d{3}Z$/,'Z');
 export const timeCompleted=(op?:ScheduleOperation|null)=>!!op&&['retimed','observed','unchanged','not_started'].includes(op.state);
 export const timeEditable=(event?:CalendarEvent)=>!!event&&event.editable===true&&event.verification==='confirmed'
-  &&new Date(event.end).getTime()>Date.now()&&(event.sync_state==='local'||!!event.edit_checked_at&&Date.now()-new Date(event.edit_checked_at).getTime()<300000);
+  &&(event.sync_state==='local'||!!event.edit_checked_at&&Date.now()-new Date(event.edit_checked_at).getTime()<300000);
 export const minutesInDay=(iso:string)=>{const s=beijingStamp(iso);return Number(s.slice(11,13))*60+Number(s.slice(14,16));};
-export function validTimeDraft(event:CalendarEvent,draft:TimeDraft,now=Date.now()){
+export function validTimeDraft(event:CalendarEvent,draft:TimeDraft){
   const a=Date.parse(draft.start),b=Date.parse(draft.end),duration=b-a,old=Date.parse(event.end)-Date.parse(event.start);
   if(!Number.isFinite(a)||!Number.isFinite(b)||a>=b)return '结束时间须晚于开始时间。';
   if(beijingDay(draft.start)!==beijingDay(draft.end))return '本批起止须在同一北京时间日期。';
-  if(Date.parse(event.end)<=now)return '已结束日程本批只读。';
-  if(b<=now)return '调整后的结束时间须晚于当前时间。';
   if(duration<900000&&duration!==old)return '缩放最短15分钟，原有短日程可保持原时长移动。';
   return '';
 }

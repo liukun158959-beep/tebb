@@ -25,7 +25,6 @@ def personal_time_reason(raw, event, calendar):
         return '日程来源类型未核实，本批只读'
     a, b = datetime.fromisoformat(event['start']), datetime.fromisoformat(event['end'])
     if a.date() != b.date(): return '跨日日程本批只读'
-    if b <= datetime.now(TZ): return '已结束日程本批只读'
     return ''
 
 
@@ -43,8 +42,6 @@ def time_fields(action):
     a, b = [parse_event_time(action.get(k), k).astimezone(TZ) for k in ('start', 'end')]
     old_a, old_b = [parse_event_time(action.get(k), k).astimezone(TZ) for k in ('original_start', 'original_end')]
     if a >= b or a.date() != b.date(): raise ValueError('起止须在同一北京时间日期，结束晚于开始。')
-    if b <= datetime.now(TZ): raise ValueError('调整后的结束时间须晚于当前时间。')
-    if old_b <= datetime.now(TZ): raise ValueError('已结束日程本批只读。')
     duration, old_duration = (b-a).total_seconds(), (old_b-old_a).total_seconds()
     if duration < 900 and duration != old_duration:
         raise ValueError('缩放最短 15 分钟，原有短日程仅可保持原时长移动。')

@@ -49,6 +49,34 @@ class LocalCalendarTests(unittest.TestCase):
         self.assertEqual(self.calendar.creates, []); self.assertEqual(self.calendar.patches, [])
         self.assertEqual(len(self.local.load()['events']), 1)
 
+    def test_history_edit_works_locally_without_allowing_past_creation_or_deletion(self):
+        event,_=self.create();past='2026-01-01'
+        result=self.local.change(dict(type='update',request_id=uuid.uuid4().hex,local_id=event['local_id'],
+            version=event['local_version'],summary='更正历史标题',start=past+'T05:00:00+08:00',end=past+'T05:30:00+08:00',item_id=''))
+        self.assertTrue(result['ok'],result);event=result['event'];self.assertTrue(event['editable'])
+        moved=self.service.change(dict(type='retime',request_id=uuid.uuid4().hex,calendar_id=LOCAL,event_id=event['event_id'],day=past,
+            original_start=event['start'],original_end=event['end'],original_summary=event['summary'],summary='第二次更正',
+            start=past+'T06:00:00+08:00',end=past+'T06:30:00+08:00'))
+        self.assertTrue(moved['ok'],moved);self.assertEqual(moved['operation']['event']['summary'],'第二次更正')
+        refused=self.local.change(dict(type='create',request_id=uuid.uuid4().hex,summary='过去新建',start=event['start'],end=event['end'],item_id=''))
+        self.assertFalse(refused['ok'])
+        refused=self.local.change(dict(type='delete',request_id=uuid.uuid4().hex,calendar_id=LOCAL,event_id=event['event_id'],version=moved['operation']['event']['local_version']))
+        self.assertFalse(refused['ok']);self.assertEqual(len(self.local.load()['events']),1)
+        self.assertEqual(self.calendar.creates,[]);self.assertEqual(self.calendar.patches,[])
+
+    def test_synced_history_edits_update_same_remote_and_preserve_local_identity(self):
+        event,_=self.create();synced,_=self.sync(event);event=synced['event'];past='2026-01-02'
+        remote=event['remote'];current=self.calendar.events[remote['event_id']]
+        current.update(start=past+'T05:00:00+08:00',end=past+'T05:30:00+08:00')
+        event=self.service.inspect_event(LOCAL,event['event_id'])['event'];self.assertTrue(event['editable'],event)
+        request=dict(type='retime',request_id=uuid.uuid4().hex,calendar_id=LOCAL,event_id=event['event_id'],day=past,
+            original_start=event['start'],original_end=event['end'],original_summary=event['summary'],summary='更正同步历史',
+            start=past+'T05:15:00+08:00',end=past+'T05:45:00+08:00')
+        result=self.service.change(request);self.assertTrue(result['ok'],result)
+        self.assertEqual(result['operation']['event']['local_id'],event['local_id'])
+        self.assertEqual(self.calendar.events[remote['event_id']]['summary'],'更正同步历史')
+        self.assertEqual(len(self.calendar.creates),1);self.assertEqual(len(self.calendar.patches),1)
+
     def test_sync_keeps_local_identity_work_link_and_deduplicates_remote(self):
         item = self.board.change(dict(type='create', request_id=uuid.uuid4().hex, fields=dict(title='事项')))['items'][0]
         event, _ = self.create(item_id=item['id'])

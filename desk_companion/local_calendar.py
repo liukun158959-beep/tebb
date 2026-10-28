@@ -80,8 +80,6 @@ class LocalCalendarService:
             link = next((l for l in state.get('schedule_links', []) if domain.event_key(l['event']) == LOCAL+'/'+row['id']), None)
             if link and work_items.require_item(state, link['item_id'])['archived']:
                 raise ValueError('关联事项已归档，请先恢复事项。')
-            if datetime.fromisoformat(row['end']) <= datetime.now(TZ):
-                raise ValueError('已结束日程本批只读。')
             if datetime.fromisoformat(row['start']).date() != datetime.fromisoformat(row['end']).date():
                 raise ValueError('跨日日程本批只读。')
         except ValueError as exc:
@@ -198,7 +196,7 @@ class LocalCalendarService:
             rid = self.board.validate_request_id(action.get('request_id'))
             uid = identifier(action.get('local_id') or rid)
             item_id = action.get('item_id', '')
-            fields = creation_fields(action.get('summary'), action.get('start'), action.get('end'))
+            fields = creation_fields(action.get('summary'), action.get('start'), action.get('end'), allow_past=action.get('type')=='update')
             with self.scheduling.hold_event(LOCAL, uid), ExitStack() as leases:
                 with self.board.workspace_transaction() as (state, _):
                     old_link = next((l['item_id'] for l in state.get('schedule_links', [])
@@ -218,6 +216,7 @@ class LocalCalendarService:
                         self.idle(state, row)
                         if old_link and work_items.require_item(state, old_link)['archived']:
                             raise ValueError('请先恢复关联事项。')
+                        if not row.get('remote') and not self.view(state,row)['editable']:raise ValueError(self.view(state,row)['edit_reason'])
                         if row.get('remote') and any(fields[k] != row[k] for k in fields):
                             raise ValueError('已同步日程请使用改期入口，标题暂不修改。')
                         row.update(fields, version=row['version']+1, updated_at=datetime.now(TZ).isoformat())
@@ -338,6 +337,7 @@ class LocalCalendarService:
                     result = self.scheduling.load_week(action['day'])
                     result.update(self.result(op, op['event']))
                     return result
+                if datetime.fromisoformat(row['start']).date()!=datetime.fromisoformat(row['end']).date():raise ValueError('跨日日程本批只读。')
                 fields = domain.time_fields(action)
                 with (self.board.hold_item(item_id) if item_id else ExitStack()):
                     with self.board.workspace_transaction() as (state, _):
@@ -352,6 +352,9 @@ class LocalCalendarService:
                                 raise ValueError('请先恢复关联事项。')
                             if not domain.same_time(row, fields['original_start'], fields['original_end']):
                                 raise ValueError('本地时间已变化，请重新调整。')
+                            if action.get('summary') is not None:
+                                if action.get('original_summary')!=row['summary']:raise ValueError('本地标题已变化，请重新读取后修改。')
+                                row['summary']=creation_fields(action['summary'],fields['start'],fields['end'],allow_past=True)['summary']
                             row.update(start=fields['start'], end=fields['end'], version=row['version']+1,
                                        updated_at=datetime.now(TZ).isoformat())
                             event = self.view(state, row)

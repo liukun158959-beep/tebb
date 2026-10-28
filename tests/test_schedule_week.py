@@ -69,6 +69,17 @@ class AdapterTimeTests(unittest.TestCase):
         self.assertEqual(body['start_time']['timezone'], 'Asia/Shanghai')
         self.assertNotIn('--idempotency-key', calls[-1])
 
+    def test_ended_personal_event_checks_attendees_and_remains_editable(self):
+        start='2026-01-01T05:00:00+08:00';end='2026-01-01T05:30:00+08:00'
+        raw=native_event(start_time=dict(timestamp=str(int(datetime.fromisoformat(start).timestamp()))),
+                         end_time=dict(timestamp=str(int(datetime.fromisoformat(end).timestamp()))))
+        adapter,calls=self.adapter(raw=raw)
+        result=adapter.inspect(adapter.primary(),'existing_0')
+        self.assertTrue(result['editable'],result)
+        self.assertTrue(any(args[1:3]==['event.attendees','list'] for args in calls))
+        adapter,_=self.adapter(raw=raw,pages=[dict(items=[dict(type='user',user_id='another')],has_more=False)])
+        self.assertFalse(adapter.inspect(adapter.primary(),'existing_0')['editable'])
+
     def test_empty_and_only_verified_self_organizer_are_editable(self):
         for items in ([], [dict(type='user', user_id='fixture-self', is_organizer=True)]):
             adapter, _ = self.adapter([dict(items=items, has_more=False)])
@@ -166,8 +177,7 @@ class WeekServiceTests(unittest.TestCase):
     def test_validation_cross_day_past_short_resize_and_no_change(self):
         for fields in (dict(end=DAY+'T10:00:00+08:00'),
                        dict(end=(datetime.fromisoformat(END)+timedelta(days=1)).isoformat()),
-                       dict(end=DAY+'T11:05:00+08:00'),
-                       dict(start='2020-01-01T09:00:00+08:00', end='2020-01-01T10:00:00+08:00')):
+                       dict(end=DAY+'T11:05:00+08:00')):
             self.assertFalse(self.service.change(dict(self.action(), **fields))['ok'])
         result = self.service.change(dict(self.action(), start=START, end=END))
         self.assertTrue(result['ok'], result); self.assertEqual(self.calendar.patches, [])

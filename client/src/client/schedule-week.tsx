@@ -25,7 +25,7 @@ import './calendar-interaction.css';
 
 type Props={info:BackendInfo|null;debug?:boolean;transport?:WeekTransport;target:ScheduleTarget;revision?:number;
   onClose:()=>void;onReturn:(id:string)=>void;onDay:(target:ScheduleTarget)=>void;onChange:()=>void;view?:'month'|'week'|'day';onViewDay?:(day:string)=>void;closeLabel?:string;onNavigationGuard?:(guard:((next:()=>void)=>void)|null)=>void;extraActions?:ReactNode;viewTabs?:ReactNode};
-type Form={key:string;start:string;end:string};
+type Form={key:string;start:string;end:string;summary:string};
 type KeyboardDraft={event:CalendarEvent;draft:TimeDraft};
 const sameDraft=(event:CalendarEvent,draft:TimeDraft)=>Date.parse(event.start)===Date.parse(draft.start)&&Date.parse(event.end)===Date.parse(draft.end)&&(draft.summary===undefined||draft.summary===event.summary);
 const safeDay=(event:CalendarEvent,fallback:string)=>{try{return event.start.includes('T')?beijingDay(event.start):event.start||fallback;}catch{return fallback;}};
@@ -69,8 +69,8 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
   const event=controller.event(selected),owner=controller.page.links.find(link=>calendarKey(link.event)===selected);
   const item=controller.page.items.find(i=>i.id===owner?.item_id);
   const busy=controller.pending.has(selected),blocked=controller.blocked(selected),checking=controller.checking.has(selected);
-  const initialForm=event&&event.start.includes('T')&&Number.isFinite(Date.parse(event.start))&&Number.isFinite(Date.parse(event.end))?{key:selected,start:beijingStamp(event.start),end:beijingStamp(event.end)}:null;
-  const dirty=!!draft?.existing&&(!!draft.summary.trim()||!!draft.item_id||draft.sync)||!!form&&!!initialForm&&(form.start!==initialForm.start||form.end!==initialForm.end||form.key!==initialForm.key);
+  const initialForm=event&&event.start.includes('T')&&Number.isFinite(Date.parse(event.start))&&Number.isFinite(Date.parse(event.end))?{key:selected,start:beijingStamp(event.start),end:beijingStamp(event.end),summary:event.summary}:null;
+  const dirty=!!draft?.existing&&(!!draft.summary.trim()||!!draft.item_id||draft.sync)||!!form&&!!initialForm&&(form.start!==initialForm.start||form.end!==initialForm.end||form.key!==initialForm.key||form.summary!==initialForm.summary);
   useEffect(()=>{onNavigationGuard?.(guard);return()=>onNavigationGuard?.(null);},[onNavigationGuard,dirty,form,selected,draft,local.busy,local.unknown]);
   useEffect(()=>{if(!active)return;const before=(event:Event)=>{if(dirty||local.unknown&&draft){event.preventDefault();guard((event as CustomEvent<{navigate:()=>void}>).detail.navigate);}};window.addEventListener?.('tebb-before-navigate',before);return()=>window.removeEventListener?.('tebb-before-navigate',before);},[active,dirty,form,selected,draft,local.unknown,local.busy]);
   useEffect(()=>controller.subscribe(redraw),[controller]);
@@ -174,9 +174,9 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
       extendedProps:{source,linked:controller.page.links.some(l=>calendarKey(l.event)===key),pending:controller.pending.has(key),unknown:!!pending&&!controller.pending.has(key)}};
   }),[visible,selected,keyboard,dirty,controller,version,view]);
   async function saveForm(){if(!form||!event||form.key!==selected)return false;try{setFormError('');
-    return await apply(event,{start:form.start===beijingStamp(event.start)?event.start:absoluteTime(form.start),end:form.end===beijingStamp(event.end)?event.end:absoluteTime(form.end)});
+    return await apply(event,{start:form.start===beijingStamp(event.start)?event.start:absoluteTime(form.start),end:form.end===beijingStamp(event.end)?event.end:absoluteTime(form.end),summary:form.summary});
   }catch(error){setFormError(String(error));return false;}}
-  function field(which:'start'|'end',value:string){if(initialForm)setForm({...initialForm,...form,[which]:value});}
+  function field(which:'start'|'end'|'summary',value:string){if(initialForm)setForm({...initialForm,...form,[which]:value});}
   const draftEvent=useMemo<CalendarEvent|null>(()=>{try{return draft&&{
     calendar_id:'tebb-draft',event_id:draft.id,summary:draft.summary||'新日程',start:absoluteTime(draft.start),end:absoluteTime(draft.end),
     status:'confirmed',eligible:true,reason:'',verification:'confirmed',error:'',checked_at:new Date().toISOString(),editable:true,
@@ -320,11 +320,11 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
           <button type="button" disabled={!timeEditable(event)||blocked||checking} onClick={()=>{if(view==='month'){guard(()=>onViewDay?.(beijingDay(event.start)));return;}controller.endInteraction();setKeyboard(null);setForm(initialForm);setFormError('');setPicker(null);focusDetails();}}>修改时间</button>
           {event.local_id&&<button type="button" disabled={blocked||local.busy} onClick={()=>editLocal(event)}>编辑日程 / 同步</button>}
           <button type="button" onClick={()=>guard(()=>onDay({day:safeDay(event,day),calendar_id:event.calendar_id,event_id:event.event_id,item_id:item?.id||target.item_id}))}>关联事项</button>
-          {<details><summary>更多</summary><button type="button" disabled={!timeEditable(event)||blocked||local.busy} onClick={()=>{if(window.confirm('删除这场日程？已同步日程会同时删除飞书记录，事项和AI历史保留。'))void local.change({type:'delete',calendar_id:event.calendar_id,event_id:event.event_id,version:event.local_version,original_start:event.start,original_end:event.end}).then(result=>{if(result.ok)setDetailsOpen(false);changes.current();void controller.read(day,true);});}}>删除日程</button>{local.error&&<p role="alert">{local.error}</p>}</details>}</div>
+          {<details><summary>更多</summary><button type="button" disabled={!timeEditable(event)||Date.parse(event.end)<=Date.now()||blocked||local.busy} onClick={()=>{if(window.confirm('删除这场日程？已同步日程会同时删除飞书记录，事项和AI历史保留。'))void local.change({type:'delete',calendar_id:event.calendar_id,event_id:event.event_id,version:event.local_version,original_start:event.start,original_end:event.end}).then(result=>{if(result.ok)setDetailsOpen(false);changes.current();void controller.read(day,true);});}}>删除日程</button>{local.error&&<p role="alert">{local.error}</p>}</details>}</div>
         {timeEditable(event)&&!blocked&&<p className="sw-keyboard-help">聚焦时间块后：空格抓取，方向键移动；Shift + 上下调整结束，Alt + 上下调整开始；Enter保存，Escape取消。</p>}
       </>}
       {form&&event&&form.key===selected&&<form className="sw-time-form" onSubmit={e=>{e.preventDefault();void saveForm();}}>
-        <div className="sw-fields"><span>开始</span><DateTimeField portalRoot={root.current} marker="start" placeholder="开始时间" value={form.start} disabled={blocked} open={picker==='start'} onOpen={()=>setPicker('start')} onClose={()=>setPicker(null)} onChange={value=>field('start',value)}/>
+        <label>标题<input aria-label="编辑日程标题" maxLength={120} required value={form.summary} disabled={blocked} onChange={e=>field('summary',e.target.value)}/></label><div className="sw-fields"><span>开始</span><DateTimeField portalRoot={root.current} marker="start" placeholder="开始时间" value={form.start} disabled={blocked} open={picker==='start'} onOpen={()=>setPicker('start')} onClose={()=>setPicker(null)} onChange={value=>field('start',value)}/>
           <span>结束</span><DateTimeField portalRoot={root.current} marker="end" placeholder="结束时间" value={form.end} disabled={blocked} open={picker==='end'} onOpen={()=>setPicker('end')} onClose={()=>setPicker(null)} onChange={value=>field('end',value)}/></div>
         {formError&&<p className="sc-error" role="alert">{formError}</p>}
         <div className="sc-actions"><button type="submit" className="wb-primary" disabled={!dirty||blocked}>保存时间</button><button type="button" disabled={busy} onClick={()=>{setForm(null);setPicker(null);setFormError('');}}>放弃表单</button></div>

@@ -44,13 +44,13 @@ def event_view(raw, calendar_id):
         verification='deleted' if status == 'cancelled' else 'confirmed', error='', checked_at=datetime.now(TZ).isoformat())
 
 
-def creation_fields(summary, start, end):
+def creation_fields(summary, start, end, *, allow_past=False):
     if not isinstance(summary, str) or not 1 <= len(summary.strip()) <= 120 or any(c in summary for c in '\r\n'):
         raise ValueError('日程标题须为 1–120 字且不能换行。')
     a, b = parse_event_time(start, '开始时间'), parse_event_time(end, '结束时间')
     if a >= b:
         raise ValueError('结束时间必须晚于开始时间。')
-    if b <= datetime.now(TZ):
+    if not allow_past and b <= datetime.now(TZ):
         raise ValueError('不能新建已经结束的安排，请选择现在或未来的时间。')
     return dict(summary=summary.strip(), start=a.astimezone(TZ).isoformat(), end=b.astimezone(TZ).isoformat())
 
