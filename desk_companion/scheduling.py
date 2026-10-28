@@ -86,6 +86,35 @@ class SchedulingService:
         except Exception as exc:
             return dict(ok=False, stage='read', error=f'周日程读取失败：{exc}。请重新核对。')
 
+    def load_month(self, day, refresh=False, request_id=''):
+        """Compose the complete visible month from the existing versioned week caches."""
+        from calendar import monthrange
+        from datetime import timedelta
+        try:
+            start, _ = day_range(day)
+            first = start.replace(day=1)
+            last = start.replace(day=monthrange(start.year, start.month)[1])
+            a = domain.week_range(first.date().isoformat())[0]
+            b = domain.week_range(last.date().isoformat())[1]
+            dates = [(a+timedelta(days=n)).date().isoformat() for n in range(0, (b-a).days, 7)]
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                pages = list(pool.map(lambda date: self.load_week(date, refresh, request_id), dates))
+            usable = [p for p in pages if p.get('ok')]
+            if not usable:
+                raise ValueError('；'.join(p.get('error', '读取失败') for p in pages))
+            page = copy.deepcopy(usable[-1])
+            errors = [f"{date}: {p.get('events_error') or p.get('error') or '读取未确认'}"
+                      for date, p in zip(dates, pages) if not p.get('ok') or not p.get('events_valid')]
+            events = {domain.event_key(e): e for p in usable for e in p['events']}
+            operations = {o['id']: o for p in usable for o in p.get('operations', [])}
+            page.update(day=day, month=True, week=True, week_start=a.date().isoformat(), week_end=b.date().isoformat(),
+                        events=sorted(events.values(), key=lambda e: (e['start'], e['event_id'])),
+                        operations=list(operations.values()), events_valid=not errors, events_error='；'.join(errors),
+                        checked_at=min((p.get('checked_at', '') for p in usable), default=''))
+            return page
+        except Exception as exc:
+            return dict(ok=False, stage='month_read', error=f'月日程读取失败：{exc}')
+
     def inspect_event(self, calendar_id, event_id):
         from .local_calendar import LOCAL
         if calendar_id == LOCAL:
@@ -187,7 +216,10 @@ class SchedulingService:
                     operation['conflict'] = True
                     with self.board.workspace_transaction() as (state, _): domain.cache_event(state, current)
                     raise ValueError('远端时间已变化，已保留最新时间，请重新调整。')
-                if domain.same_time(current, fields['start'], fields['end']):
+                summary=action.get('summary')
+                if summary is not None and action.get('original_summary')!=current['summary']:raise ValueError('远端标题已变化，请重新读取后修改。')
+                if summary is not None and (not isinstance(summary,str) or not 1<=len(summary.strip())<=120):raise ValueError('日程标题须为1至120字。')
+                if domain.same_time(current, fields['start'], fields['end']) and (summary is None or summary==current['summary']):
                     operation.update(state='unchanged', stage='committed')
                     self._save_operation(operation)
                     return self._time_result(operation, day)
@@ -197,11 +229,11 @@ class SchedulingService:
                 operation.update(state='calling', stage='remote')
                 writing = True; self._save_operation(operation); writing = False
                 remote_started = True
-                acknowledged = self.calendar.patch_time(calendar_id, event_id, fields['start'], fields['end'])
+                acknowledged = (self.calendar.patch_details(calendar_id,event_id,fields['start'],fields['end'],summary.strip()) if summary is not None else self.calendar.patch_time(calendar_id, event_id, fields['start'], fields['end']))
                 operation.update(state='remote_changed', stage='verify', event=acknowledged)
                 writing = True; self._save_operation(operation); writing = False
                 verified = self.calendar.get(calendar_id, event_id)
-                if not domain.same_time(verified, fields['start'], fields['end']):
+                if not domain.same_time(verified, fields['start'], fields['end']) or summary is not None and verified['summary']!=summary.strip():
                     operation['current_event'] = verified
                     raise ValueError('远端回执后读取到不同时间，修改结果未完整确认，请先核对。')
                 verified.update(editable=current['editable'], edit_reason='', edit_checked_at=verified['checked_at'])
@@ -398,6 +430,9 @@ class SchedulingService:
         return page
 
     def change(self, action):
+        if isinstance(action,dict) and action.get('type')=='delete':
+            from .calendar_writes import CalendarWrites
+            return CalendarWrites(self).delete(action)
         from .local_calendar import LOCAL
         if isinstance(action, dict) and action.get('calendar_id') == LOCAL:
             if action.get('type') in {'retime', 'reconcile_time'}:

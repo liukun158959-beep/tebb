@@ -7,8 +7,8 @@ export type SchedulePage={ok:boolean;day:string;item_id:string;calendar?:{id:str
 export type ScheduleAction={type:'create'|'link'|'unlink'|'resolve';request_id:string;item_id:string;version:number;day:string;summary?:string;start?:string;end?:string;calendar_id?:string;event_id?:string;operation_id?:string;resolution?:'link'|'absent';confirmed?:boolean};
 export type ScheduleTransport=(method:string,args:Record<string,unknown>)=>Promise<SchedulePage>;
 export type ScheduleTimeAction={type:'retime'|'reconcile_time';request_id:string;day:string;calendar_id:string;event_id:string;
-  original_start:string;original_end:string;start?:string;end?:string;operation_id?:string;confirmed?:boolean;verification?:string};
-export type ScheduleWeekPage=SchedulePage&{week:true;week_start:string;week_end:string;event?:CalendarEvent};
+  original_start:string;original_end:string;summary?:string;original_summary?:string;start?:string;end?:string;operation_id?:string;confirmed?:boolean;verification?:string};
+export type ScheduleWeekPage=SchedulePage&{week:true;week_start:string;week_end:string;month?:boolean;event?:CalendarEvent};
 export const calendarKey=(event:Pick<CalendarEvent,'calendar_id'|'event_id'>)=>event.calendar_id+'/'+event.event_id;
 export function addCalendarDays(day:string,count:number){return new Date(Date.parse(day+'T00:00:00Z')+count*86400000).toISOString().slice(0,10);}
 export function calendarWeekStart(day:string){const date=new Date(day+'T00:00:00Z');if(!Number.isFinite(date.getTime()))throw Error('请选择日期。');return addCalendarDays(day,-((date.getUTCDay()+6)%7));}
@@ -117,6 +117,7 @@ export function createScheduleDemo(work:()=>WorkPage):ScheduleTransport {
       const op={id:a.request_id,item_id:a.item_id||'',type:a.type,state:a.type as string==='sync'?'synced':'saved',stage:'committed',error:'',event:structuredClone(event)};
       localOperations.set(a.request_id,op);return {...snapshot(day,''),event:structuredClone(event),operation:op,change_state:'committed'};
     }
+    if(method==='load_schedule_month'){const day=String(args.day),first=day.slice(0,7)+'-01',date=new Date(first+'T00:00Z'),next=new Date(Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+1,1)).toISOString().slice(0,10),start=calendarWeekStart(first),end=addCalendarDays(calendarWeekStart(addCalendarDays(next,-1)),7);return {...weekSnapshot(day,String(args.request_id||'')),month:true,week_start:start,week_end:end,events:structuredClone(events.filter(e=>e.start.slice(0,10)<end&&e.end.slice(0,10)>=start))};}
     if(method==='load_schedule_week')return weekSnapshot(String(args.day),String(args.request_id||''));
     if(method==='inspect_schedule_event'){
       const event=events.find(e=>e.calendar_id===args.calendar_id&&e.event_id===args.event_id);

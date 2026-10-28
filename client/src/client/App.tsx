@@ -226,8 +226,8 @@ export function App() {
   const rememberFeishuRef = useRef<(snap: FeishuSnap) => void>(() => {});
   const statusGen = useRef(0);
   const boardSeen = useRef(false);
-  const { loading: boardLoading, loadError: boardLoadError, rowDeleting, agendaErrors, taskErrors,
-    loadBoardSnapshot, deleteAgenda, deleteTask } =
+  const { loading: boardLoading, loadError: boardLoadError, rowDeleting, taskErrors,
+    loadBoardSnapshot, deleteTask } =
     useBoardActions({ info, boardClock, setBoard, onLoaded: () => setBoardClock(null) });
   const openBoardRef = useRef<(refresh?: boolean) => void>(() => {});
   const [preview, setPreview] = useState<ChatItem[] | null>(debugRequested() ? DEBUG_FIXTURE : null);
@@ -2329,8 +2329,6 @@ export function App() {
                 debug={boardClock !== null}
                 onRefresh={() => { if(!debugKind)void loadBoardSnapshot(true); }}
                 deleting={rowDeleting}
-                deleteErrors={agendaErrors}
-                onDeleteEvent={deleteAgenda}
                 taskErrors={taskErrors}
                 onDeleteTask={(guid) => void deleteTask(guid)}
 

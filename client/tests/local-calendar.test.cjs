@@ -41,7 +41,7 @@ test('editor is nonmodal, updates its draft and cannot remove an established Fei
  act(()=>view.root.findByProps({'aria-label':'日程标题'}).props.onChange({target:{value:'输入留在草稿'}}));assert.equal(changed.summary,'输入留在草稿');assert.equal(draft.summary,'');
  act(()=>view.root.findByProps({'aria-label':'关闭日程表单'}).props.onClick());assert.equal(closed,1);
  await act(async()=>view.update(React.createElement(CalendarEventEditor,{value:{...draft,existing:event('synced',{sync_state:'synced',remote:{calendar_id:'cal',event_id:'remote'}})},items:[],busy:false,blocked:false,error:'',onChange(){},onSave(){},onClose(){}})));
- assert.equal(view.root.findByProps({type:'checkbox'}).props.disabled,true);assert.equal(view.root.findByProps({'aria-label':'日程标题'}).props.readOnly,true);await act(async()=>view.unmount());
+ assert.equal(view.root.findByProps({type:'checkbox'}).props.disabled,true);assert.equal(view.root.findByProps({'aria-label':'日程标题'}).props.readOnly,undefined);await act(async()=>view.unmount());
 });
 
 test('a refreshed local title and version replace an old inspection without unnecessary local permission calls',async()=>{

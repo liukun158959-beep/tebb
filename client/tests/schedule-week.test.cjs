@@ -162,12 +162,12 @@ test('real week component keeps FullCalendar time-zone/gesture gates and guards 
     './calendar-interaction.css':{},'./local-calendar-state':load('local-calendar-state.ts'),
     './calendar-event-editor':{CalendarEventEditor:()=>null},'./workspace-dialog':{WorkspaceDialog:({children})=>React.createElement('div',{},children)},
     './calendar-drag':{CalendarDragSurface:({children})=>React.createElement('div',{},children),CalendarDragContent:({children})=>React.createElement('div',{},children)},
-    '@fullcalendar/react':{default:Calendar},'@fullcalendar/timegrid':{},'@fullcalendar/interaction':{},'@fullcalendar/luxon3':{},'@fullcalendar/core/locales/zh-cn':{},
+    '@fullcalendar/react':{default:Calendar},'@fullcalendar/timegrid':{},'@fullcalendar/daygrid':{},'@fullcalendar/interaction':{},'@fullcalendar/luxon3':{},'@fullcalendar/core/locales/zh-cn':{},
     'framer-motion':{useReducedMotion:()=>true},'./datetime-field':{DateTimeField:props=>React.createElement('input',{'aria-label':props.marker,value:props.value,onChange:e=>props.onChange(e.target.value)})}}).ScheduleWeekPane;
   const current=event();let view;
-  const transport=async(method,args)=>{if(method==='load_local_calendar')return {ok:true,events:[],operations:[],batches:[]};if(method==='load_schedule_week')return page([current]);if(method==='inspect_schedule_event')return {ok:true,event:current};writes++;return receipt(args.action,{...current,start:args.action.start,end:args.action.end});};
+  const transport=async(method,args)=>{if(method==='load_local_calendar')return {ok:true,events:[],operations:[],batches:[]};if(method==='load_schedule_week'||method==='load_schedule_month')return page([current]);if(method==='inspect_schedule_event')return {ok:true,event:current};writes++;return receipt(args.action,{...current,start:args.action.start,end:args.action.end});};
   await act(async()=>{view=create(React.createElement(Week,{info:null,transport,target:{day},onClose:()=>closed=true,onReturn(){},onDay(){},onChange(){}}));});
-  assert.equal(calendarProps.timeZone,'Asia/Shanghai');assert.equal(calendarProps.snapDuration,'00:15:00');assert.equal(calendarProps.eventResizableFromStart,true);
+  assert.equal(calendarProps.slotMinTime,'00:00:00');assert.equal(calendarProps.slotMaxTime,'24:00:00');assert.equal(calendarProps.timeZone,'Asia/Shanghai');assert.equal(calendarProps.snapDuration,'00:15:00');assert.equal(calendarProps.eventResizableFromStart,true);
   const button=label=>view.root.findAllByType('button').find(b=>b.children.join('')===label);
   act(()=>calendarProps.eventClick({jsEvent:{preventDefault(){}},event:{id:'cal/event_0'}}));
   act(()=>button('修改时间').props.onClick());
@@ -183,5 +183,8 @@ test('real week component keeps FullCalendar time-zone/gesture gates and guards 
   act(()=>listeners.get('keydown')({key:'Escape',preventDefault(){}}));
   await act(async()=>calendarProps.eventDrop({oldEvent:{extendedProps:{source:current}},event:{start:new Date(time('11:00')),end:new Date(time('12:00'))},revert:()=>reverted++}));
   assert.equal(reverted,1);assert.equal(writes,0);
+  let selectedDay;await act(async()=>view.update(React.createElement(Week,{info:null,transport,target:{day},view:'month',onViewDay:date=>selectedDay=date,onClose(){},onReturn(){},onDay(){},onChange(){}})));
+  assert.equal(calendarProps.initialView,'dayGridMonth');assert.equal(calendarProps.fixedWeekCount,false);assert.equal(calendarProps.eventAllow({},{extendedProps:{source:current}}),false);
+  act(()=>calendarProps.navLinkDayClick(new Date(time('09:00'))));assert.equal(selectedDay,day);
   act(()=>view.unmount());
 });

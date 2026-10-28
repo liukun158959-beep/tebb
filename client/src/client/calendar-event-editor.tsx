@@ -8,7 +8,7 @@ export function CalendarEventEditor({value,items,busy,blocked,error,onChange,onS
   return <section className="sw-event-editor" role="dialog" aria-modal="false" aria-label={value.existing?'编辑日程':'新日程草稿'}>
     <header><div><h2>{value.existing?'编辑日程':'新日程'}</h2><p>{value.existing?(synced?'已同步到飞书':'仅本地保存'):'预览中 · 保存后才会创建'}</p></div><button type="button" disabled={busy} aria-label="关闭日程表单" onClick={onClose}>×</button></header>
     <form onSubmit={e=>{e.preventDefault();onSave();}}>
-      <label>标题<input aria-label="日程标题" value={value.summary} maxLength={120} required readOnly={synced} disabled={busy||blocked} onChange={e=>change({summary:e.target.value})} placeholder="这段时间做些什么？"/></label>
+      <label>标题<input aria-label="日程标题" value={value.summary} maxLength={120} required disabled={busy||blocked} onChange={e=>change({summary:e.target.value})} placeholder="这段时间做些什么？"/></label>
       <label>开始时间<input aria-label="日程开始时间" type="datetime-local" value={value.start} required disabled={busy||blocked} onChange={e=>change({start:e.target.value})}/></label>
       <label>结束时间<input aria-label="日程结束时间" type="datetime-local" value={value.end} required disabled={busy||blocked} onChange={e=>change({end:e.target.value})}/></label>
       <label>关联事项 · 可选<select aria-label="关联事项" value={value.item_id} disabled={busy||blocked} onChange={e=>change({item_id:e.target.value})}><option value="">独立日程，不关联事项</option>{items.filter(i=>!i.archived||i.id===value.item_id).map(i=><option key={i.id} value={i.id}>{i.title}{i.archived?' · 已归档':''}</option>)}</select></label>

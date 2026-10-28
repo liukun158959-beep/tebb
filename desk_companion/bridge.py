@@ -48,6 +48,9 @@ class Bridge:
     def change_schedule(self, action: dict) -> dict:
         return self._host.scheduling.change(action)
 
+    def load_schedule_month(self, day, refresh=False, request_id='') -> dict:
+        return self._host.scheduling.load_month(day, refresh, request_id)
+
     def load_schedule_week(self, day, refresh=False, request_id='') -> dict:
         return self._host.scheduling.load_week(day, refresh, request_id)
 

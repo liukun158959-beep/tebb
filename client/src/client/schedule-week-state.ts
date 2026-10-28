@@ -4,7 +4,7 @@ import { absoluteTime, addCalendarDays, beijingDay, beijingStamp, calendarKey, c
 export type WeekTransport=(method:string,args:Record<string,unknown>)=>Promise<unknown>;
 type StorageLike=Pick<Storage,'getItem'|'setItem'|'removeItem'>;
 export type TimeMarker=ScheduleTimeAction;
-export type TimeDraft={start:string;end:string};
+export type TimeDraft={start:string;end:string;summary?:string};
 // Calendar API timestamps are whole seconds; keep the existing RPC ISO contract.
 export const scheduleWireTime=(iso:string)=>new Date(iso).toISOString().replace(/\.\d{3}Z$/,'Z');
 export const timeCompleted=(op?:ScheduleOperation|null)=>!!op&&['retimed','observed','unchanged','not_started'].includes(op.state);
@@ -53,6 +53,8 @@ export class ScheduleWeekController {
   private storageDamaged=false;
   private storageKey='tebb.schedule.week.pending.v1';
   private interacting=false;
+  period:'week'|'month'='week';
+  setPeriod(period:'week'|'month'){if(this.period!==period){this.period=period;++this.serial;}}
   constructor(private transport:WeekTransport,day:string,private storage?:StorageLike,private id=()=>crypto.randomUUID()){
     this.page=empty(day);
     try{const saved=JSON.parse(storage?.getItem(this.storageKey)||'[]');if(!Array.isArray(saved))throw Error();
@@ -87,13 +89,13 @@ export class ScheduleWeekController {
     if(this.interacting)return false;
     const serial=++this.serial;this.loading=true;if(!this.storageDamaged)this.error='';this.emit();
     try{
-      const page=await this.transport('load_schedule_week',{day,refresh}) as ScheduleWeekPage;
+      const page=await this.transport(this.period==='month'?'load_schedule_month':'load_schedule_week',{day,refresh}) as ScheduleWeekPage;
       if(serial!==this.serial)return false;
       if(!page.ok)throw Error(page.error||'周日程读取失败。');
       this.adopt(page);
       for(const [key,marker] of [...this.unknown]){
         if(this.pending.has(key))continue;
-        const checked=await this.transport('load_schedule_week',{day,request_id:marker.request_id,refresh:false}) as ScheduleWeekPage;
+        const checked=await this.transport(this.period==='month'?'load_schedule_month':'load_schedule_week',{day,request_id:marker.request_id,refresh:false}) as ScheduleWeekPage;
         if(serial!==this.serial)return false;
         if(!checked.ok)continue;
         if(checked.week)this.adopt(checked); // Current cache, never the historical operation.event snapshot.
@@ -132,9 +134,9 @@ export class ScheduleWeekController {
     if(this.blocked(key)||this.checking.has(key)){this.error='此日程正在保存或待核对。';this.emit();return false;}
     if(!timeEditable(event)){this.error=event.edit_reason||'请先核实编辑权限。';this.emit();return false;}
     const invalid=validTimeDraft(event,draft);if(invalid){this.error=invalid;this.emit();return false;}
-    if(Date.parse(event.start)===Date.parse(draft.start)&&Date.parse(event.end)===Date.parse(draft.end))return true;
+    if(Date.parse(event.start)===Date.parse(draft.start)&&Date.parse(event.end)===Date.parse(draft.end)&&(draft.summary===undefined||draft.summary===event.summary))return true;
     return this.submit({type:'retime',request_id:this.id(),day:beijingDay(draft.start),calendar_id:event.calendar_id,event_id:event.event_id,
-      original_start:event.start,original_end:event.end,start:scheduleWireTime(draft.start),end:scheduleWireTime(draft.end)});
+      ...(draft.summary===undefined?{}:{summary:draft.summary,original_summary:event.summary}),original_start:event.start,original_end:event.end,start:scheduleWireTime(draft.start),end:scheduleWireTime(draft.end)});
   }
   async reconcile(key:string){
     const marker=this.unknown.get(key),event=this.event(key);

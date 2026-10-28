@@ -21,7 +21,7 @@ export class LocalCalendarController{
   async read(){const serial=++this.serial;this.loading=true;this.emit();try{
     const page=await this.transport('load_local_calendar',{request_id:this.unknown?.request_id||''}) as LocalCalendarPage;
     if(serial!==this.serial)return false;if(!page.ok)throw Error(page.error||'本地日程读取失败。');this.page=page;
-    if(page.operation&&['saved','synced','resolved_absent','retimed','observed'].includes(page.operation.state)){this.clear();this.error='';this.notice='已读取原操作回执。';}
+    if(page.operation&&['saved','synced','resolved_absent','retimed','observed','deleted'].includes(page.operation.state)){this.clear();this.error='';this.notice='已读取原操作回执。';}
     if(this.unknown?.type==='sync'&&page.events.some(e=>e.local_id===this.unknown?.local_id&&e.sync_state==='synced')){this.clear();this.error='';this.notice='已读取现有飞书绑定，不会重复创建。';}
     if(this.batch)this.batch=page.batches.find(b=>b.id===this.batch!.id)||this.batch;
     return true;

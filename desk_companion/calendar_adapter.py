@@ -177,6 +177,17 @@ class CalendarAdapter:
             raise CalendarError('飞书修改回执缺少原事件身份，结果未确认。')
         return event_view(raw, calendar_id)
 
+    def delete(self, calendar_id, event_id):
+        self._call(['events','delete','--calendar-id',identifier(calendar_id),'--event-id',identifier(event_id),'--need-notification','true'])
+
+    def patch_details(self, calendar_id, event_id, start, end, summary):
+        a,b=parse_event_time(start,'开始'),parse_event_time(end,'结束')
+        body=dict(summary=summary,start_time=dict(timestamp=str(int(a.timestamp())),timezone='Asia/Shanghai'),
+                  end_time=dict(timestamp=str(int(b.timestamp())),timezone='Asia/Shanghai'),need_notification=False)
+        data=self._call(['events','patch','--calendar-id',identifier(calendar_id),'--event-id',identifier(event_id),'--user-id-type','open_id','--data',json.dumps(body,ensure_ascii=False)])
+        if not isinstance(data.get('event'),dict) or data['event'].get('event_id')!=event_id:raise CalendarError('修改回执身份未确认。')
+        return event_view(data['event'],calendar_id)
+
     def day(self, calendar_id, day):
         a, b = day_range(day)
         rows = self._call(['events', 'instance_view', '--calendar-id', identifier(calendar_id),

@@ -53,6 +53,8 @@ class LocalCalendarService:
         return row
 
     def idle(self, state, row):
+        if any(o.get('type')=='delete' and o.get('local_id')==row['id'] and o['state'] in ACTIVE for o in self.operations(state).values()):
+            raise ValueError('此日程删除结果待核对。')
         op = self.operations(state).get(row.get('sync_operation'))
         if op and op['state'] in ACTIVE:
             raise ValueError('同步执行中或结果未确认，请先按原编号核对。')
@@ -159,7 +161,7 @@ class LocalCalendarService:
             return dict(ok=False, stage='read', error=f'本地日程读取失败：{exc}')
 
     def result(self, operation, event=None):
-        successful = operation['state'] in {'saved', 'synced', 'resolved_absent', 'retimed', 'observed'}
+        successful = operation['state'] in {'saved', 'synced', 'resolved_absent', 'retimed', 'observed', 'deleted'}
         return dict(ok=successful, operation=self.public(operation), event=event,
                     request_id=operation['id'], stage=operation['stage'],
                     change_state='committed' if successful else 'unconfirmed' if operation['state'] in ACTIVE else 'not_changed',
@@ -312,7 +314,7 @@ class LocalCalendarService:
                                 self.observe(current, remote)
                                 result['operation']['event'] = self.view(state, current)
                                 domain.cache_event(state, result['operation']['event'])
-                                if item_id and result['operation']['state'] in {'retimed', 'observed'}:
+                                if item_id and result['operation']['state'] in {'retimed', 'observed', 'deleted'}:
                                     work_items.touch_item(work_items.require_item(state, item_id))
                         return result
                 if action['type'] == 'reconcile_time':
@@ -587,6 +589,9 @@ class LocalCalendarService:
     def change(self, action):
         if not isinstance(action, dict):
             return dict(ok=False, error='日程操作必须为对象。')
+        if action.get('type') in {'delete','resolve_delete'}:
+            from .calendar_writes import CalendarWrites
+            return CalendarWrites(self.scheduling).delete(action) if action['type']=='delete' else CalendarWrites(self.scheduling).resolve(action)
         handlers = {'create': self.save, 'update': self.save, 'sync': self.sync, 'resolve_sync': self.resolve,
                     'resolve_save': self.resolve_save, 'prepare_sync': self.prepare_batch}
         handler = handlers.get(action.get('type'))

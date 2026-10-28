@@ -53,8 +53,8 @@ def time_fields(action):
 
 
 def time_pending(state, calendar_id, event_id):
-    return [op for op in state.get('schedule_operations', {}).values()
-            if op['type'] == 'retime' and op.get('calendar_id') == calendar_id and op.get('event_id') == event_id
+    return [op for op in [*state.get('schedule_operations', {}).values(), *state.get('local_calendar_operations',{}).values()]
+            if op['type'] in {'retime','delete'} and op.get('calendar_id') == calendar_id and op.get('event_id') == event_id
             and op['state'] in {'prepared', 'calling', 'remote_changed', 'unconfirmed'}]
 
 

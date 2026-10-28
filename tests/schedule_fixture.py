@@ -49,6 +49,7 @@ class TimeCalendar(FakeCalendar):
     def __init__(self):
         super().__init__()
         self.patches = []
+        self.deletes = []
 
     def primary(self):
         return dict(super().primary(), owner_id='fixture-self', identity_verified=True)
@@ -70,3 +71,13 @@ class TimeCalendar(FakeCalendar):
         current = dict(old, start=start, end=end, checked_at=datetime.now(TZ).isoformat())
         self.events[event_id] = copy.deepcopy(current)
         return current
+
+    def delete(self, calendar_id, event_id):
+        self.deletes.append((calendar_id,event_id))
+        self.events.pop(event_id,None)
+
+    def patch_details(self, calendar_id, event_id, start, end, summary):
+        result=self.patch_time(calendar_id,event_id,start,end)
+        result['summary']=summary
+        self.events[event_id]=copy.deepcopy(result)
+        return result
