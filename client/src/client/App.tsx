@@ -1,4 +1,4 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Fragment, lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Button, Card, CardBody } from "reend-components";
@@ -93,7 +93,7 @@ import {
 } from "./settings";
 
 const LiveCollaboration = lazy(() => import("./live-collaboration").then(module => ({ default: module.LiveCollaboration })));
-type Pane = "work" | "chat" | "board" | "feishu" | "settings" | "automation" | "monitor" | "video" | "collaboration";
+type Pane = "work" | "chat" | "board" | "feishu" | "settings" | "automation" | "monitor" | "video" | "collaboration" | "pet";
 
 const debugKind = debugPane();
 const boardDebug = debugKind === "board" || debugKind === "feishu" || debugKind === "automation" || debugKind === "monitor" || debugKind === "video";
@@ -1879,7 +1879,7 @@ export function App() {
     <span className="tebb-nav-group">偏好</span>
     {developerMode && <RailButton icon="memory" label="旧助手记忆调试" active={pane === "chat" && chatFace === "memory"} onClick={() => navigateWorkspace(()=>void openMemory())} />}
     <RailButton icon="settings" label="设置" active={pane === "settings"} onClick={() => navigateWorkspace(()=>setPane("settings"))} />
-    <div className="tebb-nav-actions"><RailButton icon="pet" label="唤出桌宠 ↗" onClick={() => { void invoke("set_pet_visible", { visible: true }).catch(err => setError(`唤出桌宠失败：${String(err)}`)); }} /></div>
+    <div className="tebb-nav-actions"><RailButton icon="pet" label="桌宠" active={pane==='pet'} onClick={()=>navigateWorkspace(()=>setPane('pet'))}/></div>
   </>;
 
   return (
@@ -1912,7 +1912,7 @@ export function App() {
       <WorkspaceRail developer={developerMode} onToggle={() => changeDeveloperMode(!developerMode)}>{workspaceNavigation}</WorkspaceRail>
       <main className="main-workspace relative z-10 flex min-w-0 flex-1 flex-col">
         <TopToolbar title={pane === "chat" ? noteSessionId ? "笔记" : ({ thread: "对话", memory: "记忆", knowledge: "知识库", notebooks:"笔记" })[chatFace] :
-          ({ work: "事项", board: "日程", feishu: "飞书", settings: "设置", automation: "自动化", monitor: "AI 执行", video: "视频学习", collaboration: "伙伴聊天" })[pane]}
+          ({ work: "事项", board: "日程", feishu: "飞书", settings: "设置", automation: "自动化", monitor: "AI 执行", video: "视频学习", collaboration: "伙伴聊天", pet: "桌宠" })[pane]}
           model={modelItems.find(m => m.id === activeModelId)?.model ? `默认：${modelItems.find(m => m.id === activeModelId)?.model}` : ""} connected={!!info || !!debugKind} busy={busy || noteBusy}
           onNewChat={coreChat ? () => { setPane("collaboration"); window.dispatchEvent(new CustomEvent("tebb-new-chat")); } : undefined}
           onFile={() => setLocalDialog("file")} onFolder={openProjectFolder} onTerminal={openTerminal} sidebarOpen={sidebarState.open} sidebarAvailable={sidebarState.available} onSidebarToggle={togglePreview} />
@@ -2235,14 +2235,15 @@ export function App() {
                 {composerNotice && <p className="composer-feedback" role="status">{composerNotice}</p>}
               </div>
             </section>
+          ) : pane === "pet" ? (
+            <section key="pet" className="flex-1 overflow-y-auto px-8 py-6"><h1 className="text-2xl mb-4">桌宠</h1><p className="mb-5 text-sm text-muted-foreground">选择外观、预览并管理桌宠窗口。</p><PetSettings info={info} debug={!!debugKind}/></section>
           ) : pane === "settings" ? (
             <section
               key="settings"
               className="flex-1 overflow-y-auto px-8 py-6"
             >
-              <nav className="workspace-tabs" aria-label="设置分类">{[['assistant','模型与人设'],['connections','连接与网络'],['appearance','桌宠与外观'],['about','版本与诊断']].map(([id,label])=><button type="button" key={id} aria-pressed={settingsSection===id} onClick={()=>setSettingsSection(id)}>{label}</button>)}</nav>
+              <nav className="workspace-tabs" aria-label="设置分类">{[['assistant','模型与人设'],['connections','连接与网络'],['appearance','界面外观'],['about','版本与诊断']].map(([id,label])=><button type="button" key={id} aria-pressed={settingsSection===id} onClick={()=>setSettingsSection(id)}>{label}</button>)}</nav>
               <div hidden={settingsSection!=='about'}><ReleaseSettings info={info} onShowIntro={releaseIntro.show}/>{developerMode&&<button type="button" className="desk-menu-item" onClick={()=>setAgentDebugOpen(true)}>调用调试</button>}</div>
-              <div hidden={settingsSection!=='appearance'}><PetSettings info={info} debug={!!debugKind}/></div>
               <div hidden={settingsSection!=='connections'}><ModelNetworkSettings info={info} debug={!!debugKind}/><StatusGrid cards={statuses} onOpenFeishu={()=>void openFeishu()}/></div>
               <div hidden={!['assistant','appearance'].includes(settingsSection)}><SettingsPane section={settingsSection==='appearance'?'appearance':'assistant'}
                 onOpenGuide={() => {
