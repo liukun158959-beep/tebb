@@ -10,12 +10,12 @@ export function ModelNetworkSettings({info,debug=false}:{info:BackendInfo|null;d
   async function save(){
     if(!info || !loaded || busy)return;
     setBusy(true);setError('');setNotice('');
-    try{const value=await rpc<Policy>(info,'save_model_network',{payload:{mode:policy.mode,proxy_url:policy.proxy_url,username:policy.username,password,clear_password:clear}});setPolicy(value);setNotice('已保存，后续模型请求使用此设置。');setClear(false);}
+    try{const value=await rpc<Policy>(info,'save_model_network',{payload:{mode:policy.mode,proxy_url:policy.proxy_url,username:policy.username,password,clear_password:clear}});setPolicy(value);setNotice('已保存，后续模型和搜索请求使用此设置。');setClear(false);}
     catch(e){setError(String(e));}finally{setPassword('');setBusy(false);}
   }
   const disabled=!loaded||busy||debug;
   return <section className="mb-6 border border-border bg-card/80 p-5" aria-label="模型网络设置">
-    <h2 className="text-lg font-semibold">模型请求网络</h2><p className="mt-1 text-xs leading-6 text-muted-foreground">用于伙伴聊天、飞书 Agent 和资讯／视频的模型调用。网页搜索、平台登录沿用各自的网络设置。</p>
+    <h2 className="text-lg font-semibold">模型与搜索网络</h2><p className="mt-1 text-xs leading-6 text-muted-foreground">用于模型调用及联网搜索。平台登录沿用各自的网络设置。</p>
     <fieldset disabled={disabled} className="mt-4 space-y-3"><legend className="sr-only">模型连接方式</legend>
       <label className="block text-sm">连接方式<select aria-label="模型连接方式" className="ml-3 rounded border border-border bg-background p-2" value={policy.mode} onChange={e=>{setPolicy(old=>({...old,mode:e.target.value as Policy['mode']}));setNotice('');}}><option value="system">沿用系统代理</option><option value="direct">直连（不走代理）</option><option value="custom">自定义代理</option></select></label>
       {policy.mode==='custom'&&<div className="grid gap-3 sm:grid-cols-2"><label className="text-xs sm:col-span-2">代理地址<input className="mt-1 w-full rounded border border-border bg-background p-2" aria-label="模型代理地址" placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080" value={policy.proxy_url} onChange={e=>setPolicy(old=>({...old,proxy_url:e.target.value}))}/></label><label className="text-xs">账号（可选）<input className="mt-1 w-full rounded border border-border bg-background p-2" autoComplete="off" aria-label="模型代理账号" value={policy.username} onChange={e=>setPolicy(old=>({...old,username:e.target.value}))}/></label><label className="text-xs">密码（可选）<input className="mt-1 w-full rounded border border-border bg-background p-2" type="password" autoComplete="new-password" aria-label="模型代理密码" placeholder={policy.has_password?'已保存，留空保留':'未设置'} value={password} onChange={e=>{setPassword(e.target.value);setClear(false);}}/></label>{policy.has_password&&<label className="text-xs"><input type="checkbox" checked={clear} onChange={e=>setClear(e.target.checked)}/> 清除已保存的代理密码</label>}</div>}

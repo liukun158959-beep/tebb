@@ -270,9 +270,7 @@ def fetch_source(url):
 
 
 def collect(day, cfg, progress):
-    from .envconf import require_llm_env
-    from .web_search import _post, search_endpoint, format_search
-    env = require_llm_env()
+    from .web_search import search_sources, format_search
     since = (date.fromisoformat(day) - timedelta(days=cfg["lookback_days"])).isoformat()
     candidates = []
     seen = set()
@@ -281,7 +279,7 @@ def collect(day, cfg, progress):
               if r.get("status") in {"published", "archived"} and since <= r["day"] < day
               for i in (r.get("report") or {}).get("items", [])}
     def search(query):
-        value = _post(search_endpoint(env["ATLAS_BASE_URL"]), env["ATLAS_API_KEY"], query,
+        value = search_sources(query,
                       on_status=lambda x: progress("status", x))
         format_search(value)  # 服务端错误不能作为工具成功记录。
         return value

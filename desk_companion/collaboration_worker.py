@@ -109,7 +109,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     allowed_fetch = kind == "task" and "网页读取" in role.get("tools", [])
     search_budget = max(0, min(4, int(request.get("search_budget", 2))))
     fetch_budget = max(0, min(8, int(request.get("fetch_budget", 4))))
-    from .web_search import WEB_SEARCH_SPEC, search_sources, search_endpoint, format_search
+    from .web_search import WEB_SEARCH_SPEC, search_sources, format_search
     from .web_sources import FETCH_SPEC, fetch_page, search_ledger, evidence_sources, check_citations, urls, url_key, source_catalog, render_citations
     schema = {"type": "function", "function": {k: WEB_SEARCH_SPEC[k] for k in ("name", "description", "parameters")}}
     fetch_schema = {"type":"function", "function":FETCH_SPEC}
@@ -366,7 +366,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                 emit("tool_start", {"tool": name, "read_only": True, "query" if name=="web_search" else "url": query})
                 try:
                     if name=="web_search":
-                        payload=search(query) if search else search_sources(search_endpoint(model["base_url"]),model["api_key"],query,on_status=lambda status:emit("status",status))
+                        payload=search(query) if search else search_sources(query,on_status=lambda status:emit("status",status))
                         if isinstance(payload,str):
                             result=payload
                             ledger=[dict(url=url,title=url,text=payload[:600],level="snippet",kind="search") for url in urls(payload)]

@@ -557,6 +557,18 @@ class Bridge:
     def load_model(self) -> dict:
         return self._host.assistant_settings.load_model()
 
+    def load_search_settings(self) -> dict:
+        from .search_service import settings
+        return dict(ok=True, **settings())
+
+    def save_search_settings(self, payload: dict) -> dict:
+        from .search_service import save_settings
+        return save_settings(payload)
+
+    def test_search(self, query: str = 'Python asyncio TaskGroup official documentation') -> dict:
+        from .search_service import probe
+        return probe(query)
+
     def load_model_network(self) -> dict:
         from .model_network import public
         return dict(ok=True, **public())

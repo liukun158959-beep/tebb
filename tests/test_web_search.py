@@ -1,157 +1,147 @@
-"""搜索临时故障恢复与真实工具失败记录，全部离线。"""
-import io
+"""Provider fault injection uses real HTTPX parsing, no external network."""
 import json
-import ssl
+import os
+import tempfile
 import unittest
-import urllib.error
-import http.client
-from types import SimpleNamespace
 from unittest.mock import patch
+import httpx
+from desk_companion import search_service as service, web_search
 
-from atlas.testing import FakeLLM
-from desk_companion import assistant, web_search
-
-CFG = {"ATLAS_API_KEY": "test-secret", "ATLAS_BASE_URL": "https://example.invalid/v1", "ATLAS_MODEL": "fake"}
-GOOD = {"results": [{"title": "天气来源", "link": "https://example.invalid/weather", "snippet": "晴"}]}
+GOOD_TEXT = 'Title: Python TaskGroup\nURL: https://docs.python.org/3/library/asyncio-task.html\nPublished: N/A\nHighlights:\nStructured concurrency'
+RSS = '<rss><channel><item><title>Official</title><link>https://example.org/doc</link><description>source</description></item></channel></rss>'
 
 
-def response(payload):
-    return io.BytesIO(json.dumps(payload).encode())
+def exa(request, *, text=GOOD_TEXT, sse=True, result=None):
+    body = json.loads(request.content)
+    data = dict(jsonrpc='2.0', id=body['id'], result=result or {'content': [{'type': 'text', 'text': text}]})
+    return httpx.Response(200, text='event: message\ndata: ' + json.dumps(data) + '\n\n' if sse else json.dumps(data),
+                          headers={'content-type': 'text/event-stream' if sse else 'application/json'})
 
 
 class SearchTests(unittest.TestCase):
     def setUp(self):
-        self.addCleanup(patch.stopall)
-        patch("desk_companion.envconf.require_llm_env", return_value=CFG).start()
-        self.sleep = patch.object(web_search.time, "sleep").start()
-        self.urlopen = patch.object(web_search.urllib.request, "urlopen").start()
+        self.folder = tempfile.TemporaryDirectory(); self.addCleanup(self.folder.cleanup)
+        self.env = patch.dict(os.environ, {'DESK_COMPANION_DATA_DIR': self.folder.name}); self.env.start(); self.addCleanup(self.env.stop)
+        self.requests = []
 
-    def test_tls_timeout_retries_and_returns_real_sources(self):
-        self.urlopen.side_effect = [urllib.error.URLError(TimeoutError("TLS handshake timed out")), response(GOOD)]
-        statuses = []
-        result = web_search.web_search({"query": "苏州天气"}, on_status=statuses.append)
-        self.assertIn("天气来源", result)
-        self.assertEqual(self.urlopen.call_count, 2)
-        self.assertEqual(len(statuses), 1)
-        self.assertIn("重试", statuses[0])
-        self.assertTrue(all(call.kwargs["timeout"] <= 30 for call in self.urlopen.call_args_list))
+    def transport(self, handler):
+        def call(request):
+            self.requests.append(request)
+            return handler(request)
+        mock = patch.object(service.model_network, 'http_client', side_effect=lambda *a, **k: httpx.Client(transport=httpx.MockTransport(call)))
+        mock.start(); self.addCleanup(mock.stop)
 
-    def test_upstream_timeout_inside_http_success_retries_once(self):
-        self.urlopen.side_effect = [response({"error": "upstream TLS handshake timeout"}), response(GOOD)]
-        self.assertIn("天气来源", web_search.web_search({"query": "苏州天气"}))
-        self.assertEqual(self.urlopen.call_count, 2)
+    def test_public_sse_and_json_without_model_configuration_or_credentials(self):
+        for sse in (True, False):
+            self.transport(lambda request: exa(request, sse=sse))
+            with patch('desk_companion.envconf.require_llm_env', side_effect=AssertionError('must not read model')):
+                result = service.search('Python TaskGroup')
+            self.assertEqual(result['provider'], 'exa'); self.assertEqual(result['results'][0]['published_date'], '')
+            request = self.requests[-1]; self.assertNotIn('authorization', request.headers)
+            args = json.loads(request.content)['params']['arguments']
+            self.assertIn('objective', args); self.assertEqual(args['query'], 'Python TaskGroup')
 
-    def test_permissions_certificate_and_empty_results_do_not_retry(self):
-        failures = [urllib.error.HTTPError("https://example.invalid", 401, "Unauthorized", {}, io.BytesIO(b'{}')),
-                    urllib.error.URLError(ssl.SSLCertVerificationError("certificate verify failed")),
-                    response({"results": []}),
-                    response({"error": "invalid_client request timeout"})]
-        for failure in failures:
-            with self.subTest(failure=type(failure).__name__):
-                self.urlopen.reset_mock(side_effect=True)
-                if isinstance(failure, Exception):
-                    self.urlopen.side_effect = failure
-                else:
-                    self.urlopen.return_value = failure
-                with self.assertRaises(RuntimeError):
-                    web_search.web_search({"query": "苏州天气"})
-                self.assertEqual(self.urlopen.call_count, 1)
+    def test_unsupported_and_rate_limit_are_not_retried_and_share_cooldown(self):
+        for status in (404, 405, 501, 429):
+            with self.subTest(status=status):
+                service._cooldown('exa', 1)
+                with patch.object(service.time, 'time', return_value=10**12):
+                    self.requests.clear()
+                    self.transport(lambda r: httpx.Response(status, headers={'retry-after': '60'}, text='<html>PRIVATE</html>') if r.url.host == 'mcp.exa.ai' else httpx.Response(200, text=RSS))
+                    first = service.search('query'); second = service.search('another')
+                self.assertEqual(first['provider'], 'bing-rss')
+                self.assertEqual(sum(r.url.host == 'mcp.exa.ai' for r in self.requests), 1)
+                self.assertEqual(second['attempts'][0]['category'], 'cooldown')
+                self.assertNotIn('PRIVATE', str(first)); self.assertNotIn('<html>', web_search.format_search(first))
 
-    def test_retry_uses_remaining_budget_and_stops_when_exhausted(self):
-        self.urlopen.side_effect = [urllib.error.URLError(TimeoutError("timeout")), response(GOOD)]
-        with patch.object(web_search.time, "monotonic", side_effect=[0, 0, 29, 59]):
-            self.assertEqual(web_search._post(CFG["ATLAS_BASE_URL"], "test", "weather"), GOOD)
-        self.assertEqual([c.kwargs["timeout"] for c in self.urlopen.call_args_list], [30, 1])
-        self.urlopen.reset_mock()
-        self.urlopen.side_effect = urllib.error.URLError(TimeoutError("timeout"))
-        with patch.object(web_search.time, "monotonic", side_effect=[0, 0, 60]):
-            with self.assertRaises(RuntimeError):
-                web_search._post(CFG["ATLAS_BASE_URL"], "test", "weather")
-        self.assertEqual(self.urlopen.call_count, 1)
+    def test_transient_retry_then_success_has_attempt_diagnostics(self):
+        count = 0
+        def handler(r):
+            nonlocal count
+            count += 1
+            if count == 1: raise httpx.ConnectError('TLS EOF PRIVATE_TOKEN', request=r)
+            return exa(r)
+        self.transport(handler); result = service.search('query')
+        self.assertEqual([a['ok'] for a in result['attempts']], [False, True])
+        self.assertEqual(result['attempts'][0]['category'], 'connection_error'); self.assertNotIn('PRIVATE_TOKEN', str(result))
 
-    def test_exhausted_search_is_failed_in_atlas_tool_record(self):
-        self.urlopen.side_effect = urllib.error.URLError(TimeoutError("TLS handshake timed out test-secret"))
-        statuses = []
-        host = SimpleNamespace(state=SimpleNamespace(persona="你是凯尔希。", max_steps=8),
-                               ui=lambda fn: fn(), on_llm_delta=lambda _: None, on_stream_status=statuses.append)
-        with patch.object(assistant, "require_llm_env", return_value=CFG):
-            agent = assistant.build_agent(host)
-        agent.llm = FakeLLM([{"role": "assistant", "content": "", "tool_calls": [{"id": "s1", "type": "function",
-            "function": {"name": "web_search", "arguments": '{"query":"苏州天气"}'}}]}, "搜索失败，请稍后再试。"])
-        agent.run("苏州天气", run_id="search-failure")
-        events = agent.journal.get_events("search-failure")
-        tool = [e for e in events if e.event_type == "tool_after_call"][-1]
-        self.assertEqual(tool.payload["status"], "failed")
-        self.assertNotIn("test-secret", tool.payload["result"]["output"])
-        self.assertEqual(self.urlopen.call_count, 3)  # Two primary attempts, one public fallback.
-        self.assertTrue(any("重试" in text for text in statuses))
+    def test_auth_and_certificate_failures_are_not_hidden(self):
+        for status in (401, 403, 'certificate'):
+            self.requests.clear()
+            def handler(r):
+                if status == 'certificate': raise httpx.ConnectError('[SSL: CERTIFICATE_VERIFY_FAILED] PRIVATE', request=r)
+                return httpx.Response(status)
+            self.transport(handler)
+            with self.assertRaises(service.SearchFailure) as caught: service.search('query')
+            self.assertEqual(len(self.requests), 1); self.assertNotIn('PRIVATE', str(caught.exception))
 
-    def test_fallback_has_provenance_and_never_sends_model_credentials(self):
-        primary=web_search.RetryableSearchError("timeout test-secret")
-        xml=b'<rss><channel><item><title>Official</title><link>https://example.org/doc</link><description>Source</description></item></channel></rss>'
-        with patch.object(web_search,"_post",side_effect=primary):
-            self.urlopen.return_value=io.BytesIO(xml)
-            payload=web_search.search_sources(CFG['ATLAS_BASE_URL'],"test-secret","Jev official")
-        self.assertEqual(payload['provider'],'bing-rss')
-        self.assertNotIn('test-secret',str(payload))
-        request=self.urlopen.call_args.args[0]
-        self.assertEqual(request.host,'www.bing.com')
-        self.assertNotIn('Authorization',dict(request.header_items()))
+    def test_bad_protocol_empty_and_invalid_urls_reach_fallback(self):
+        responses = [lambda r: httpx.Response(200, text='not-json'), lambda r: exa(r, text='No results'),
+                     lambda r: exa(r, result={'isError': True}), lambda r: httpx.Response(200, json={'id': 'wrong', 'result': {}}),
+                     lambda r: exa(r, text='Title: bad\nURL: javascript:alert(1)')]
+        for response in responses:
+            with self.subTest(response=response):
+                self.transport(lambda r: response(r) if r.url.host == 'mcp.exa.ai' else httpx.Response(200, text=RSS))
+                result = service.search('query')
+                self.assertEqual(result['provider'], 'bing-rss'); self.assertEqual(len(result['attempts']), 2)
 
-    def test_missing_primary_search_route_can_fallback_but_auth_cannot(self):
-        with patch.object(web_search,'_post',side_effect=web_search.SearchUnavailable('HTTP 404')), patch.object(web_search,'_bing_search',return_value=GOOD):
-            self.assertEqual(web_search.search_sources('unused','key','q')['provider'],'bing-rss')
-        with patch.object(web_search,'_post',side_effect=RuntimeError('HTTP 401')),patch.object(web_search,'_bing_search') as fallback:
-            with self.assertRaises(RuntimeError):web_search.search_sources('unused','key','q')
-            fallback.assert_not_called()
+    def test_mcp_business_rate_limit_under_http_success_is_cooled_and_falls_back(self):
+        self.transport(lambda r: exa(r,result={'_meta':{'ai.exa/rateLimited':True},'content':[{'type':'text','text':'limit'}]}) if r.url.host=='mcp.exa.ai' else httpx.Response(200,text=RSS))
+        result=service.search('query');second=service.search('query')
+        self.assertEqual(result['attempts'][0]['category'],'rate_limit')
+        self.assertEqual(second['attempts'][0]['category'],'cooldown')
+        self.assertEqual(sum(r.url.host=='mcp.exa.ai' for r in self.requests),1)
 
-    def test_tls_eof_retries_then_reaches_real_fallback_path_with_diagnostics(self):
-        self.urlopen.side_effect=urllib.error.URLError(ssl.SSLEOFError('UNEXPECTED_EOF_WHILE_READING test-secret'))
-        with patch.object(web_search,'_bing_search',return_value=GOOD) as fallback:
-            payload=web_search.search_sources(CFG['ATLAS_BASE_URL'],'test-secret','new query')
-        self.assertEqual(self.urlopen.call_count,2);fallback.assert_called_once_with('new query')
-        self.assertEqual(payload['provider'],'bing-rss')
-        self.assertEqual(payload['primary_failure']['category'],'tls_eof')
-        self.assertEqual(payload['primary_failure']['stage'],'tls_handshake')
-        self.assertEqual([r['ok'] for r in payload['attempts']],[False,False,True])
-        self.assertNotIn('test-secret',str(payload))
+    def test_unreadable_snippet_is_not_given_to_model_as_evidence(self):
+        rows=service._normalize([dict(title='Python',link='https://python.org',snippet='\ufffd\ufffd\x00\x01bad')])
+        self.assertEqual(rows[0]['snippet'],'')
 
-    def test_raw_tls_eof_and_incomplete_body_are_transient_not_certificate_failures(self):
-        with patch.object(web_search,'_bing_search',return_value=GOOD):
-            self.urlopen.side_effect=ssl.SSLEOFError('unexpected EOF')
-            self.assertEqual(web_search.search_sources('https://example.invalid/search','test-secret','query')['provider'],'bing-rss')
-            self.urlopen.side_effect=http.client.IncompleteRead(b'partial')
-            self.assertEqual(web_search.search_sources('https://example.invalid/search','test-secret','query')['primary_failure']['stage'],'response_body')
-        for failure in [ssl.SSLCertVerificationError('certificate verify failed'),urllib.error.URLError(ssl.SSLCertVerificationError('certificate verify failed'))]:
-            self.urlopen.reset_mock();self.urlopen.side_effect=failure
-            with patch.object(web_search,'_bing_search') as fallback:
-                with self.assertRaises(web_search.SearchFailure) as error:web_search.search_sources('https://example.invalid/search','test-secret','query')
-                self.assertEqual(error.exception.category,'tls_certificate')
-                self.assertEqual(self.urlopen.call_count,1);fallback.assert_not_called()
+    def test_private_provider_is_explicit_and_only_private_request_receives_key(self):
+        model = dict(base_url='https://model.example/v1', api_key='MODEL_SECRET')
+        self.assertEqual(service.settings()['provider'], 'exa'); service.save_settings({'provider': 'model-api'})
+        self.transport(lambda r: httpx.Response(404) if r.url.host == 'model.example' else httpx.Response(200, text=RSS))
+        with patch('desk_companion.model_catalog.require_active', return_value=model): result = service.search('query')
+        self.assertEqual(self.requests[0].headers['authorization'], 'Bearer MODEL_SECRET')
+        self.assertTrue(all('authorization' not in r.headers for r in self.requests[1:])); self.assertNotIn('MODEL_SECRET', str(result))
 
-    def test_timeout_diagnostic_distinguishes_response_body_from_unknown_connect(self):
-        class Broken(io.BytesIO):
-            def read(self,*args):raise TimeoutError('read timeout')
-        self.urlopen.return_value=Broken();self.urlopen.side_effect=None
-        with self.assertRaises(web_search.RetryableSearchError) as caught:web_search._post_once('https://example.invalid','test-secret','query',1)
-        self.assertEqual(caught.exception.stage,'response_body')
+    def test_retry_budget_shared_with_fallback_and_cancel_stops_all_requests(self):
+        self.transport(lambda r: (_ for _ in ()).throw(httpx.ReadTimeout('read', request=r)))
+        with self.assertRaises(service.SearchFailure) as caught: service.search('query', budget_s=1)
+        self.assertEqual(len(self.requests), 2); self.assertEqual(len(caught.exception.attempts), 2)
+        self.requests.clear()
+        with self.assertRaises(service.SearchFailure) as caught: service.search('query', cancelled=lambda: True)
+        self.assertEqual(caught.exception.category, 'cancelled'); self.assertFalse(self.requests)
 
-    def test_upstream_tls_error_is_not_reported_as_local_handshake_failure(self):
-        self.urlopen.side_effect=[response({'error':'upstream UNEXPECTED_EOF_WHILE_READING'}),response({'error':'upstream UNEXPECTED_EOF_WHILE_READING'})]
-        with patch.object(web_search,'_bing_search',return_value=GOOD):
-            payload=web_search.search_sources('https://example.invalid/search','test-secret','query')
-        self.assertEqual(payload['primary_failure']['stage'],'upstream_response')
-        self.assertEqual(payload['primary_failure']['category'],'upstream_temporary')
+    def test_total_deadline_checked_during_body_and_before_fallback(self):
+        self.transport(lambda r: exa(r)); ticks = iter([0, 0, 0, 0, 31, 31, 31, 31, 31, 31])
+        with patch.object(service.time, 'monotonic', side_effect=lambda: next(ticks, 31)):
+            with self.assertRaises(service.SearchFailure): service.search('query')
+        self.assertEqual(len(self.requests), 1)
 
-    def test_both_providers_failed_preserves_attempt_diagnostics_without_credentials(self):
-        self.urlopen.side_effect=urllib.error.URLError(ssl.SSLEOFError('EOF test-secret'))
-        with patch.object(web_search,'_bing_search',side_effect=RuntimeError('private test-secret')):
-            with self.assertRaises(web_search.RetryableSearchError) as caught:
-                web_search.search_sources('https://example.invalid/search','test-secret','query')
-        self.assertEqual(len(caught.exception.attempts),3)
-        self.assertEqual(caught.exception.primary_failure['category'],'tls_eof')
-        self.assertNotIn('test-secret',str(caught.exception))
+    def test_size_limit_failed_fallback_reports_safe_diagnostics(self):
+        self.transport(lambda r: httpx.Response(200, text='x' * (service.MAX_BODY + 1)) if r.url.host == 'mcp.exa.ai' else httpx.Response(503, text='PRIVATE'))
+        result = service.probe('query')
+        self.assertFalse(result['ok']); self.assertEqual(len(result['attempts']), 2)
+        self.assertEqual(result['attempts'][0]['category'], 'response_size'); self.assertNotIn('PRIVATE', str(result))
+
+    def test_query_validation_prevents_requests(self):
+        self.transport(lambda r: exa(r))
+        for value in ('', ' ' * 10, 'x' * 201, None, {}):
+            with self.assertRaises(ValueError): service.search(value)
+        self.assertFalse(self.requests)
+
+    def test_atlas_tool_failure_recorded_without_credentials(self):
+        from atlas.testing import FakeLLM
+        from desk_companion import assistant
+        from types import SimpleNamespace
+        self.transport(lambda r: httpx.Response(503, text='PRIVATE_TOKEN'))
+        cfg = dict(ATLAS_API_KEY='test-secret', ATLAS_BASE_URL='https://example.invalid/v1', ATLAS_MODEL='fake')
+        host = SimpleNamespace(state=SimpleNamespace(persona='助手', max_steps=8), ui=lambda fn: fn(), on_llm_delta=lambda _: None, on_stream_status=lambda _: None)
+        with patch.object(assistant, 'require_llm_env', return_value=cfg): agent = assistant.build_agent(host)
+        agent.llm = FakeLLM([{'role': 'assistant', 'content': '', 'tool_calls': [{'id': 's1', 'type': 'function', 'function': {'name': 'web_search', 'arguments': '{"query":"苏州天气"}'}}]}, '未取得来源。'])
+        agent.run('苏州天气', run_id='search-failure')
+        tool = [e for e in agent.journal.get_events('search-failure') if e.event_type == 'tool_after_call'][-1]
+        self.assertEqual(tool.payload['status'], 'failed'); self.assertNotIn('PRIVATE_TOKEN', str(tool.payload))
 
 
-if __name__ == "__main__":
-    unittest.main()
+if __name__ == '__main__': unittest.main()

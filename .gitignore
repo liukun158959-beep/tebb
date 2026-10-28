@@ -14,6 +14,8 @@ skins/**
 user_state.json
 models.json
 model-network.json
+search.json
+search-health.json
 onboarding.json
 feishu_agent.json
 news_settings.json

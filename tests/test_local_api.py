@@ -68,6 +68,25 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
                 if frame['type'] in ('done', 'error'):
                     return frame
 
+    async def test_search_settings_and_probe_are_authenticated_and_skip_host_lock(self):
+        import httpx
+        from desk_companion import search_service
+        from tests.test_web_search import exa
+        self.host.conversation.running=True
+        with self.host.turn_lock:
+            loaded=await self.notebook_rpc('load_search_settings')
+            self.assertEqual(loaded['provider'],'exa')
+            saved=await self.notebook_rpc('save_search_settings',payload=dict(provider='exa'))
+            self.assertTrue(saved['ok'])
+            with patch.object(search_service.model_network,'http_client',side_effect=lambda *a,**k:httpx.Client(transport=httpx.MockTransport(exa))):
+                result=await self.notebook_rpc('test_search',query='TaskGroup')
+            self.assertTrue(result['ok'],result);self.assertEqual(result['provider'],'exa')
+            self.assertNotIn('api_key',json.dumps(result))
+        from websockets.exceptions import ConnectionClosed
+        with self.assertRaises(ConnectionClosed):
+            async with connect(self.url.replace('test-token','bad-token'),proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc',method='test_search')));await ws.recv()
+
     async def test_tebb_worker_uses_authenticated_shared_calendar_and_automation_services(self):
         from desk_companion.collaboration import Collaboration
         from desk_companion.collaboration_worker import execute

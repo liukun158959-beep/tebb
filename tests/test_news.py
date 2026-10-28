@@ -193,7 +193,7 @@ class NewsTests(unittest.TestCase):
         cfg = {**news.DEFAULTS, "topics": ["Agent"]}
         payload = {"results": [{"title": "Official", "link": "https://github.com/microsoft/repo", "published_date": "2026-10-08"}]}
         with patch("desk_companion.envconf.require_llm_env", return_value={"ATLAS_BASE_URL": "https://example.invalid/v1", "ATLAS_API_KEY": "test"}), \
-             patch("desk_companion.web_search._post", return_value=payload), \
+             patch("desk_companion.web_search.search_sources", return_value=payload), \
              patch("desk_companion.web_search.format_search"), \
              patch.object(news, "fetch_source", return_value={"text": "official article", "published": ""}):
             rows, _ = news.collect("2026-10-08", cfg, lambda *_: None)
