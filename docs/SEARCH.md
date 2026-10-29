@@ -25,3 +25,23 @@ python scripts/probe_search.py --live --repeat 3 --output E:/Learn_Project/outpu
 质量与可用性分别验收：抽查 TaskGroup、React cleanup、飞书更新日程及 Claude 子任务结果的标题/摘要与主题相符；中文时效查询返回中科院2026-10原文，打开原文核对；英文时效查询返回官方新闻及发布说明，不能用新闻索引页自身的旧日期证明每条新闻时效。部分 React 结果标题为N/A，中文 Python 摘要有上游乱码，已对乱码做过滤；不能据此声称所有片段质量完美。18次是本机短时样本，不是公开服务长期 SLA。
 
 本机验收记录：`E:/Learn_Project/output/search-orchestration-2026-10-28/search-live.json`（首轮）、`search-live-final.json`（最终）、`search-final-unit.log`、`flow-rpc.log`、`flow-ui.log`。
+
+## 公开正文与 Fake-IP DNS（#158）
+
+搜索摘要与网页正文是两个阶段。正文由 `web_sources.fetch_page(url)` 提取并保留来源、正文级别、字符数、截断、哈希和抓取时间；搜索成功不代表正文读取成功。发现链接校验、正文来源核对和引用规则继续生效。
+
+2026-10-29 本机复现：公开域名系统解析到 `198.18.0.0/15`，原实现将其作为保留 IP 拦截。仅当普通公开域名的全部系统地址都在该网段时，`public_dns` 使用固定 Cloudflare HTTPS DNS 获取真实公网地址；不会直接连接 Fake-IP，不修改系统 DNS、代理或模型配置。DNS 请求仅发送域名和 A/AAAA 类型，不携带网页路径、查询参数、用户凭据或模型密钥。HTTPS DNS 使用已有模型网络配置与证书校验；其服务协议见 [Cloudflare 官方文档](https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-https/make-api-requests/dns-json/)。
+
+私网/回环、IP 字面量、局域域名、混合公网私网或混合 Fake-IP/私网答案仍拒绝，不为普通 DNS 故障一概切换。备用解析校验响应问题、状态、CNAME 链和地址族，实际连接锁定已检查公网 IP，TLS 校验原主机名；每次重定向重新检查，不存在检查后再次解析目的地址的窗口。备用解析共享最多5秒与正文剩余预算，响应不超过64KB、不跟随 DNS HTTP 跳转；失败明确终止，不放行保留地址。`web_dns` 脱敏日志记录触发原因、解析器、公开域名和地址数量，不记录整条网页 URL。
+
+```powershell
+python -m unittest tests.test_public_dns tests.test_web_sources -v
+# 隔离数据、复用当前网络设置，无模型或飞书写入；仅执行外部公开读取。
+python scripts/probe_web_sources.py --live --repeat 2 --output E:/Learn_Project/output/web-body-live.json
+```
+
+本机两轮“AI资讯／KIMI 3.1”真实搜索共4/4取得候选，随后12次正文读取8次成功：Google官方博客与Kimi文章/文档均读到正文；4次OpenAI网页返回HTTP403。没有一次再以保留IP拒绝这些公开域名。验收材料为 `E:/Learn_Project/output/web-body-live-2026-10-29.json`，保留失败样本。只代表这次网络与正文可读性，不证明内容时效、特定模型规格或长期可用性；HTTP403、验证码、JS和登录限制仍可能导致某个站点无法读取，不能把摘要升级成正文或声称已核实。
+
+另用真实 mimo-v2.6-flash 执行器读取用户提供的Kimi官方文章：2次模型调用、1次真实web_fetch，取得4690字符正文且引用检查通过，未调用搜索或其他业务工具。数据/用量写入临时目录，更新读取用替身隔离，无旧用户任务重放。记录为 `E:/Learn_Project/output/web-body-worker-live-final-2026-10-29.json`；首次手写探针缺少collab_path，零模型调用即失败，修正探针后通过，首轮记录仍保留。该样本验证真实模型到正文工具的链路，不等同整套调度或每项内容事实均已验证。
+
+最终完整后端712项运行完成（698通过、14跳过），本轮受影响定向111项通过；前端177项、类型检查、生产构建及真实浏览器补充/续接验收通过。完整记录 `E:/Learn_Project/output/clarification-dns-full.log`，未发布安装包。

@@ -41,6 +41,10 @@ def url_key(url):
 
 
 def public_url(url):
+    return _resolved_url(url, time.monotonic()+5)[0]
+
+
+def _resolved_url(url, deadline):
     if not isinstance(url, str) or len(url)>2048 or re.search(r"[\s\\\x00-\x1f\x7f]", url):
         raise ValueError("网页地址无效")
     p = urlsplit(url)
@@ -51,15 +55,20 @@ def public_url(url):
     host = p.hostname.rstrip(".").lower()
     if host=="localhost" or host.endswith((".localhost", ".local", ".internal", ".onion")):
         raise ValueError("网页读取不允许本机或内网地址")
-    _addresses(host,p.port or (443 if p.scheme=="https" else 80))
-    return url_key(url)
+    addresses = _addresses(host,p.port or (443 if p.scheme=="https" else 80),deadline)
+    return url_key(url), addresses
 
 
-def _addresses(host,port):
+def _addresses(host,port,deadline=None):
     addresses = socket.getaddrinfo(host,port,type=socket.SOCK_STREAM)
-    if not addresses or any(not ipaddress.ip_address(a[4][0]).is_global for a in addresses):
+    addresses = list(dict.fromkeys(a[4][0] for a in addresses))
+    if addresses and all(ipaddress.ip_address(a).is_global for a in addresses):
+        return addresses
+    from . import public_dns
+    if public_dns.fake_addresses(host,addresses):
+        return public_dns.resolve(host,deadline if deadline is not None else time.monotonic()+5)
+    else:
         raise ValueError("网页读取不允许本机、内网或保留 IP")
-    return list(dict.fromkeys(a[4][0] for a in addresses))
 
 
 class PageText(HTMLParser):
@@ -116,7 +125,10 @@ def _open(request, timeout):
     verifies the original hostname; redirects are handled by the caller.
     """
     p=urlsplit(request.full_url);host=p.hostname;port=p.port or (443 if p.scheme=='https' else 80)
-    address=_addresses(host,port)[0]
+    started=time.monotonic()
+    address=(getattr(request,'_tebb_addresses',None) or _addresses(host,port,started+timeout))[0]
+    timeout-=time.monotonic()-started
+    if timeout<=0:raise TimeoutError('网页读取达到总时限')
     proxy=None if urllib.request.proxy_bypass(host) else urllib.request.getproxies().get(p.scheme)
     proxy=urlsplit(proxy if '://' in proxy else 'http://'+proxy) if proxy else None
     if proxy and proxy.scheme!='http':raise ValueError('网页读取当前仅支持HTTP CONNECT代理或直连')
@@ -170,10 +182,11 @@ def _fetch_page(url,deadline):
     """No cookies, JavaScript, auth, login sessions, PDFs or downloads."""
     original=url; current=url
     for hop in range(4):
-        current=public_url(current)
+        current,addresses=_resolved_url(current,deadline)
         remaining=deadline-time.monotonic()
         if remaining<=0: raise TimeoutError("网页读取达到总时限")
         request=urllib.request.Request(current,headers={"User-Agent":"tebb-research/0.2", "Accept":"text/html, text/plain, text/markdown", "Accept-Encoding":"identity"})
+        request._tebb_addresses=addresses
         try:
             response=_open(request,min(10,remaining))
         except urllib.error.HTTPError as exc:
