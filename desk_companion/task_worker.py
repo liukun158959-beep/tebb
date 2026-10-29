@@ -11,6 +11,9 @@ def main():
         # Imports/transport initialization only. No model call or user task runs
         # until stdin supplies one request; this process exits after that request.
         from . import collaboration_worker, project_workspace, local_sources, web_search, web_sources
+        # Atlas now defers SDK loading. Warm the adapter too; otherwise the
+        # first user request still pays the OpenAI/Pydantic import cost.
+        from .collaboration_llm import CollaborationLLM
         from .model_network import http_client
         with http_client(5):pass
         sys.stdout.write(json.dumps(dict(kind='standby_ready'))+'\n');sys.stdout.flush()

@@ -41,6 +41,7 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--check',action='store_true')
     parser.add_argument('--prewarm',action='store_true',help='预热一次性工作进程，预热成本单独报告')
+    parser.add_argument('--python',type=Path,help='使用指定发布 Python 执行当前源码；仅切换工作进程解释器')
     parser.add_argument('--think-time',type=float,default=0,help='每个请求结束后的间隔秒数，不计入请求耗时')
     args=parser.parse_args()
     if not 1<=args.samples<=1000 or not 1<=args.parallel<=4 or not 0<=args.think_time<=30:parser.error('samples 1..1000, parallel 1..4, think-time 0..30')
@@ -66,7 +67,11 @@ def main():
         from desk_companion.tasks import TaskManager
         from desk_companion.agent_debug import listing,load_timing
         warm_start=time.monotonic()
-        manager=TaskManager(path=root/'memory/tasks.sqlite3',prewarm=args.parallel if args.prewarm else 0);manager.settings['parallel']=args.parallel
+        command=None
+        if args.python:
+            bootstrap=f"import sys;sys.path.insert(0,{str(Path(__file__).resolve().parents[1])!r});from desk_companion.task_worker import main;main()"
+            command=[str(args.python.resolve()),'-u','-c',bootstrap]
+        manager=TaskManager(path=root/'memory/tasks.sqlite3',prewarm=args.parallel if args.prewarm else 0,command=command);manager.settings['parallel']=args.parallel
         if args.prewarm and not manager.standby.wait_ready(30):manager.shutdown();raise RuntimeError('预热未就绪，未运行基准')
         warmup_sec=round(time.monotonic()-warm_start,2)
         def sample(index):
