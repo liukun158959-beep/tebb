@@ -16,13 +16,13 @@ from .paths import data_root
 from .tasks import TaskManager, TERMINAL
 from .execution_flow import ACTIVE, OPEN, advance, phase_calls, chain_view
 
-METHODS = {"load_collaboration", "collaboration_action"}
+METHODS = {"load_collaboration", "collaboration_action", "get_report_chart"}
 COMPANIONS = {
     "tebb": ("tebb", "小缇", "spark", "温暖爽快，善于把模糊的想法变成可执行的计划。"),
     "research": ("研究员", "阿探", "fox", "好奇、敏锐，喜欢追问为什么；认真核实来源，坦率承认未知。"),
     "writer": ("写作者", "墨墨", "cat", "细腻、有条理，擅长把复杂内容讲清楚，有一点冷幽默。"),
 }
-TOOLS = {"联网搜索", "网页读取", "工作区读取", "文件编辑", "终端", "扩展只读工具"}
+TOOLS = {"联网搜索", "网页读取", "工作区读取", "文件编辑", "终端", "扩展只读工具", "构建图表"}
 AVATARS = {"spark", "fox", "cat", "owl"}
 
 
@@ -35,6 +35,7 @@ def parse_route(text):
         raise ValueError('无效路由内容')
     if decision.get('strategy', 'direct') not in {'direct', 'delegate'}:
         raise ValueError('无效执行方式')
+    if 'requires_charts' in decision and type(decision['requires_charts']) is not bool:raise ValueError('图表交付要求须为布尔值。')
     if decision['mode']=='answer':
         from .execution_flow import claims_handoff
         if claims_handoff(content):raise ValueError('未取得真实后台提交，不能把口头派发声明当回答。')
@@ -82,7 +83,9 @@ def migrate_companions(state):
         if version < 2 and agent['id']=='tebb':
             agent['tools'] = sorted(TOOLS)
             if agent.get('role') in {'协调目标、拆分有限任务并明确验收条件','协调目标、拆分工作、汇总成果'}:agent['role'] = '理解用户目标，调用可用工具和职责伙伴，处理日程、事项、自动化及通用问题，核对实际结果后汇总交付'
-    state['companion_version'] = 2
+        if version<3 and agent['id'] in {'tebb','writer'}:
+            agent['tools']=sorted(set(agent.get('tools',[]))|{'构建图表'})
+    state['companion_version'] = 3
 
 
 def workspace_path():
@@ -370,13 +373,13 @@ class Collaboration:
             else:
                 if readonly:
                     if action.get('type') in {'add_coder','compress','open_folder_project','migrate_projects'} or action.get('attachments') or action.get('skills'): raise ValueError('浏览器体验不开放本地工作区和技能执行，请使用桌面客户端')
-                    if action.get('type') == 'agent' and set(action.get('agent',{}).get('tools',[])) - {'联网搜索','网页读取'}: raise ValueError('浏览器体验仅支持联网只读工具')
+                    if action.get('type') == 'agent' and set(action.get('agent',{}).get('tools',[])) - {'联网搜索','网页读取','构建图表'}: raise ValueError('浏览器体验仅支持联网只读工具和报告图表')
                     if action.get('type')=='clarification_answer':
                         paused=next((r for r in state['runs'] if r['id']==action.get('id')),None)
-                        if paused and set(paused['agent_config'].get('tools',[]))-{'联网搜索','网页读取'}:raise ValueError('此任务包含本地工具权限，请在桌面客户端补充。')
+                        if paused and set(paused['agent_config'].get('tools',[]))-{'联网搜索','网页读取','构建图表'}:raise ValueError('此任务包含本地工具权限，请在桌面客户端补充。')
                     if action.get('type') == 'send':
                         c = next((c for c in state['conversations'] if c['id']==action.get('conversation')),None)
-                        if c and any(set(a['tools'])-{'联网搜索','网页读取'} for a in state['agents'] if a['id'] in c['members']): raise ValueError('此会话包含本地工具权限，请在桌面客户端执行')
+                        if c and any(set(a['tools'])-{'联网搜索','网页读取','构建图表'} for a in state['agents'] if a['id'] in c['members']): raise ValueError('此会话包含本地工具权限，请在桌面客户端执行')
                 state["notice"] = ""
                 self._apply(state, action)
                 db.execute("INSERT INTO receipts VALUES(?,?)", (client_id, fingerprint))
@@ -617,7 +620,7 @@ class Collaboration:
                 if not isinstance(agent.get(field), str) or len(agent[field]) > limit: raise ValueError("Agent 字段无效")
             name = agent["name"].strip()
             if not name or (re.search(r"[\s@]", name) and not (agent.get("id")=="tebb" and name=="tebb · 通用助手")) or any(a["name"] == name and a["id"] != agent.get("id") for a in state["agents"]): raise ValueError("Agent 名称为空、重复或包含空格/@")
-            if not isinstance(agent.get("tools"), list) or any(t not in TOOLS for t in agent["tools"]): raise ValueError("真实验证仅支持联网只读工具")
+            if not isinstance(agent.get("tools"), list) or any(t not in TOOLS for t in agent["tools"]): raise ValueError("工具配置包含不支持的能力")
             if not isinstance(agent.get("avatar", "owl"), str) or agent.get("avatar", "owl") not in AVATARS: raise ValueError("头像无效")
             if not isinstance(agent.get("personality", ""), str) or len(agent.get("personality", "")) > 160: raise ValueError("性格描述最多160字")
             if agent["model"]: require_item(agent["model"])
@@ -685,7 +688,7 @@ class Collaboration:
                     request = dict(workflow="collaboration", collab_path=str(self.path), collab_run=run["id"],conversation=run['conversation'],source_scope=run.get('parent') or run['id'],
                         role=run["agent_config"], kind=run["kind"], model_id=run["model_id"], context=run["context"], workspace=run.get("workspace"), selection=run.get("selection", {}),
                         reference_time=run.get("created",0), supplemented_at=run.get("supplemented_at"), members=run.get("members", []), require_execution=run.get('require_execution',False), applied=run["applied"], draft=run.get("parent_draft", ""), budget=max(0, call_budget(run['agent'],run['kind'])-phase_calls(run)),
-                        objective=run.get('objective',run['input']),stage=run.get('stage','collect'),required_sources=run.get('required_sources',[]),
+                        objective=run.get('objective',run['input']),stage=run.get('stage','collect'),required_sources=run.get('required_sources',[]),requires_charts=run.get('requires_charts',False),
                         search_budget=max(0, run.get('search_limit',2)-run.get("search_calls",0)),fetch_budget=max(0,run.get('fetch_limit',4)-run.get("fetch_calls",0)),
                         source_topics=run.get('source_topics',[]),
                         source_evidence=run.get("source_evidence",[]),evidence=run.get("evidence",[]))
@@ -755,6 +758,7 @@ class Collaboration:
                         self._finish(state,run,'succeeded');continue
                     # Same root owns readiness, direct work and final delivery.
                     delegate=decision.get('strategy')=='delegate' and bool(run.get('members'))
+                    run['requires_charts']=decision.get('requires_charts',False)
                     advance(run,'plan' if delegate else 'task',status='目标明确，准备职责分工' if delegate else '目标明确，直接执行')
                     continue
                 if run['kind'] == 'compress':
@@ -772,7 +776,7 @@ class Collaboration:
                         dep=plan.get('depends_on')
                         edges=dep if isinstance(dep,list) else [] if dep is None else [dep]
                         agent=next(a for a in run['members'] if a['id']==plan['agent_id'])
-                        stage='deliver' if children and not agent.get('tools') else plan.get('stage','collect')
+                        stage='deliver' if children and not (set(agent.get('tools',[]))-{'构建图表'}) else plan.get('stage','collect')
                         # A synthesis task consumes every preceding collection, even
                         # if a model omitted a dependency in its proposed plan.
                         if stage=='deliver': edges=list(range(len(children)))
@@ -781,7 +785,7 @@ class Collaboration:
                         assigned=next(a for a in state['agents'] if a['id']==plan['agent_id'])
                         child = self._run(state, conversation, plan["agent_id"], plan["instructions"], parent=run["id"], dependency=dependency,
                             context=run["context"] + [dict(sender="user", text=run["input"]), *[dict(sender="user", text=t) for t in run["updates"]]],model_id='' if assigned.get('model') else run['model_id'])
-                        child.update(dependencies=deps,objective=run['input'],stage=stage,required_sources=plan.get('required_sources',[]))
+                        child.update(dependencies=deps,objective=run['input'],stage=stage,required_sources=plan.get('required_sources',[]),requires_charts=run.get('requires_charts',False) and stage=='deliver')
                         topics=list(dict.fromkeys(plan.get('source_topics',[])))
                         child.update(source_topics=topics,search_limit=max(2,len(topics)),fetch_limit=max(4,len(topics)*2))
                         if stage=='deliver': child['required_sources']=list(dict.fromkeys(child['required_sources']+[s for previous in children for s in previous.get('required_sources',[])]))

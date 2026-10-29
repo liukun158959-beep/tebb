@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from "react";
+import { Children, isValidElement, useState, type ReactNode } from "react";
+import { ReportChart } from './report-charts';
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -205,7 +206,12 @@ export function Markdown(props: { text: string; cites?: number[]; onCite?: (n: n
     : props.externalLinks ? { a: ({ href, children }) => {
       const safe = openableHref(href);
       return safe ? <a href={safe} target="_blank" rel="noopener noreferrer">{children}</a> : <span>{children}</span>;
-    } } : components;
+    } } : {...components};
+  view.pre=({children})=>{
+    const child=Children.toArray(children)[0];
+    if(isValidElement<{className?:string;children?:ReactNode}>(child)&&child.props.className?.split(' ').includes('language-tebb-chart'))return <ReportChart id={String(child.props.children||'').trim()}/>;
+    return <pre>{children}</pre>;
+  };
   return (
     <div className="md" data-md="">
       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={props.reveal ? [streamingText(text, props.reveal.from, props.reveal.revision)] : []} components={view}>

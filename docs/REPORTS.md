@@ -1,6 +1,8 @@
-# 报告中的长文证据（#160）
+# 长文证据与技术报告图表（#160 / #161）
 
-2026-10-29 用户Q3/Q5确认：按需补读长文，已取得正文与未读部分分别展示；旧报告保留，不自动重放或扩大下载与调用预算。
+2026-10-29 用户Q3–Q5确认：按需补读长文，报告采用“结论摘要 → 技术机制 → 可比数据与图表 → 适用场景 → 证据与限制”。不相关行业背景省略；已有报告保留，用户明确重新生成才产生新稿。模型提示约束章节，并不等同自动证明报告结构或结论全部正确。
+
+最新旧版技术报告确实成功交付，但研究取到的Kimi正文20638字符和Anthropic新闻室15134字符仅保留前12000；该次整链9次模型调用。搜索摘要300/600字符、网页节选12000字符和成果24000字符是不同限制，不应混称模型窗口截断。
 
 ## 同一正文快照续读
 
@@ -17,10 +19,38 @@
 {"url":"同一链接","snapshot_id":"上次返回的编号","query":"待核对的关键词"}
 ```
 
-## AI 调试
+## 构建图表
+
+新增工具 `build_chart`：bar、line、timeline、flow，输入仅为结构化数据，不执行模型提供的Python/HTML/JS。复用Matplotlib非交互Agg渲染PNG/SVG，不导入窗口框架；后端依赖在源码与运行时需求中声明。参考[官方静态渲染说明](https://matplotlib.org/stable/users/explain/figure/backends.html)。
+
+数值图最多20个标签、4个系列，需要单位、可比口径与实际已读正文的证据ID；时间线最多15项且有来源，流程图最多8节点/16条边、标为示意。缺值显示缺失，不填0；非有限数、非法ID和有环流程拒绝。派生数值需说明计算。程序校验格式与来源归属，**不能自动证明模型抽取数值和可比口径正确**；不同评测口径不得伪装同轴排名。
+
+tebb/写作助手默认增加构建图表权限，用户可在伙伴配置关闭；自定义伙伴按明确工具权限执行。增加图表能力不改变写作交接阶段，工具事件展示真实开始/结束。每条主任务链最多4次有效渲染尝试，子伙伴和重启共用已保存预算，失败渲染也计入，不自动重跑整条报告。
+
+成功生成后返回 `tebb-chart`代码块和真实资产ID，必须原样插入。聊天、成果与笔记读取认证RPC返回的固定PNG，可展开原始数据、单位、口径与来源；不开放任意路径或执行原始HTML。数据与图表按创建时快照保存，删除聊天/笔记不会破坏独立原报告。
+
+保存笔记沿用成果正文，Markdown导出生成同目录PNG并一起登记，删除该笔记生成文件时按现有规则处理。导出包含图表数据表和来源，媒体不能只靠丢失的截图解释。飞书本批不嵌入PNG，退化为可读数据表/关系说明；不把内部图表ID当成飞书图像，也不新增上传副作用。
+
+当模型路由提取到用户明确要求图表，requires_charts作为原任务及交付阶段验收条件；缺少真实图表或资产核对失败不能宣称完整交付。工具失败保留正文、数据、已确认文件格式和阶段；登记失败不声称回滚，不自动重跑整个任务。
+
+## AI 调试与验收
+
+认证RPC `get_report_chart({chart_id:"已返回的32位资产ID"})` 返回PNG、spec、sources；没有可用登记或哈希不匹配则失败。任务工具事件与完整调用记录继续复用AGENT_DEBUG。
 
 ```powershell
-python -m unittest tests.test_web_snapshots tests.test_web_sources tests.test_public_dns -v
+python -m unittest tests.test_web_snapshots tests.test_report_charts tests.test_notebook_service tests.test_notebook_files tests.test_notebook_generation -v
+python -m unittest tests.test_local_api.LocalApiTests.test_context_inspection_uses_authenticated_shared_rpc -v
+# 外部公开只读请求与真实模型会产生用量；临时数据，不重放用户原任务、不操作飞书。
+python scripts/probe_report.py --live --url https://www.kimi.ai/blog/kimi-k3-1-pro --output E:/Learn_Project/output/report-live.json
 ```
 
-使用隔离数据验证同版本续读、区间合并、跨任务拒绝、关键词/章节及快照完整性；真实模型和图表接入另行记录。
+脚本验证实际执行器、模型、网页快照续读、构建工具及引用，不代替完整调度和实机验收。正文/图表失败样本保留，不以短时成功承诺长期服务稳定。
+
+## 本机验收记录（2026-10-29）
+
+- 完整后端最终730项（716通过、14跳过），前端181项通过；类型检查和生产构建通过。额外验证了独立暂存上下文13项、网页/协作84项及快照完整性定向回归。
+- 真实mimo-v2.6-flash：同一Kimi官方博客快照读取0–12000与12000–20638，原文哈希保持一致；构建1张有来源、单位、口径及计算说明的图表，引用检查显示0–20638已读完整，共4次模型调用。首轮3次调用后漏图，被严格检查拒绝，失败记录保留；补齐至多一次纠正路径并以替身验证，不自动重跑旧用户任务。
+- 真实LiveCollaboration、HeadlessApp与认证WebSocket，配合隔离队列/调用夹具，验证聊天图表、数据与来源、普通用户上下文、容量快照、无嵌套表单及390px无横向溢出。首次夹具停在其他会话、补主题时引用了错误CSS路径，修正夹具后通过；不将这些失败说成生产功能测试成功。
+- 材料目录：`E:/Learn_Project/output/context-report-2026-10-29/`，含browser-final.log、context-debug.png、report-charts.png、context-mobile.png、live-report.json（首轮）与live-report-final.json。回归日志为output/context-report-back-final.log、context-report-front-final.log和context-report-build-final.log。
+
+没有向真实飞书写入测试数据，也没有发布版本。来源引用和格式校验不能代替事实/评测口径审阅；复杂图形、飞书内嵌图像及新的自动上下文管理策略不在本批。

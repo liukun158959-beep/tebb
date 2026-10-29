@@ -214,23 +214,33 @@ def write_note_markdown(session_id: str, note_id: str) -> dict:
         folder = _notes_dir()
         name = _filename(title, note["id"])
         path = folder / name
+        from .report_charts import export as export_charts
+        chart_files=[]
+        def write_chart(ident,raw):
+            target=folder/(path.stem+'-chart-'+ident+'.png')
+            target.write_bytes(raw)
+            chart_files.append(dict(name=target.name,path=str(target.resolve()),saved=_now()))
+            return target.name
         stage = 'cleanup'
         try:
             removed = _unlink_files([old for old in note['files'] if Path(old['path']).resolve() != path.resolve()])
             steps[stage] = 'confirmed'
             stage = 'generation'
             folder.mkdir(parents=True, exist_ok=True)
+            body=export_charts(body,write_chart)
             path.write_text(body + "\n", encoding="utf-8")
             steps[stage] = 'confirmed'
             stage = 'registration'
-            note["files"] = [{"name": path.name, "path": str(path.resolve()), "saved": _now()}]
+            note["files"] = [{"name": path.name, "path": str(path.resolve()), "saved": _now()},*chart_files]
             session["updated"] = _now()
             _write(book)
             steps[stage] = 'confirmed'
         except Exception as exc:
             if isinstance(exc, NotebookChangeError):
                 removed = exc.details.get('removed_files', removed)
-            raise _file_change_failure(exc, stage, steps, path, session_id, note_id, removed) from exc
+            failure=_file_change_failure(exc, stage, steps, path, session_id, note_id, removed)
+            failure.details['chart_paths']=[item['path'] for item in chart_files]
+            raise failure from exc
         written = str(path.resolve())
     try:
         page = load_notebook()

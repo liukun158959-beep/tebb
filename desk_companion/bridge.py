@@ -51,6 +51,10 @@ class Bridge:
         from .model_capacity import save
         return save(model_id,window,output_reserve)
 
+    def get_report_chart(self,chart_id):
+        from .report_charts import public
+        return public(chart_id)
+
     def load_work_board(self, request_id="") -> dict:
         return self._host.work_board.load(request_id)
 

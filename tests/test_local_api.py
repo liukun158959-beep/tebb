@@ -93,6 +93,18 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             async with connect(self.url.replace('test-token','bad-token'),proxy=None) as ws:
                 await ws.send(json.dumps(dict(type='rpc',method='load_context_debug',args=dict(conversation='dm-tebb'))));await ws.recv()
 
+    async def test_report_chart_rpc_is_authenticated(self):
+        import uuid
+        from desk_companion import report_charts
+        from tests.test_report_charts import FLOW
+        chart=report_charts.create(FLOW,[],uuid.uuid4().hex)
+        result=await self.notebook_rpc('get_report_chart',chart_id=chart['id'])
+        self.assertTrue(result['image'].startswith('data:image/png;base64,'))
+        from websockets.exceptions import ConnectionClosed
+        with self.assertRaises(ConnectionClosed):
+            async with connect(self.url.replace('test-token','bad-token'),proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc',method='get_report_chart',args=dict(chart_id=chart['id']))));await ws.recv()
+
     async def test_structured_clarification_roundtrip_is_bound_versioned_and_authenticated(self):
         from desk_companion.collaboration import Collaboration
         from tests.test_collaboration import Queue,MODEL

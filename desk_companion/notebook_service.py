@@ -77,6 +77,8 @@ class NotebookService:
     def export_notebook_feishu(self, session_id, note_id):
         def run():
             doc = notebook.note_document(session_id, note_id)
+            from .report_charts import export as export_charts
+            doc['markdown']=export_charts(doc['markdown'])
             create = self._create_document
             if create is None:
                 from .feishu_auth import create_markdown_doc

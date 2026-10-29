@@ -140,6 +140,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     discovered={url_key(url) for url in urls(json.dumps(context,ensure_ascii=False))}
     discovered.update(url_key(s["url"]) for s in sources)
     citation_repairs=0
+    chart_repairs=0
     delivery_reviews=0
     format_repairs=0
     if kind == 'task': messages[0]["content"] += ("\n研究报告应读取一手正文并保留Markdown来源链接。搜索摘要不等于已读正文，"
@@ -154,6 +155,11 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     from . import project_workspace as project
     from .local_sources import get as get_source, read_page
     extra = {}
+    chart_count=0
+    if kind=='task' and '构建图表' in role.get('tools',[]):
+        from .report_charts import SPEC as CHART_SPEC,create as create_chart
+        extra['build_chart']={**CHART_SPEC,'read_only':False}
+        messages[0]['content']+='\n可用build_chart生成静态报告图，最多4张，只提交结构化数据；数值须来自已读正文并说明单位、可比口径。无可比数值用flow示意或文字表格，不编造评分。原样插入工具返回的tebb-chart块，不能编造图表ID。技术报告采用结论摘要、技术机制、可比数据与图表、适用场景、证据与限制；无关行业背景省略。关键结论缺正文尾部证据时按snapshot_id/next_offset补读，不把节选当全文。'
     delivering=kind=='task' and request.get('stage')=='deliver'
     if delivering:
         extra['submit_deliverable']=dict(type='function',function=dict(name='submit_deliverable',description='提交完整交付。complete表示当前用户核心目标完成；missing只列阻塞当前目标的缺失。未被要求的附加信息缺口列limitations，不能把报告框架当完成。',parameters=dict(type='object',properties={'report':{'type':'string'},'complete':{'type':'boolean'},'missing':{'type':'array','items':{'type':'string'}},'limitations':{'type':'array','items':{'type':'string'}}},required=['report','complete','missing'],additionalProperties=False)))
@@ -163,7 +169,8 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
             '通用操作任务按实际回执简洁报告结果和失败阶段，无需写成长篇研究报告；不要重复执行前序已经完成的外部写入。'
             '技术结论优先依据实际取得的一手正文；未使用的搜索结果不必堆入来源清单。仓库可读取不代表获得开源许可，未核实许可时不要称其已开源。')
     if kind == 'route':
-        extra['start_background_task'] = dict(type='function', function=dict(name='start_background_task', description='目标明确后开始执行。简单工作选direct；确需独立职责分工才选delegate。不执行业务工具。', parameters=dict(type='object', properties={'instructions': {'type':'string'}, 'strategy':{'type':'string','enum':['direct','delegate']}}, required=['instructions'], additionalProperties=False)))
+        messages[0]['content']+='\n用户明确要求图表时，start_background_task设置requires_charts=true，交付需有真实构建的图表；普通技术报告按需要使用图表。'
+        extra['start_background_task'] = dict(type='function', function=dict(name='start_background_task', description='目标明确后开始执行。简单工作选direct；确需独立职责分工才选delegate。不执行业务工具。', parameters=dict(type='object', properties={'instructions': {'type':'string'}, 'strategy':{'type':'string','enum':['direct','delegate']}, 'requires_charts':{'type':'boolean','description':'用户明确要求必须有图表时为true，不能以无图正文冒充完整交付'}}, required=['instructions'], additionalProperties=False)))
         from .clarification import QUESTION_SCHEMA,questions
         extra['request_clarification'] = dict(type='function',function=dict(name='request_clarification',description='缺少目标、对象、范围或必要参数时说明具体问题并暂停。日程仅缺时长时首选preset=calendar_duration，由系统提供可靠选项；其他问题提供questions。',parameters=dict(type='object',properties={'question':{'type':'string'},'questions':QUESTION_SCHEMA,'preset':{'type':'string','enum':['calendar_duration']}},required=['question'],additionalProperties=False)))
         messages[0]['content']+='\n需要追问时优先提供questions结构化选项，每次只问真正缺少的1至3项，每项2至4个选项，系统提供自定义。日程默认本地保存，不重复确认；只缺时长可给30分钟、1小时、1.5小时。不选中默认值，不自行代用户选择。'
@@ -212,6 +219,11 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     messages.append(dict(role='user',content='本轮权威目标与本任务（以此为准，保留全部目标）：\n'+json.dumps(dict(objective=request.get('objective',request['text']),task=request['text'],members=request.get('members',[]),draft=request.get('draft',''),required_sources=request.get('required_sources',[]),source_topics=request.get('source_topics',[])),ensure_ascii=False)))
 
     def extra_call(name, arguments):
+        nonlocal chart_count
+        if name=='build_chart':
+            if chart_count>=4:raise ValueError('本任务最多4张图表。')
+            chart_count+=1
+            return create_chart(arguments,sources,request.get('source_scope',request['collab_run']))
         snapshot = request.get('workspace')
         if name=='project_chat_search':
             from .chat_projects import search_chats
@@ -336,7 +348,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                     else:
                         if not 1<=len(calls)<=3 or any(c['function']['name']!='start_background_task' for c in calls): raise ValueError()
                         decisions=[parse_route(json.dumps(dict(mode='task',**json.loads(c['function'].get('arguments') or '{}')))) for c in calls]
-                        decision=decisions[0] if len(decisions)==1 else dict(mode='task',instructions=request['text'],strategy='direct')
+                        decision=decisions[0] if len(decisions)==1 else dict(mode='task',instructions=request['text'],strategy='direct',**({'requires_charts':True} if any(d.get('requires_charts') for d in decisions) else {}))
                 except (ValueError, TypeError, KeyError, AttributeError):
                     if turn >= budget - 1: raise PublicFailure('模型任务请求格式无效，未执行工具。')
                     messages.append(dict(role='user',content='任务请求格式无效。请只调用一次start_background_task提供明确目标和strategy，或调用request_clarification提问；无需执行的普通聊天可直接回答。'))
@@ -375,7 +387,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                         emit('tool_end',dict(tool=name,status='failed' if isinstance(result,dict) and result.get('ok') is False or name=='workspace_run' and result.get('state')!='succeeded' else 'success',path=arguments.get('path','')))
                     except Exception as exc:
                         reason = str(exc).replace(model['api_key'],'[密钥已隐藏]')[:800]
-                        result = dict(ok=False,error=reason)
+                        result = dict(ok=False,error=reason,**getattr(exc,'details',{}))
                         emit('tool_end',dict(tool=name,status='failed',error=reason))
                     messages.append(dict(role='tool',tool_call_id=call['id'],content=json.dumps(result,ensure_ascii=False) if not isinstance(result,str) else result))
                     continue
@@ -469,6 +481,14 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                 emit("answer_reset",True)
                 continue
         if kind=='task':
+            from .report_charts import validate_report
+            try:validate_report(text,request.get('source_scope',request['collab_run']),request.get('requires_charts',False))
+            except (ValueError,OSError):
+                if chart_repairs<1 and turn<budget-1 and 'build_chart' in extra:
+                    chart_repairs+=1
+                    messages.extend([revision_message(text,answer),dict(role='user',content='图表尚未核对成功，不能交付为完成。若尚未构建，请实际调用build_chart，使用已读正文与真实数据并说明单位/口径；若已有成功回执，复制其中的完整tebb-chart块，不能猜ID或重复构建。随后提交包含正文、真实图表及来源的完整报告。仍失败则保留数据并说明具体阶段。')])
+                    emit('answer_reset',True);emit('status','正在补齐明确要求的图表，尚未确认完整交付。');continue
+                raise PublicFailure('图表交付未确认：缺少真实图表或图表资产核对失败；保留已有正文和数据，未报告完整完成。')
             present=set()
             if any(s.get('kind')=='github' and s.get('level')=='body' and '/blob/' in s.get('url','') for s in sources):present.add('repository')
             if any(s.get('kind')=='page' and s.get('level')=='body' for s in sources):present.add('web')

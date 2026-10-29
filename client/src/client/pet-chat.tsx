@@ -1,3 +1,4 @@
+import { ReportAssetProvider } from './report-charts';
 import { ContextDebug } from './context-debug';
 import { ClarificationCard } from './clarification-card';
 import type { ClarificationAction } from './clarification-state';
@@ -120,7 +121,7 @@ export function PetChat({ backend }: { backend?: BackendInfo }) {
     try { const result = await rpc<{state:DemoState}>(info, 'collaboration_action', { action: { type:'cancel', id, conversation:cid, request_id:crypto.randomUUID() } }); accept(result.state); }
     catch(e) { setError(String(e)); }
   }
-  return <main className="pet-chat-window" onContextMenu={event => { if ((event.target as HTMLElement).closest('input,textarea')) return; event.preventDefault(); setMenu({x:Math.max(8,Math.min(event.clientX,window.innerWidth-160)), y:Math.max(8,Math.min(event.clientY,window.innerHeight-76))}); }}>
+  return <ReportAssetProvider info={info}><main className="pet-chat-window" onContextMenu={event => { if ((event.target as HTMLElement).closest('input,textarea')) return; event.preventDefault(); setMenu({x:Math.max(8,Math.min(event.clientX,window.innerWidth-160)), y:Math.max(8,Math.min(event.clientY,window.innerHeight-76))}); }}>
     <header className="pet-chat-title" data-tauri-drag-region><strong data-tauri-drag-region>tebb.</strong><span data-tauri-drag-region>{active.length ? '正在执行' : runs.some(r=>r.state==='needs_input')?'待补充':'随时聊聊'}</span><div className="pet-chat-window-actions" role="toolbar" aria-label="浮动聊天窗口操作"><button type="button" aria-label="创建新对话" title="创建新对话，保留当前任务和草稿" disabled={!info || creating || busy} onClick={()=>void newChat()}><AppIcon name="new_chat" /></button><button type="button" className="pet-chat-pin" aria-label={pinned?'取消置顶':'置顶对话框'} title={pinned?'取消置顶：点击其他界面时收起':'置顶：点击其他界面时保持显示'} aria-pressed={pinned} disabled={pinBusy} onClick={()=>void togglePin()}><AppIcon name="pin" /></button><button type="button" title="在主窗口打开" aria-label="在主窗口打开" onClick={() => void openMain()}><AppIcon name="expand" /></button><button type="button" aria-label="关闭对话框" title="关闭，任务继续执行" onClick={() => void close()}><AppIcon name="close" /></button></div></header>
     {resumeRun&&<div role="status">补充原任务目标<button type="button" onClick={()=>setResumeRun('')}>改发新消息</button></div>}
     <div className="pet-chat-controls"><select aria-label="当前会话" value={cid} onChange={e => { setConversation(e.target.value); setModel(''); following.current = true; }}>{state?.conversations.map(c => <option value={c.id} key={c.id}>{c.title}</option>)}</select><select aria-label="本轮模型" value={model} onChange={e => setModel(e.target.value)}><option value="">默认模型</option>{state?.models?.map(m => <option key={m.id} value={m.id}>{m.model}</option>)}</select></div>
@@ -141,5 +142,5 @@ export function PetChat({ backend }: { backend?: BackendInfo }) {
       }}/><footer><div className="pet-chat-compose-actions"><button type="button" aria-label="选择成员" disabled={!cid} title="@ 成员" onClick={()=>insertTrigger('@')}>@</button><button type="button" aria-label="选择技能" disabled={!cid} title="/ Skill" onClick={()=>insertTrigger('/')}>/</button></div><span>{active.length ? <><i className="tebb-stream-cursor" />任务执行中</>:'Enter 发送 · Shift+Enter 换行'}</span><button type="submit" disabled={busy || !cid || !draft.trim()}>发送 ↑</button></footer></form>
     {menu && <><button className="pet-chat-menu-dismiss" aria-label="收起菜单" onClick={()=>setMenu(null)}/><div className="pet-chat-menu" role="menu" style={{left:menu.x,top:menu.y}}><button role="menuitem" onClick={()=>void close()}>关闭对话框</button><small>任务继续，重新打开可恢复</small></div></>}
     <ContextDebug key={cid} info={info} conversation={cid} draft={draft}/>
-  </main>;
+  </main></ReportAssetProvider>;
 }
