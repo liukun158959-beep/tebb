@@ -68,6 +68,31 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
                 if frame['type'] in ('done', 'error'):
                     return frame
 
+    async def test_context_inspection_uses_authenticated_shared_rpc(self):
+        import httpx
+        from desk_companion import agent_debug as debug
+        from desk_companion.collaboration import Collaboration
+        from tests.test_collaboration import Queue,MODEL
+        patch('desk_companion.model_catalog.require_active',return_value=MODEL).start()
+        patch('desk_companion.model_catalog.require_item',return_value=MODEL).start()
+        c=Collaboration(self.host.work_board.path,managers=dict(work=Queue(),chat=Queue()),start=False);self.host._collaboration=c;self.addCleanup(c.shutdown)
+        root=c.action(dict(type='send',conversation='dm-tebb',text='隔离报告',mode='auto',request_id='context-rpc-root'))['state']['runs'][-1]
+        await self.notebook_rpc('save_context_capacity',model_id=MODEL['id'],window=128000,output_reserve=16000)
+        payload=dict(model=MODEL['model'],messages=[dict(role='user',content='完整调用末尾')],temperature=.7)
+        with debug.context(session='collab-'+root['id'],model_id=MODEL['id'],phase='route'):
+            call=debug.begin(httpx.Request('POST',MODEL['base_url']+'/chat/completions',json=payload),payload)
+        debug.update(call,state='succeeded');(debug.root()/(call+'.response.txt')).write_text(json.dumps(dict(usage=dict(prompt_tokens=4000))),'utf-8')
+        with self.host.turn_lock:
+            result=await self.notebook_rpc('load_context_debug',conversation='dm-tebb')
+        self.assertEqual(result['selected'],call);self.assertEqual(result['budget']['remaining'],108000)
+        async with connect(self.url,proxy=None) as ws:
+            await ws.send(json.dumps(dict(type='rpc',id='foreign',method='load_context_debug',args=dict(conversation='dm-writer',call_id=call))))
+            denied=json.loads(await ws.recv());self.assertFalse(denied['result']['ok'])
+        from websockets.exceptions import ConnectionClosed
+        with self.assertRaises(ConnectionClosed):
+            async with connect(self.url.replace('test-token','bad-token'),proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc',method='load_context_debug',args=dict(conversation='dm-tebb'))));await ws.recv()
+
     async def test_structured_clarification_roundtrip_is_bound_versioned_and_authenticated(self):
         from desk_companion.collaboration import Collaboration
         from tests.test_collaboration import Queue,MODEL

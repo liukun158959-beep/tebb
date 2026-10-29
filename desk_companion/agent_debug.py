@@ -83,6 +83,13 @@ def begin(request, payload):
     info = {**_default, **_context.get()}
     url = urlsplit(str(request.url))
     endpoint = url.scheme + "://" + (url.hostname or "") + (":" + str(url.port) if url.port else "") + url.path
+    if info.get('model_id'):
+        from .model_capacity import for_call
+        try:
+            meta={key:info[key] for key in ('model_id','collab_run','conversation','phase') if key in info}
+            meta['capacity']=for_call(info['model_id'],str(payload.get('model','')),endpoint)
+            (root()/(call_id+'.meta.json')).write_text(json.dumps(meta,ensure_ascii=False),'utf-8')
+        except (OSError,ValueError):pass
     now = time.time()
     with database() as db:
         db.execute("INSERT INTO calls VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
@@ -333,7 +340,9 @@ def detail(call_id):
     refresh(info)
     from .performance import task_snapshot,task_timing
     task=task_snapshot(info['task_id'])
-    return {"ok": True, "call": info, "request": json.loads(raw_request), "request_raw": raw_request,
+    meta_path=root()/(call_id+'.meta.json')
+    meta=json.loads(meta_path.read_text('utf-8')) if meta_path.exists() else {}
+    return {"ok": True, "call": info, "meta":meta, "request": json.loads(raw_request), "request_raw": raw_request,
             "response": decode_response(raw_response), "response_raw": raw_response,
             'timing':load_timing(call_id,info['state'] in {'sending','receiving'},info['updated']),'task':task,'chain':task_timing(task)}
 

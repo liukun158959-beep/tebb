@@ -25,7 +25,9 @@ def main():
     with contextlib.redirect_stdout(sys.stderr):
         emit('worker_phase', {'stage': 'request_received'})
         from .agent_debug import install
-        install({"task_id": request.get("task_id", ""), "session": request["session_id"], "channel": request.get("channel", "desktop")})
+        install({"task_id": request.get("task_id", ""), "session": request["session_id"], "channel": request.get("channel", "desktop"),
+                 'model_id':request.get('model_id',''),'collab_run':request.get('collab_run',''),
+                 'conversation':request.get('conversation',''),'phase':request.get('kind','')})
         if request.get("workflow") == "collaboration":
             from .collaboration_worker import execute
             try:

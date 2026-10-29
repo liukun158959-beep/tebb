@@ -682,7 +682,7 @@ class Collaboration:
                 if run["state"] == "pending":
                     if run.get('workspace', {}).get('primary') and set(run['agent_config']['tools']) & {'文件编辑', '终端'} and any(other['id'] != run['id'] and other['state'] in {'queued','running','cancelling'} and other.get('workspace',{}).get('primary') == run['workspace'].get('primary') and set(other['agent_config']['tools']) & {'文件编辑','终端'} for other in state['runs']):
                         run['status'] = '等待工作目录的编码任务完成'; continue
-                    request = dict(workflow="collaboration", collab_path=str(self.path), collab_run=run["id"],
+                    request = dict(workflow="collaboration", collab_path=str(self.path), collab_run=run["id"],conversation=run['conversation'],
                         role=run["agent_config"], kind=run["kind"], model_id=run["model_id"], context=run["context"], workspace=run.get("workspace"), selection=run.get("selection", {}),
                         reference_time=run.get("created",0), supplemented_at=run.get("supplemented_at"), members=run.get("members", []), require_execution=run.get('require_execution',False), applied=run["applied"], draft=run.get("parent_draft", ""), budget=max(0, call_budget(run['agent'],run['kind'])-phase_calls(run)),
                         objective=run.get('objective',run['input']),stage=run.get('stage','collect'),required_sources=run.get('required_sources',[]),

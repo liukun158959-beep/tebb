@@ -43,6 +43,14 @@ class Bridge:
     def load_collaboration(self, since="") -> dict:
         return self._host.collaboration.snapshot(since=since)
 
+    def load_context_debug(self,conversation,call_id='',before=None,draft=''):
+        from .context_inspector import inspect
+        return inspect(self._host.collaboration,conversation,call_id,before,draft)
+
+    def save_context_capacity(self,model_id,window=None,output_reserve=0):
+        from .model_capacity import save
+        return save(model_id,window,output_reserve)
+
     def load_work_board(self, request_id="") -> dict:
         return self._host.work_board.load(request_id)
 
