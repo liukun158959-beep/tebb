@@ -8,12 +8,14 @@ const Context=createContext<BackendInfo|null>(null);
 export function ReportAssetProvider({info,children}:{info:BackendInfo|null;children:ReactNode}){return <Context.Provider value={info}>{children}</Context.Provider>;}
 type Chart={ok:boolean;image:string;render_version?:number;spec:Record<string,unknown>&{title:string;type:string;labels?:string[];series?:{name:string;values:(number|null)[]}[];items?:{label:string;start:string;end?:string}[];nodes?:string[];edges?:[number,number][];edge_labels?:string[];node_lanes?:string[]};sources:{id:string;title:string;url:string;truncated:boolean}[]};
 
-export function ReportChart({id}:{id:string}){
+export function ReportChart({id,pending=false}:{id:string;pending?:boolean}){
   const info=useContext(Context),[data,setData]=useState<Chart|null>(null),[error,setError]=useState(''),[zoom,setZoom]=useState(false);
   useEffect(()=>{let alive=true;setData(null);setError('');
+    if(pending)return;
     if(!/^[a-f0-9]{32}$/.test(id)){setError('图表标识无效，未读取本机文件。');return;}
     void(async()=>{try{const endpoint=info||await backendInfo();const value=await rpc<Chart>(endpoint,'get_report_chart',{chart_id:id});if(!value.ok||!value.image.startsWith('data:image/png;base64,'))throw new Error('图表载荷未确认。');if(alive)setData(value);}catch(e){if(alive)setError(String(e));}})();
-    return()=>{alive=false;};},[id,info]);
+    return()=>{alive=false;};},[id,pending,info?.port,info?.token,info?.scope]);
+  if(pending)return <figure className="report-chart" aria-busy="true"><p role="status">图表内容正在生成…</p></figure>;
   if(error)return <figure className="report-chart"><p role="alert">图表暂不可读：{error}</p><code>{id}</code></figure>;
   if(!data)return <figure className="report-chart" aria-busy="true">正在读取已保存图表…</figure>;
   const s=data.spec;

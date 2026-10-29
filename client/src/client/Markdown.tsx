@@ -1,4 +1,4 @@
-import { Children, isValidElement, useState, type ReactNode } from "react";
+import { Children, createContext, isValidElement, useContext, useState, type ReactNode } from "react";
 import { ReportChart } from './report-charts';
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
@@ -60,6 +60,20 @@ const components: Components = {
   a: MdLink,
 };
 
+const MarkdownDocument=createContext({source:'',streaming:false});
+function MarkdownPre({children,node}:{children?:ReactNode;node?:{position?:{start?:{offset?:number};end?:{offset?:number}}}}){
+  const document=useContext(MarkdownDocument),child=Children.toArray(children)[0];
+  if(isValidElement<{className?:string;children?:ReactNode}>(child)&&child.props.className?.split(' ').includes('language-tebb-chart')){
+    const start=node?.position?.start?.offset,end=node?.position?.end?.offset;
+    const lines=(start!=null&&end!=null?document.source.slice(start,end):'').trimEnd().split(/\r?\n/);
+    const unquote=(line:string)=>line.replace(/^(?:[ \t]*>[ \t]?)+/,'');
+    const fence=unquote(lines[0]||'').match(/^\s*(`{3,}|~{3,})/);
+    const closed=!!fence&&lines.length>1&&new RegExp('^\\s*'+fence[1][0]+'{'+fence[1].length+',}\\s*$').test(unquote(lines.at(-1)||''));
+    return <ReportChart id={String(child.props.children||'').trim()} pending={document.streaming&&!closed}/>;
+  }
+  return <pre>{children}</pre>;
+}
+
 type StreamNode = { type: string; value?: string; children?: StreamNode[]; position?: { start: { offset?: number }; end: { offset?: number } }; tagName?: string; properties?: Record<string, unknown> };
 
 // Reveal only new text nodes, keeping the complete Markdown tree intact while streaming.
@@ -67,6 +81,7 @@ function streamingText(source: string, from: number, revision: number) {
   return () => (tree: StreamNode) => {
     function visit(parent: StreamNode) {
       parent.children = parent.children?.flatMap(node => {
+        if(node.type==='element'&&(node.tagName==='pre'||node.tagName==='code'))return [node];
         if (node.type !== 'text') { if (node.children) visit(node); return [node]; }
         const start = node.position?.start.offset, end = node.position?.end.offset;
         if (start === undefined || end === undefined || end <= from || !node.value) return [node];
@@ -207,16 +222,12 @@ export function Markdown(props: { text: string; cites?: number[]; onCite?: (n: n
       const safe = openableHref(href);
       return safe ? <a href={safe} target="_blank" rel="noopener noreferrer">{children}</a> : <span>{children}</span>;
     } } : {...components};
-  view.pre=({children})=>{
-    const child=Children.toArray(children)[0];
-    if(isValidElement<{className?:string;children?:ReactNode}>(child)&&child.props.className?.split(' ').includes('language-tebb-chart'))return <ReportChart id={String(child.props.children||'').trim()}/>;
-    return <pre>{children}</pre>;
-  };
+  view.pre=MarkdownPre;
   return (
     <div className="md" data-md="">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={props.reveal ? [streamingText(text, props.reveal.from, props.reveal.revision)] : []} components={view}>
+      <MarkdownDocument.Provider value={{source:text,streaming:!!props.reveal}}><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={props.reveal ? [streamingText(text, props.reveal.from, props.reveal.revision)] : []} components={view}>
         {text}
-      </ReactMarkdown>
+      </ReactMarkdown></MarkdownDocument.Provider>
     </div>
   );
 }

@@ -13,3 +13,26 @@ test('invalid chart id cannot read arbitrary paths or become executable markup',
  await act(async()=>{v=create(React.createElement(Markdown,{text:'```tebb-chart\n../../secret\n```\n\n<script>alert(1)</script>'}));});
  assert.equal(calls,0);assert(text(v.toJSON()).includes('图表标识无效'));assert.equal(v.root.findAllByType('script').length,0);await act(async()=>v.unmount());
 });
+
+test('streamed text keeps the chart, image and expanded sources mounted and reads once',async()=>{
+ const id='b'.repeat(32);let calls=0;const info={port:1,token:'t'};
+ const load=loader({'./api':{rpc:async()=>{calls++;return {ok:true,image:'data:image/png;base64,iVBORw0KGgo=',render_version:2,spec:{type:'flow',title:'稳定流程',nodes:['读取','核对'],edges:[[0,1]]},sources:[]};}}});
+ const {StreamText}=load('stream-text'),{ReportAssetProvider}=load('report-charts');let v,body='```tebb-chart\n'+id+'\n```';const view=active=>React.createElement(ReportAssetProvider,{info:{...info}},React.createElement(StreamText,{text:body,active}));
+ await act(async()=>{v=create(view(true));});const image=v.root.findByType('img');await act(async()=>button(v,'结构与依据').props.onClick());
+ for(let i=0;i<6;i++){body+='\n\n继续补充第'+i+'段。';await act(async()=>v.update(view(true)));assert.equal(v.root.findByType('img'),image);assert(text(v.toJSON()).includes('读取 → 核对'));}
+ await act(async()=>v.update(view(false)));assert.equal(calls,1);assert.equal(v.root.findByType('img'),image);assert(text(v.toJSON()).includes('读取 → 核对'));await act(async()=>v.unmount());
+});
+
+test('partial chart id and open fence wait without RPC or invalid-id flashes',async()=>{
+ const id='c'.repeat(32);let calls=0;
+ const load=loader({'./api':{backendInfo:async()=>({port:1,token:'t'}),rpc:async()=>{calls++;return {ok:true,image:'data:image/png;base64,iVBORw0KGgo=',spec:{type:'flow',title:'图',nodes:['A'],edges:[]},sources:[]};}}});const {StreamText}=load('stream-text');let v;
+ for(const body of ['```tebb-chart\n','```tebb-chart\n'+id.slice(0,8),'```tebb-chart\n'+id,'```tebb-chart\n'+id+'\n']){
+  await act(async()=>{const n=React.createElement(StreamText,{text:body,active:true});if(v)v.update(n);else v=create(n);});assert.equal(calls,0);assert.equal(v.root.findAllByProps({role:'alert'}).length,0);assert(text(v.toJSON()).includes('图表内容正在生成'));
+ }
+ await act(async()=>v.update(React.createElement(StreamText,{text:'```tebb-chart\n'+id+'\n```',active:true})));assert.equal(calls,1);assert.equal(v.root.findAllByType('img').length,1);await act(async()=>v.unmount());
+});
+
+test('closed chart fences in quoted and indented containers load during streaming',async()=>{
+ const id='d'.repeat(32);let calls=0;const load=loader({'./api':{backendInfo:async()=>({port:1,token:'t'}),rpc:async()=>{calls++;return {ok:true,image:'data:image/png;base64,iVBORw0KGgo=',spec:{type:'flow',title:'图',nodes:['A'],edges:[]},sources:[]};}}});const {StreamText}=load('stream-text');
+ for(const body of ['> ```tebb-chart\n> '+id+'\n> ```','> > ~~~~tebb-chart\n> > '+id+'\n> > ~~~~','- 图表\n\n  ```tebb-chart\n  '+id+'\n  ```']){let v;const previous=calls;await act(async()=>{v=create(React.createElement(StreamText,{text:body,active:true}));});assert.equal(calls,previous+1);assert.equal(v.root.findAllByType('img').length,1);await act(async()=>v.unmount());}
+});
