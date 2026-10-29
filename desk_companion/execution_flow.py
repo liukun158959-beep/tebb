@@ -2,9 +2,26 @@
 from __future__ import annotations
 
 import time
+import re
 
 ACTIVE = {'pending', 'queued', 'running', 'waiting', 'cancelling'}
 OPEN = ACTIVE | {'needs_input'}
+
+
+def explicit_search(text):
+    """Honor a literal search command; ordinary explanations still use routing."""
+    return bool(re.match(r'(?i)^\s*(?:(?:请|麻烦|帮我|给我|可以|能否|你能|帮忙)\s*)*(?:(?:上网|联网)\s*)?(?:搜索|查找|搜一下|搜下|search\b|look up\b)',text))
+
+
+def claims_handoff(text):
+    """A routing answer is never an execution receipt. Guard explicit promises.
+
+    This is a conservative invalid-output check, not an intent classifier. The
+    model still chooses answer/task/clarify, and only the scheduler starts work.
+    """
+    prose=re.sub(r'```[\s\S]*?```|`[^`]*`','',text)
+    return bool(re.search(r'(?:已(?:经)?|正在|即将).{0,32}(?:提交|交给|委派|派发|启动|安排|转交).{0,24}(?:后台|协作|伙伴|助手|任务)',prose)
+                or re.search(r'(?i)\bI\s+(?:have\s+|already\s+|am\s+)?(?:submitted|delegated|started|queued|dispatching)\b.{0,60}\b(?:background|agent|task|worker)\b',prose))
 
 
 def phase_calls(run):

@@ -424,21 +424,15 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                 messages.extend([{"role": "assistant", "content": text}, {"role": "user", "content": "规划只提交分工，业务工具在执行阶段提供；请调用submit_plan，只能选其他职责伙伴，不能选自己；依赖只能指向前序。"}])
                 continue
         if kind == 'route':
-            if not text.startswith(('{', '```json')):
-                if not text: raise PublicFailure('模型未返回回答或任务请求，请重试。')
-                emit('result', json.dumps(dict(mode='answer', text=text), ensure_ascii=False)); return
             try:
-                parse_route(text)
-            except (ValueError, TypeError):
-                if turn >= budget - 1:
-                    raise PublicFailure('模型未返回有效的回答或任务路由，格式纠正后仍无效；未执行工具，请重试。')
-                messages.extend([dict(role='assistant', content=text), dict(role='user', content=(
-                    '上次输出未遵守路由协议。只修正格式，不执行工具，不增加任务。'
-                    '如果只是代码示例或普通回答，将原回答完整放入JSON字符串text中：{"mode":"answer","text":"原回答"}。'
-                    '只有需要实际检索、读写文件或运行命令才返回{"mode":"task","instructions":"完整执行目标"}。'
-                    '字符串中的换行、双引号与反斜杠必须正确转义。仅返回JSON对象。'))])
-                emit('status', '正在纠正模型回复格式，尚未执行工具。')
-                continue
+                decision=parse_route(text if text.startswith(('{','```json')) else json.dumps(dict(mode='answer',text=text)))
+                if request.get('require_execution') and decision['mode']=='answer':raise ValueError('明确执行请求不能用无工具的普通回答结束。')
+            except (ValueError,TypeError):
+                emit('answer_reset',True)
+                if turn>=budget-1:raise PublicFailure('模型未返回有效的回答或真实任务申请；仅口头声称提交不算派发，未执行工具，请重试。')
+                messages.extend([revision_message(text,answer),dict(role='user',content='没有收到真实后台提交回执，不能声称已提交、正在后台执行或已交给伙伴。需要实际搜索或操作时只调用start_background_task，缺信息调用request_clarification；普通解释、代码示例可直接回答，但不能编造执行进度。也可用合法mode=answer/task/clarify的JSON修正。')])
+                emit('status','正在纠正路由，尚未开始后台操作。');continue
+            emit('result',json.dumps(decision,ensure_ascii=False));return
         if kind=="task" and sources:
             text,unknown_ids=render_citations(text,sources)
             audit=check_citations(text,sources)

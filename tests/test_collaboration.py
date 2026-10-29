@@ -362,7 +362,7 @@ class CollaborationTests(unittest.TestCase):
         self.assertIn('研究并写成报告',child['input'] if 'input' in child else child['title'])
 
     def test_route_accepts_plain_code_in_one_call_without_executing_tools(self):
-        request=self.request();request['kind']='route'
+        request=self.request();request['kind']='route';request['require_execution']=False
         code='```python\ndef bubble_sort(a):\n    pass\n```';calls=[];events=[]
         class LLM:
             def chat(_,messages,tools,on_delta):

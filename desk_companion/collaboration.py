@@ -35,6 +35,9 @@ def parse_route(text):
         raise ValueError('无效路由内容')
     if decision.get('strategy', 'direct') not in {'direct', 'delegate'}:
         raise ValueError('无效执行方式')
+    if decision['mode']=='answer':
+        from .execution_flow import claims_handoff
+        if claims_handoff(content):raise ValueError('未取得真实后台提交，不能把口头派发声明当回答。')
     return decision
 
 
@@ -521,7 +524,8 @@ class Collaboration:
             reserved = sum((2 if r["kind"] in {"plan", "route"} else 1) for r in state["runs"] if r["state"] in ACTIVE)
             if reserved + (2 if mode != "message" else 1) > 12: raise ValueError("已有较多待处理工作，请先完成或停止部分任务")
             run = self._run(state, conversation, target, text, 'chat' if mode=='message' else 'route', context=history, model_id=action.get("model_id", ""))
-            run['require_execution']=mode=='task'
+            from .execution_flow import explicit_search
+            run['require_execution']=mode=='task' or mode=='auto' and explicit_search(text)
             run["selection"] = selection
             if action.get('sampling'):
                 from .sampling import parse_sampling
