@@ -47,9 +47,9 @@ class Bridge:
         from .context_inspector import inspect
         return inspect(self._host.collaboration,conversation,call_id,before,draft)
 
-    def save_context_capacity(self,model_id,window=None,output_reserve=0):
+    def save_context_capacity(self,model_id,window=None,output_reserve=0,tokenizer_dir=None):
         from .model_capacity import save
-        return save(model_id,window,output_reserve)
+        return save(model_id,window,output_reserve,tokenizer_dir)
 
     def get_report_chart(self,chart_id):
         from .report_charts import public

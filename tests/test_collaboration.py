@@ -36,6 +36,17 @@ class Queue:
 
 
 class CollaborationTests(unittest.TestCase):
+    def test_partner_memory_updates_only_member_memory_and_preserves_configuration(self):
+        before=copy.deepcopy(next(a for a in self.state()['agents'] if a['id']=='research'))
+        started=self.service.action(dict(type='send',conversation='dm-research',text='核对资料来源',mode='auto',request_id=uuid.uuid4().hex))['state']['runs'][-1]
+        state=self.action(type='partner_memory',agent_id='research',memory='只改记忆')
+        after=next(a for a in state['agents'] if a['id']=='research')
+        self.assertEqual(after,{**before,'memory':'只改记忆'})
+        with transaction(self.service.path) as (internal,_):
+            self.assertEqual(next(r for r in internal['runs'] if r['id']==started['id'])['agent_config']['memory'],before['memory'])
+        with self.assertRaises(ValueError):self.service.action(dict(type='partner_memory',conversation='dm-writer',agent_id='research',memory='不应写入',request_id=uuid.uuid4().hex))
+        with self.assertRaises(ValueError):self.action(type='partner_memory',agent_id='research',memory='x'*2001)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.env = patch.dict(os.environ, {"DESK_COMPANION_DATA_DIR": self.temp.name}); self.env.start()

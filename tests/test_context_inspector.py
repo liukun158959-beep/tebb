@@ -41,19 +41,20 @@ class ContextInspectorTests(unittest.TestCase):
         with self.assertRaises(ValueError):inspector.inspect(self.collab,'one',foreign)
         with self.assertRaises(ValueError):inspector.inspect(self.collab,'missing')
 
-    def test_unknown_window_and_estimate_are_explicit_not_fixed_128k(self):
+    def test_unknown_window_and_missing_tokenizer_never_guess_tokens(self):
         ident=self.call(usage=None)
         result=inspector.inspect(self.collab,'one',ident,draft='新的问题')
         self.assertIsNone(result['budget']['window']);self.assertIsNone(result['budget']['remaining'])
-        self.assertEqual(result['budget']['input_source'],'estimate')
-        self.assertEqual(result['budget']['draft_reference']['source'],'last_request_plus_draft')
-        self.assertGreater(result['budget']['draft_reference']['input_tokens'],result['budget']['input_tokens'])
+        self.assertEqual(result['budget']['input_source'],'unavailable')
+        self.assertIsNone(result['budget']['input_tokens'])
+        self.assertIsNone(result['budget']['draft_reference']['tokens'])
 
     def test_capacity_snapshot_remains_bound_to_model_endpoint_and_call(self):
         model_capacity.save('m1',10000,2000)
         ident=self.call(usage=3000)
         model_capacity.save('m1',20000,1000)
-        budget=inspector.inspect(self.collab,'one',ident)['budget']
+        result=inspector.inspect(self.collab,'one',ident);budget=result['budget']
+        self.assertEqual(result['configuration']['window'],20000)
         self.assertEqual((budget['window'],budget['remaining'],budget['input_source']),(10000,5000,'provider'))
         self.assertEqual(budget['capacity_source'],'captured_config')
         self.assertIsNone(model_capacity.for_call('m1','different-model','https://api.example.org/v1/chat/completions')['window'])

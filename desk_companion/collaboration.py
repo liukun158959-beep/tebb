@@ -612,6 +612,14 @@ class Collaboration:
             if existing: state["conversations"][state["conversations"].index(existing)] = row
             else: state["conversations"].append(row)
             state["selected"] = row["id"]
+        elif kind == 'partner_memory':
+            memory=action.get('memory')
+            agent=next((a for a in state['agents'] if a['id']==action.get('agent_id')),None)
+            if not conversation or not agent or agent['id'] not in conversation['members']:
+                raise ValueError('伙伴不属于当前会话。')
+            if not isinstance(memory,str) or len(memory)>2000:
+                raise ValueError('伙伴记忆须为不超过2000字的文本。')
+            agent['memory']=memory
         elif kind == "agent":
             from .model_catalog import require_item
             agent = action.get("agent")

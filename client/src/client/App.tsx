@@ -13,7 +13,6 @@ import {
   KNOWLEDGE_CATALOG,
   KNOWLEDGE_FIXTURE,
   NOTE_FIXTURE,
-  MEMORY_FIXTURE,
   FEISHU_LOGGED_OUT,
   FEISHU_WAITING,
   STATUS_FIXTURE,
@@ -21,7 +20,7 @@ import {
   debugRequested,
   installDeskDebug,
 } from "./debug";
-import { ContextCard, ContextSplit, MemoryPane, modelVerbatim, splitIndex, type ContextView, type MemoryPayload } from "./memory";
+import { ContextCard, ContextSplit, modelVerbatim, splitIndex, type ContextView, type MemoryPayload } from "./memory";
 import { KnowledgePane, KnowledgeTraceView, mergeKnowledgePage, type FeishuDoc, type KnowledgePayload } from "./knowledge";
 import { NoteMode, type NotebookPage, type NoteDoc, type NoteSession } from "./note";
 import { FeishuPane, feishuLoggedIn, feishuWaiting, type FeishuSnap } from "./feishu";
@@ -172,13 +171,10 @@ export function App() {
   const [board, setBoard] = useState<BoardPayload | null>(boardDebug ? BOARD_FIXTURE : null);
   const [boardClock, setBoardClock] = useState<string | null>(debugKind ? BOARD_NOW : null);
   const [statuses, setStatuses] = useState<StatusView[]>(boardDebug ? STATUS_FIXTURE : []);
-  const [chatFace, setChatFace] = useState<"thread" | "memory" | "knowledge" | "notebooks">(
-    debugKind === "memory" ? "memory" : debugKind === "knowledge" ? "knowledge" : "thread",
+  const [chatFace, setChatFace] = useState<"thread" | "knowledge" | "notebooks">(
+    debugKind === "knowledge" ? "knowledge" : "thread",
   );
-  const [memory, setMemory] = useState<MemoryPayload | null>(debugKind === "memory" ? MEMORY_FIXTURE : null);
-  const [memoryLoading, setMemoryLoading] = useState(false);
   const [memoryBusy, setMemoryBusy] = useState(false);
-  const [memoryFormError, setMemoryFormError] = useState("");
   const [knowledge, setKnowledge] = useState<KnowledgePayload | null>(debugKind === "knowledge" ? KNOWLEDGE_FIXTURE : null);
   const [knowledgeCatalog, setKnowledgeCatalog] = useState<FeishuDoc[]>(debugKind === "knowledge" ? KNOWLEDGE_CATALOG : []);
   const [knowledgeCatalogError, setKnowledgeCatalogError] = useState("");
@@ -446,11 +442,9 @@ export function App() {
       requestToday: () => {setCalendarTarget({view:'today'});openBoardRef.current(false);},
       openFeishu: () => openFeishuRef.current(),
       seedFeishu: (snap) => rememberFeishuRef.current(snap),
-      seedMemory: (payload) => {
-        setPane("chat");
-        setChatFace("memory");
-        setMemory(payload);
-        setMemoryFormError("");
+      seedMemory: () => {
+        setPane("collaboration");
+        setChatFace("thread");
       },
       shouldReloadBoard,
       setSampling: (effort, temperature, topP) => {
@@ -1186,29 +1180,6 @@ export function App() {
     void loadBoardSnapshot(refresh);
   }
 
-  async function openMemory() {
-    setNoteSessionId(null);
-    setPane("chat");
-    setChatFace("memory");
-    setMemoryFormError("");
-    if (debugPane()) {
-      setMemory((cur) => cur || (debugPane() === "memory" ? MEMORY_FIXTURE : { ok: false, error: "调试页只看样本，不读取事实。", facts: [], items: [] }));
-      return;
-    }
-    if (!info) {
-      setMemory({ ok: false, error: "还没有连上本地后端。恢复：重启客户端。", facts: [], items: [] });
-      return;
-    }
-    setMemoryLoading(true);
-    try {
-      setMemory(await rpc<MemoryPayload>(info, "load_memory"));
-    } catch (err) {
-      setMemory({ ok: false, error: String(err), facts: [], items: [] });
-    } finally {
-      setMemoryLoading(false);
-    }
-  }
-
   async function openKnowledge() {
     setNoteSessionId(null);
     setPane("chat");
@@ -1283,7 +1254,7 @@ export function App() {
 
   async function compressContext(): Promise<boolean> {
     if (debugPane()) {
-      setMemoryFormError("调试页只看样本，不压缩。");
+      setError("调试页只看样本，不压缩。");
       return false;
     }
     if (!info) {
@@ -1298,44 +1269,10 @@ export function App() {
         setError(data.error || "压缩没有完成。");
         return false;
       }
-      setMemory(data);
       await loadThread(info);
       return true;
     } catch (err) {
       setError(String(err));
-      return false;
-    } finally {
-      setMemoryBusy(false);
-    }
-  }
-
-  async function changeFact(
-    method: "add_fact" | "update_fact" | "delete_fact" | "delete_memory_turn",
-    args: Record<string, unknown>,
-  ): Promise<boolean> {
-    if (debugPane()) {
-      setMemoryFormError("调试页只看样本，不改记忆。");
-      return false;
-    }
-    if (!info) {
-      setMemoryFormError("还没有连上本地后端。恢复：重启客户端。");
-      return false;
-    }
-    setMemoryBusy(true);
-    try {
-      const data = await rpc<MemoryPayload>(info, method, args);
-      if (data.ok === false && !Array.isArray(data.facts)) {
-        setMemoryFormError(data.error || "事实没有改成。");
-        return false;
-      }
-      setMemoryFormError("");
-      setMemory(data);
-      if (method === "delete_memory_turn" && info) {
-        await loadThread(info);
-      }
-      return data.ok !== false;
-    } catch (err) {
-      setMemoryFormError(String(err));
       return false;
     } finally {
       setMemoryBusy(false);
@@ -1852,7 +1789,7 @@ export function App() {
   const coreChat = pane === "collaboration" || (!debugKind && pane === "chat" && chatFace === "thread" && !noteSessionId);
   const changeDeveloperMode = (value: boolean) => {
     setDeveloperMode(value); setComposerNotice(value ? "开发者模式已开启" : "开发者模式已关闭"); const notice = saveDeveloperMode(value); if (notice) setError(notice);
-    if (!value) { setAgentDebugOpen(false); if (chatFace === "memory") { setChatFace("thread"); setPane("collaboration"); } }
+    if (!value) setAgentDebugOpen(false);
   };
   async function openNotes(){
     setPane('chat');setChatFace('notebooks');
@@ -1878,7 +1815,6 @@ export function App() {
     <RailButton icon="video" label="视频学习" active={pane === "video"} onClick={() => navigateWorkspace(()=>setPane("video"))} />
     <RailButton icon="feishu" label="飞书" active={pane === "feishu"} onClick={() => navigateWorkspace(()=>void openFeishu())} />
     <span className="tebb-nav-group">偏好</span>
-    {developerMode && <RailButton icon="memory" label="旧助手记忆调试" active={pane === "chat" && chatFace === "memory"} onClick={() => navigateWorkspace(()=>void openMemory())} />}
     <RailButton icon="settings" label="设置" active={pane === "settings"} onClick={() => navigateWorkspace(()=>setPane("settings"))} />
     <div className="tebb-nav-actions"><RailButton icon="pet" label="桌宠" active={pane==='pet'} onClick={()=>navigateWorkspace(()=>setPane('pet'))}/></div>
   </>;
@@ -1912,7 +1848,7 @@ export function App() {
       </div>
       <WorkspaceRail developer={developerMode} onToggle={() => changeDeveloperMode(!developerMode)}>{workspaceNavigation}</WorkspaceRail>
       <main className="main-workspace relative z-10 flex min-w-0 flex-1 flex-col">
-        <TopToolbar title={pane === "chat" ? noteSessionId ? "笔记" : ({ thread: "对话", memory: "记忆", knowledge: "知识库", notebooks:"笔记" })[chatFace] :
+        <TopToolbar title={pane === "chat" ? noteSessionId ? "笔记" : ({ thread: "对话", knowledge: "知识库", notebooks:"笔记" })[chatFace] :
           ({ work: "事项", board: "日程", feishu: "飞书", settings: "设置", automation: "自动化", monitor: "AI 执行", video: "视频学习", collaboration: "伙伴聊天", pet: "桌宠" })[pane]}
           model={modelItems.find(m => m.id === activeModelId)?.model ? `默认：${modelItems.find(m => m.id === activeModelId)?.model}` : ""} connected={!!info || !!debugKind} busy={busy || noteBusy}
           onNewChat={coreChat ? () => { setPane("collaboration"); window.dispatchEvent(new CustomEvent("tebb-new-chat")); } : undefined}
@@ -1981,24 +1917,6 @@ export function App() {
             </section>
           ) : pane === "chat" && chatFace === "notebooks" ? (
             <section key="notebooks" data-notebook-empty className="flex-1 overflow-y-auto px-8 py-6"><h1 className="text-xl">笔记</h1><p className="my-4 text-sm text-muted-foreground">选择或新建笔记会话，基于来源提问并保存成果。</p>{noteListError&&<p role="alert" className="text-destructive">{noteListError}</p>}<button type="button" className="desk-menu-item" disabled={notebookCreating||notebookNeedsCheck||busy||noteBusy} onClick={()=>void newNotebook()}>{notebookCreating?'正在创建…':'＋ 新建笔记'}</button><button type="button" className="desk-menu-item" onClick={()=>void refreshNotebooks()}>读取笔记核对</button>{noteSessions.map(session=><button type="button" className="desk-menu-item" key={session.id} onClick={()=>openNoteSession(session.id)}>{session.title||'未命名笔记'}</button>)}</section>
-          ) : pane === "chat" && chatFace === "memory" ? (
-            <section
-              key="memory"
-              data-chat-face="memory"
-              className="flex-1 overflow-y-auto px-8 py-6"
-            >
-              <MemoryPane
-                data={memory}
-                loading={memoryLoading}
-                formError={memoryFormError}
-                busy={memoryBusy}
-                onAdd={(text) => changeFact("add_fact", { text })}
-                onUpdate={(id, text) => changeFact("update_fact", { fact_id: id, text })}
-                onDelete={(id) => changeFact("delete_fact", { fact_id: id })}
-                onDrop={(role, text) => changeFact("delete_memory_turn", { role, text })}
-                onCompress={compressContext}
-              />
-            </section>
           ) : pane === "chat" && noteSessionId ? (
             <section
               key={`note-${noteSessionId}`}

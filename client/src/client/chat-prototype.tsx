@@ -111,9 +111,6 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
   const [deleting, setDeleting] = useState("");
   const [renaming, setRenaming] = useState("");
   const [renameText, setRenameText] = useState("");
-  const [memoryConversation, setMemoryConversation] = useState("");
-  const [memoryAgent, setMemoryAgent] = useState("");
-  const [memoryDraft, setMemoryDraft] = useState("");
   const menuBox = useRef<HTMLDivElement>(null);
   const menuTrigger = useRef<HTMLElement | null>(null);
   const [mobileList, setMobileList] = useState(false);
@@ -193,7 +190,6 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
     });
     setStorageError("内容已加入当前草稿，尚未发送（单条消息最多4000字）。");
   }, [composeRequest]);
-  useEffect(() => { if (!developer) setMemoryConversation(""); }, [developer]);
   useEffect(() => { if (conversation.project_id) setCollapsedProjects(old => ({ ...old, [conversation.project_id!]: false })); }, [conversation.id, conversation.project_id]);
   useEffect(()=>{if(typeof CustomEvent!=='undefined'&&window.dispatchEvent){window.dispatchEvent(new CustomEvent('tebb-project-selected',{detail:{project_id:conversation.project_id||'',revision:state.workspace?.revision}}));if(state.workspace)window.dispatchEvent(new CustomEvent('tebb-workspace-changed',{detail:state.workspace}));}},[conversation.project_id,state.workspace?.revision]);
   useEffect(() => { if (!window.addEventListener) return;
@@ -228,11 +224,6 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
   }
   function menuKeys(id: string, event: React.KeyboardEvent<HTMLElement>) {
     if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) openMenu(id, event);
-  }
-  function editMemory(id: string) {
-    const c = state.conversations.find(c => c.id === id)!;
-    const a = member(c.coordinator)!;
-    setMemoryConversation(id); setMemoryAgent(a.id); setMemoryDraft(a.memory); setMenu(null);
   }
   function select(id: string) {
     dispatch({ type: "select", id }); setTarget(""); setUpdateRun(""); setFocusedRun(""); setMobileList(false); setPicker("");
@@ -397,7 +388,6 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
         {state.conversations.find(c => c.id === menu.id)?.kind === "group" && <button role="menuitem" onClick={() => { setRenaming(menu.id); setRenameText(state.conversations.find(c => c.id === menu.id)!.title); setMenu(null); }}>重命名群聊</button>}
         <button role="menuitem" onClick={() => { setMovingConversation(menu.id); setMoveProject(state.conversations.find(c=>c.id===menu.id)?.project_id || ''); setMenu(null); }}>移动到项目</button>
         <button role="menuitem" onClick={() => { setDeleting(menu.id); setMenu(null); }}>删除对话</button>
-        {developer && <button role="menuitem" onClick={() => editMemory(menu.id)}>调试伙伴记忆</button>}
       </div>
     </div>}
     {projectForm && <Modal title={projectForm.id ? '项目设置' : '新建项目'} onClose={() => setProjectForm(null)}><form className="cp-form" onSubmit={async event => { event.preventDefault(); if (!projectForm.name.trim() || projectNameError) return; if (await sendAction(projectForm.id ? {type:'rename_project',id:projectForm.id,name:projectForm.name,instructions:projectForm.instructions||''} : {type:'create_project',name:projectForm.name})) {setProjectForm(null);setListView('history');} }}>
@@ -415,11 +405,6 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
         const id = deleting; if (await sendAction({ type: "delete_conversation", id })) { setDeleting(""); setDrafts(old => { const next = { ...old }; delete next[id]; return next; }); setUpdateRun(""); setTarget(""); setArtifactId(""); }
       }}>确认删除</button></footer></div></Modal>}
     {renaming && <Modal title="重命名群聊" onClose={() => setRenaming("")}><form className="cp-form" onSubmit={async event => { event.preventDefault(); if (await sendAction({ type: "rename_conversation", id: renaming, title: renameText })) setRenaming(""); }}><label>群名称<input value={renameText} maxLength={40} onChange={event => setRenameText(event.target.value)} /></label>{live?.error && <p role="alert">{live.error}</p>}<footer><button className="cp-button cp-primary" disabled={live?.busy || !renameText.trim()}>保存名称</button></footer></form></Modal>}
-    {developer && memoryConversation && <Modal title="伙伴私有记忆 · 开发者调试" onClose={() => setMemoryConversation("")}><form className="cp-form" onSubmit={async event => { event.preventDefault(); const agent = member(memoryAgent)!; if (await sendAction({ type: "agent", agent: { ...agent, memory: memoryDraft } })) setMemoryConversation(""); }}>
-      <p className="cp-muted">此处编辑注入指定伙伴的私有偏好；不代表自动提取的全部记忆，也不包括旧助手的全局记忆。新配置在之后提交的任务中生效。</p>
-      <label>伙伴<select value={memoryAgent} onChange={event => { setMemoryAgent(event.target.value); setMemoryDraft(member(event.target.value)!.memory); }}>{state.agents.filter(a => state.conversations.find(c => c.id === memoryConversation)?.members.includes(a.id)).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
-      <label>私有记忆<textarea rows={8} maxLength={2000} value={memoryDraft} onChange={event => setMemoryDraft(event.target.value)} /></label>{live?.error && <p role="alert">{live.error}</p>}<footer><button className="cp-button cp-primary" disabled={live?.busy}>保存私有记忆</button></footer>
-    </form></Modal>}
     {groupOpen && <GroupForm editing={editingGroup} agents={state.agents} projects={projects} projectId={groupProject} real={real} actionError={live?.error} busy={live?.busy} onClose={() => setGroupOpen(false)} onCreate={async (title, members, goal, project_id) => { if (await sendAction({ type: "group", id: editingGroup?.id, title, members, goal, project_id })) { setGroupOpen(false); setTarget(""); setUpdateRun(""); } }} />}
     {editingAgent && <AgentForm developer={developer} agent={editingAgent} agents={state.agents} real={real} models={state.models} actionError={live?.error} busy={live?.busy} onClose={() => setEditingAgent(null)} onSave={async agent => { if (await sendAction({ type: "agent", agent })) setEditingAgent(null); }} />}
     {currentArtifact?.artifact && <Modal title={real ? "成果文档" : "成果文档 · 演示"} onClose={() => setArtifactId("")}><div className="cp-document"><div className="cp-document-label">LOCAL ARTIFACT / {real ? "实际任务成果" : "结构样例"}</div><div className="cp-markdown"><Markdown text={currentArtifact.artifact} externalLinks={standalone} /></div></div>

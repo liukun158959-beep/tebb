@@ -85,6 +85,16 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         with self.host.turn_lock:
             result=await self.notebook_rpc('load_context_debug',conversation='dm-tebb')
         self.assertEqual(result['selected'],call);self.assertEqual(result['budget']['remaining'],108000)
+        from tests.test_model_tokenizer import RealTokenizerTests
+        tokenizer=RealTokenizerTests('test_real_template_count_includes_tools_but_not_http_parameters');tokenizer.setUp();self.addCleanup(tokenizer.doCleanups)
+        await self.notebook_rpc('save_context_capacity',model_id=MODEL['id'],window=128000,output_reserve=16000,tokenizer_dir=tokenizer.temp.name)
+        with debug.context(session='collab-'+root['id'],model_id=MODEL['id'],phase='task'):
+            local=debug.begin(httpx.Request('POST',MODEL['base_url']+'/chat/completions',json=payload),payload)
+        debug.update(local,state='succeeded');(debug.root()/(local+'.response.txt')).write_text('{}','utf-8')
+        counted=await self.notebook_rpc('load_context_debug',conversation='dm-tebb',call_id=local)
+        self.assertEqual(counted['budget']['input_source'],'tokenizer');self.assertGreater(counted['budget']['input_tokens'],0)
+        await self.notebook_rpc('collaboration_action',action=dict(type='partner_memory',conversation='dm-tebb',agent_id='tebb',memory='认证RPC新偏好',request_id='new-memory-rpc-test'))
+        self.assertEqual((await self.notebook_rpc('load_context_debug',conversation='dm-tebb'))['agents'][0]['memory'],'认证RPC新偏好')
         async with connect(self.url,proxy=None) as ws:
             await ws.send(json.dumps(dict(type='rpc',id='foreign',method='load_context_debug',args=dict(conversation='dm-writer',call_id=call))))
             denied=json.loads(await ws.recv());self.assertFalse(denied['result']['ok'])

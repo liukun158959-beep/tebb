@@ -253,7 +253,7 @@ test('standalone preview loads no real App; normal startup still loads the real 
 
 const contextEvent = (rest = {}) => ({ preventDefault() {}, currentTarget: { getBoundingClientRect: () => ({ right: 200, top: 100 }), focus() {} }, clientX: 120, clientY: 100, ...rest });
 
-test('normal context menu manages conversations; private memory appears only in developer mode', async () => {
+test('context menu manages conversations; memory has one dedicated composer entry', async () => {
   const { saved } = environment(); const { ChatPrototype } = load('chat-prototype'); let view;
   await act(async () => { view = create(React.createElement(ChatPrototype, {standalone:true})); });
   const dm = () => view.root.findByProps({ 'data-chat-partner': 'research' });
@@ -264,14 +264,8 @@ test('normal context menu manages conversations; private memory appears only in 
   for(let i=0;i<5;i++) await act(async () => view.root.findByProps({'data-product-version':true}).props.onClick());
   assert.equal(saved.get('tebb.developer-mode'), 'true');
   await act(async () => dm().props.onContextMenu(contextEvent()));
-  await act(async () => button(view, '调试伙伴记忆').props.onClick());
-  let modal = view.root.findByProps({ role: 'dialog' });
-  assert(text(modal).includes('伙伴私有记忆'));
-  await act(async () => modal.findByType('textarea').props.onChange({ target: { value: '只给阿探的偏好' } }));
-  await act(async () => modal.findByType('form').props.onSubmit({ preventDefault() {} }));
-  const state = JSON.parse(saved.get(DEMO_STORAGE));
-  assert.equal(state.agents[1].memory, '只给阿探的偏好');
-  assert(!JSON.stringify(state.messages).includes('只给阿探的偏好'));
+  assert(!button(view, '调试伙伴记忆'));
+  assert(button(view, '记忆'));
   for(let i=0;i<5;i++) await act(async () => view.root.findByProps({'data-product-version':true}).props.onClick());
   await act(async () => dm().props.onKeyDown(contextEvent({ key: 'F10', shiftKey: true })));
   assert(!button(view, '调试伙伴记忆'));
