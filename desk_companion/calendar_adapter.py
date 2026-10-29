@@ -71,12 +71,15 @@ class CalendarAdapter:
         self.run = run
 
     def _call(self, args, timeout=20):
+        from .feishu_access import NotConnected
         try:
             raw = self.run(['calendar', *args, '--as', 'user'], timeout=timeout)
             env = json.loads(raw)
             if env.get('ok') is True and isinstance(env.get('data'), dict):
                 return env['data']
             failure = json.dumps(env)
+        except NotConnected as exc:
+            raise CalendarError(str(exc)) from None
         except Exception as exc:
             failure = str(exc)
         # The existing CLI transport embeds its JSON error in RuntimeError on nonzero exit.

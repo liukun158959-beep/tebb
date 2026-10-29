@@ -20,6 +20,7 @@ class DocumentCreationError(RuntimeError):
 
 
 def feishu_status() -> dict:
+    from .feishu_access import connected
     try:
         _lark_bin()
     except RuntimeError as exc:
@@ -83,10 +84,13 @@ def feishu_status() -> dict:
     )
     if not logged_in and data.get("identity") == "user" and data.get("verified") is True:
         logged_in = True
+    profile_connected = connected()
     return {
         "ok": True,
         "installed": True,
-        "logged_in": logged_in,
+        "system_logged_in": logged_in,
+        "connected": profile_connected,
+        "logged_in": logged_in and profile_connected,
         "user_name": str(name),
         "identity": str(data.get("identity") or env.get("identity") or ""),
         "has_calendar": "calendar:" in lower or "calendar." in lower,
@@ -111,6 +115,12 @@ def _first_json(raw: str) -> str:
 
 def feishu_login_start() -> dict:
     global _login_busy, _login_error
+    from .feishu_access import connected, save
+    if not connected():
+        status = feishu_status()
+        if status.get('system_logged_in'):
+            save(True)
+            return dict(ok=True, message='已将本机飞书账户连接到此 tebb 数据目录。')
     with _login_lock:
         if _login_busy:
             raise RuntimeError("已经在等浏览器授权，请先完成或稍后再试。")
@@ -154,6 +164,8 @@ def _finish_login(device_code: str) -> None:
     global _login_busy, _login_error
     try:
         _run_lark(["auth", "login", "--device-code", device_code], timeout=300)
+        from .feishu_access import save
+        save(True)
         _login_error = ""
     except Exception as exc:
         _login_error = str(exc)
@@ -163,14 +175,9 @@ def _finish_login(device_code: str) -> None:
 
 
 def feishu_logout() -> dict:
-    raw = _run_lark(["auth", "logout", "--json"])
-    try:
-        env = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"lark-cli auth logout 未返回 JSON。\n{raw}") from exc
-    if not isinstance(env, dict) or env.get("ok") is not True:
-        raise RuntimeError(f"退出登录失败。\n{raw}")
-    return {"ok": True, "message": "已退出本机飞书登录。"}
+    from .feishu_access import save
+    save(False)
+    return {"ok": True, "message": "已断开此 tebb 的飞书连接，保留本机登录及已有数据。"}
 
 
 def create_markdown_doc(title: str, markdown: str, *, parent_token: str = "", profile: str = "") -> dict:

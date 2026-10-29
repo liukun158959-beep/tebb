@@ -6,12 +6,10 @@ import shutil
 import subprocess
 import zipfile
 from pathlib import Path
+from release_audit import audit
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = json.loads((ROOT / "client/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))["version"]
-PRIVATE_NAMES = {".env", "user_state.json", "models.json", "mcp.json", "maa.json", "onboarding.json",
-                 "feishu_agent.json", "news_settings.json",
-                 "automation_jobs.json", "arknights_account.json", "raise_roster.json"}
 
 
 def main():
@@ -35,9 +33,7 @@ def main():
         "version": VERSION,
         "desk_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
     }, indent=2) + "\n", encoding="utf-8")
-    for file in package.rglob("*"):
-        if file.is_file() and (file.name in PRIVATE_NAMES or file.suffix in {".log", ".ready"}):
-            raise RuntimeError(f"发布目录包含个人配置或运行记录：{file}")
+    audit(package)
     args.output.mkdir(parents=True, exist_ok=True)
     output = args.output / f"tebb-{VERSION}-windows-x64.zip"
     if output.exists():

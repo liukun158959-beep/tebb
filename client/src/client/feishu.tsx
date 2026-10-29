@@ -6,6 +6,8 @@ export type FeishuSnap = {
   ok?: boolean;
   installed?: boolean;
   logged_in?: boolean;
+  system_logged_in?: boolean;
+  connected?: boolean;
   user_name?: string;
   has_calendar?: boolean;
   has_task?: boolean;
@@ -42,6 +44,7 @@ export function feishuNotice(snap: FeishuSnap | null): string {
   if (snap.ok === false) return snap.error || snap.hint || "读取飞书登录态失败。";
   if (snap.login_error) return snap.login_error;
   if (feishuWaiting(snap)) return WAITING_TEXT;
+  if (snap.system_logged_in && !snap.connected) return '检测到本机已有飞书登录，尚未连接此 tebb。连接后才能读取该账户的资料。';
   if (!feishuLoggedIn(snap)) return snap.hint || snap.error || "未登录";
   const name = snap.user_name?.trim();
   return name ? `已登录 ${name}` : "已登录";
@@ -63,7 +66,7 @@ export function FeishuPane(props: {
     <div data-feishu data-feishu-logged={logged ? "1" : "0"} data-feishu-busy={waiting ? "1" : "0"}>
       <div className="mb-6">
         <h1 className="text-xl font-semibold">飞书</h1>
-        <div className="mt-1 text-sm text-muted-foreground">登录后才能看日程和待办</div>
+        <div className="mt-1 text-sm text-muted-foreground">每个 tebb 数据目录独立连接；系统已有登录不会自动导入日程和待办。</div>
       </div>
       {props.debug ? <div className="mb-4 text-xs text-muted-foreground">调试样本，未连接后端</div> : null}
       {notice ? (
@@ -84,7 +87,7 @@ export function FeishuPane(props: {
         {logged ? (
           <span data-feishu-logout="">
             <Button type="button" variant="secondary" size="sm" disabled={props.busy} onClick={props.onLogout}>
-              退出
+              断开 tebb 连接
             </Button>
           </span>
         ) : (
@@ -96,7 +99,7 @@ export function FeishuPane(props: {
               disabled={props.busy || waiting}
               onClick={props.onLogin}
             >
-              打开网页登录
+              {props.snap?.system_logged_in ? '连接本机账户' : '打开网页登录并连接'}
             </Button>
           </span>
         )}

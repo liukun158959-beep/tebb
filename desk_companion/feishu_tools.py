@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 CREATE_NO_WINDOW = 0x08000000
-AUTH_HINT = "请在看板「飞书」页登录。需要日历、待办和云文档权限：lark-cli auth login --domain calendar,task,docs"
+AUTH_HINT = "请到设置 → 连接与网络 → 飞书连接账户。需要日历、待办和云文档权限：lark-cli auth login --domain calendar,task,docs"
 _PATH_MERGED = False
 
 
@@ -78,6 +78,15 @@ def _lark_cmd() -> list[str]:
 
 
 def _run_lark(args: list[str], timeout: int = 60, stdin: str | None = None) -> str:
+    # lark-cli credentials belong to the OS user, not this application's data
+    # directory. A fresh tebb profile must not silently reuse them for data IO.
+    command_args = list(args)
+    while command_args and command_args[0] in {'--profile', '--as'}:
+        command_args = command_args[2:]
+    bot_identity = any(a == '--as' and b == 'bot' for a, b in zip(args, args[1:]))
+    if not bot_identity and (not command_args or command_args[0] not in {'auth', 'config', 'profile', 'whoami', '--help', '--version'}):
+        from .feishu_access import require_connection
+        require_connection()
     creationflags = CREATE_NO_WINDOW if sys.platform == "win32" else 0
     cmd = [*_lark_cmd(), *args]
     env = os.environ.copy()
