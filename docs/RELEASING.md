@@ -27,7 +27,7 @@ python scripts/bundle_release.py --runtime-package C:/Build/tebb-runtime --outpu
 
 运行时取 [Python 官方 3.13.16 x64 嵌入包](https://www.python.org/downloads/release/python-31316/)，校验官方 SHA256 后解压。依赖版本固定在 `scripts/runtime-lock.txt`，包内记录 `runtime-packages.txt` 和 `runtime-provenance.json`。
 
-Atlas 取源码库的固定正式提交 `20b890c20afc45cc5e593555e7b6f8ccdbcceb0b`，包含统一模型契约、采样与思考回调、严格完成校验、工具增量和客户端所有权接口。直接归档提交源码，不附加开发机补丁；`runtime-provenance.json` 记录真实 Atlas commit。
+Atlas 取源码库的固定正式提交 `47cf8e60af0a08c1e5c6b5465f310fdddf3dd404`，包含统一模型契约、采样与思考回调、严格完成校验、工具增量、客户端所有权与延迟加载模型 SDK 接口。直接归档提交源码，不附加开发机补丁；`runtime-provenance.json` 记录真实 Atlas commit。
 
 修改 Atlas 固定提交后，先通过与构建脚本共用的归档入口，验证真实归档源码及协作适配器的同一套行为契约（不构建完整运行时、不调用真实模型）：
 

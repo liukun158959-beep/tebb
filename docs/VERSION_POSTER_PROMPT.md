@@ -1,5 +1,9 @@
 # 知行版本主题图生成记录
 
+## tebb v0.4.0：把计划，变成成果
+
+使用内置 imagegen 生成并检查文字、功能范围与构图。低饱和铅笔漫画延续圆形 tebb、狐狸、猫和猫头鹰伙伴，四个场景对应事项日程、伙伴自动化、搜索图表与上下文记忆。主题插画不作为实际界面截图或性能承诺。原始提示词见 [v0.4.0-poster-prompt.txt](releases/v0.4.0-poster-prompt.txt)，正式素材为 `desk_companion/ui/release-v0.4.0.png`，用于 README、版本介绍和发布卡片。
+
 ## v0.2.3：彩色更新亮点
 
 用户确认彩色手绘预览后，使用内置 image_gen 仅移除底部的预览/未打包标记，正式图片保存为 `desk_companion/ui/release-v0.2.3.png`。保留用户确认的配色、人物和六项功能介绍；中间突出视频学习、Agent 调用透明度和资料管理。

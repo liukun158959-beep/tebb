@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import manifest from "../../../desk_companion/ui/release.json";
-import poster from "../../../desk_companion/ui/release-v0.3.0.png";
+import poster from "../../../desk_companion/ui/release-v0.4.0.png";
 import { rpc, type BackendInfo } from "./api";
 import { MdLink, Markdown } from "./Markdown";
 import { localDay, readReleasePreferences, saveReleasePreferences, shouldShowRelease, type ReleasePreferences } from "./release-preferences";
@@ -58,7 +58,7 @@ export function ReleaseIntro(props: { daily: boolean; onDaily: (daily: boolean) 
         <button className={button} aria-label="关闭版本介绍" onClick={props.onClose}>关闭</button>
       </header>
       <div className="overflow-y-auto">
-        <img src={poster} alt={`tebb v${manifest.version} 概念图：伙伴协作、项目编码与资料笔记`} className="block aspect-video w-full object-contain" />
+        <img src={poster} alt={`tebb v${manifest.version} 概念图：事项日程、伙伴协作与可视化成果`} className="block aspect-video w-full object-contain" />
         <div className="px-6 py-5"><p className="mb-4 font-medium text-primary">{manifest.summary}</p>
           <ul className="grid gap-4 sm:grid-cols-2">{manifest.highlights.map(item => <li key={item.title}>
             <h2 className="text-sm font-semibold">{item.title}</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">{item.description}</p>

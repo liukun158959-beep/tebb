@@ -1,6 +1,6 @@
 [project]
 name = "desk-companion"
-version = "0.3.0"
+version = "0.4.0"
 description = "tebb 个人 Agent 工作台：对话、记忆、任务与协作"
 requires-python = ">=3.11"
 dependencies = [
