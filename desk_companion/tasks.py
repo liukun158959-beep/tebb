@@ -277,6 +277,9 @@ class TaskManager:
                             outcome["answer"] = str(data)
                             self.update(task_id, answer=outcome["answer"])
                         elif kind == "answer_reset":
+                            if request.get('workflow')=='collaboration' and request.get('requires_charts'):
+                                partial=self.get(task_id,events=False)['answer']
+                                if partial.strip():outcome['chart_partial']=partial
                             self.update(task_id, answer="")
                             self.event(task_id, kind, data)
                         elif kind == "failure":
@@ -345,11 +348,13 @@ class TaskManager:
                 if reason == "timed_out" and "answer" in outcome:
                     self.finish(task_id, "succeeded", "笔记已完成；自动归档达到时限，请核实飞书保存回执。", answer=outcome["answer"])
                 else:
+                    if outcome.get('chart_partial') and not self.get(task_id,events=False)['answer'].strip():self.update(task_id,answer=outcome['chart_partial'])
                     self.finish(task_id, reason, message + "已保留部分答案和工具记录；继续前请确认已执行的操作。")
                     self._save_partial(row, reason)
             elif "answer" in outcome:
                 self.finish(task_id, "succeeded", answer=outcome["answer"])
             else:
+                if outcome.get('chart_partial') and not self.get(task_id,events=False)['answer'].strip():self.update(task_id,answer=outcome['chart_partial'])
                 self.finish(task_id, "timed_out" if outcome.get("timed_out") else "failed", outcome.get("error", "任务进程意外退出，请检查模型配置。"))
                 self._save_partial(row, "failed")
         except Exception:

@@ -16,7 +16,7 @@ test('note reading keeps the same question stream and composer mounted, and sour
   await act(async()=>button(view,'＋ 添加资料').props.onClick());assert.equal(add,1);await act(async()=>view.unmount());
 });
 test('calendar context derives from actual tool events and never from a generated promise',()=>{
-  const {hasCalendarContext}=load('run-progress.tsx',{'./chat-prototype-state':{}});
+  const {hasCalendarContext}=load('run-progress.tsx',{'./chat-prototype-state':{},'./chart-building':{ChartBuildProgress:()=>null}});
   assert.equal(hasCalendarContext({events:['tool_end: get_today_agenda  succeeded']}),true);
   assert.equal(hasCalendarContext({events:['已帮你创建日程','tool_end: web_search succeeded']}),false);
   assert.equal(hasCalendarContext(undefined),false);

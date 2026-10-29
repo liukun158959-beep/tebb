@@ -140,8 +140,8 @@ class ChartWorkerTests(unittest.TestCase):
             def chat(_,messages,tools,on_delta):
                 calls.append(1)
                 if len(calls)==1:
-                    invalid=self.control('build_chart',**{**FLOW,'source_ids':['guessed']})['tool_calls'][0]
-                    return dict(message=dict(role='assistant',tool_calls=[{**invalid,'id':str(i)} for i in range(4)]),usage={})
+                    invalid=[self.control('build_chart',**{**FLOW,'title':'待修正'+str(i),'source_ids':['guessed']})['tool_calls'][0] for i in range(4)]
+                    return dict(message=dict(role='assistant',tool_calls=[{**row,'id':str(i)} for i,row in enumerate(invalid)]),usage={})
                 if len(calls)==2:
                     self.assertTrue(all(not json.loads(m['content'])['ok'] for m in messages if m['role']=='tool'))
                     return dict(message=self.control('build_chart',**FLOW),usage={})

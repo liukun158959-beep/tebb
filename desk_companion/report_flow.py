@@ -12,40 +12,33 @@ def graph(spec):
     return result
 
 
-def validate(spec,text):
-    nodes=spec.get('nodes');edges=spec.get('edges',[])
-    if not isinstance(nodes,list) or not 1<=len(nodes)<=8:raise ValueError('流程图需要1至8个节点。')
-    for node in nodes:text(node,80)
-    if not isinstance(edges,list) or len(edges)>16:raise ValueError('最多16条流程连接。')
-    seen=set()
-    for edge in edges:
-        if not isinstance(edge,list) or len(edge)!=2 or any(type(i) is not int or not 0<=i<len(nodes) for i in edge) or edge[0]==edge[1]:raise ValueError('流程连接无效。')
-        if tuple(edge) in seen:raise ValueError('流程连接不能重复。')
-        seen.add(tuple(edge))
-    style=spec.get('flow_style','auto')
-    if style not in STYLES:raise ValueError('流程布局无效。')
-    kinds=spec.get('node_kinds')
-    if kinds is not None and (not isinstance(kinds,list) or len(kinds)!=len(nodes) or any(k not in {'process','decision','terminal'} for k in kinds)):raise ValueError('节点类型须与节点一一对应。')
-    labels=spec.get('edge_labels')
-    if labels is not None:
-        if not isinstance(labels,list) or len(labels)!=len(edges):raise ValueError('连接说明须与连接一一对应。')
-        for value in labels:
-            if not isinstance(value,str) or len(value)>30:raise ValueError('连接说明最多30字。')
-    lanes=spec.get('node_lanes')
-    if lanes is not None:
-        if not isinstance(lanes,list) or len(lanes)!=len(nodes):raise ValueError('泳道须与节点一一对应。')
-        for lane in lanes:text(lane,24)
-        if len(set(lanes))>4:raise ValueError('最多4条泳道。')
-    if style=='swimlane' and not lanes:raise ValueError('泳道流程需提供每个节点的负责人。')
-    if style=='decision' or kinds and 'decision' in kinds:
-        for i in range(len(nodes)):
-            outgoing=[j for j,(a,b) in enumerate(edges) if a==i]
-            if (kinds and kinds[i]=='decision') or style=='decision' and len(outgoing)>1:
-                if len(outgoing)<2:raise ValueError('判断节点“'+nodes[i]+'”须至少两个出口；单出口动作用 process 类型。')
-                if not labels or any(not labels[j].strip() for j in outgoing):raise ValueError('判断节点“'+nodes[i]+'”的每条分支必须标明条件。')
-    try:list(TopologicalSorter(graph(spec)).static_order())
-    except CycleError:
-        if style not in {'cycle','decision'}:raise ValueError('含反馈的关系请明确使用 cycle 或 decision 布局。')
+def issues(spec):
+    """Collect semantic problems without guessing or editing graph relationships."""
+    nodes=spec.get('nodes');edges=spec.get('edges',[]);out=[]
+    if not isinstance(nodes,list) or not 1<=len(nodes)<=8 or not all(isinstance(n,str) for n in nodes):return out
+    if not isinstance(edges,list):return out
+    valid=[]
+    for i,edge in enumerate(edges):
+        if not isinstance(edge,list) or len(edge)!=2 or any(type(v) is not int for v in edge):continue
+        if any(v<0 or v>=len(nodes) for v in edge):out.append(dict(path=f'/edges/{i}',message='连接索引超出实际节点范围。'));continue
+        if edge[0]==edge[1]:out.append(dict(path=f'/edges/{i}',message='节点不能连接自身。'));continue
+        valid.append(edge)
+    style=spec.get('flow_style','auto') if isinstance(spec.get('flow_style','auto'),str) else 'auto';kinds=spec.get('node_kinds');labels=spec.get('edge_labels');lanes=spec.get('node_lanes')
+    for name,value,length in [('node_kinds',kinds,len(nodes)),('node_lanes',lanes,len(nodes)),('edge_labels',labels,len(edges))]:
+        if value is not None and isinstance(value,list) and len(value)!=length:out.append(dict(path='/'+name,message=f'需要{length}项，实际{len(value)}项；请逐一对应，不自动补条件或删除关系。'))
+    if lanes is not None and isinstance(lanes,list) and all(isinstance(v,str) for v in lanes) and len(set(lanes))>4:out.append(dict(path='/node_lanes',message='最多4条职责泳道。'))
+    if style=='swimlane' and not lanes:out.append(dict(path='/node_lanes',message='泳道流程须提供每个节点的负责人。'))
+    for i in range(len(nodes)):
+        decision=(isinstance(kinds,list) and len(kinds)==len(nodes) and kinds[i]=='decision') or style=='decision' and sum(a==i for a,b in valid)>1
+        if not decision:continue
+        outgoing=[j for j,edge in enumerate(edges) if isinstance(edge,list) and len(edge)==2 and edge[0]==i]
+        if len(outgoing)<2:out.append(dict(path=f'/node_kinds/{i}',message='判断节点“'+nodes[i]+'”须至少两个出口；单出口动作用 process 类型。'))
+        elif not isinstance(labels,list) or any(j>=len(labels) or not isinstance(labels[j],str) or not labels[j].strip() for j in outgoing):out.append(dict(path='/edge_labels',message='判断节点“'+nodes[i]+'”的每条分支须提供实际条件。'))
+    if len(valid)==len(edges):
+        try:list(TopologicalSorter(graph(spec)).static_order())
+        except CycleError as exc:
+            if style not in {'cycle','decision'}:out.append(dict(path='/flow_style',message='检测到反馈环，含反馈的关系请明确使用 cycle 或 decision 布局。',nodes=exc.args[1],hint='保留实际反馈关系，选择合适布局；不要为通过校验删除回边。'))
+    return out
 
 
 def style_for(spec):

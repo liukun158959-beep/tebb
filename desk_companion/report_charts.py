@@ -4,7 +4,6 @@ from datetime import datetime,timezone
 import hashlib
 import io
 import json
-import math
 import re
 from pathlib import Path
 import textwrap
@@ -19,6 +18,12 @@ class ChartChangeError(RuntimeError):
     def __init__(self,stage,ident,confirmed,spec):
         super().__init__(f'图表在{stage}阶段未完成，已有文件阶段为{confirmed}；正文与数据保留，不能声称图表已交付。')
         self.details=dict(stage=stage,chart_id=ident,confirmed_formats=confirmed,data=spec)
+
+
+class ChartBudgetError(ValueError):
+    def __init__(self):
+        super().__init__('同一主任务链最多生成4张图表；失败渲染也计入预算。')
+        self.details=dict(stage='budget',repairable=False)
 SPEC=dict(type='function',function=dict(name='build_chart',description='从结构化数据生成报告静态图。bar/line须有单位、可比口径与已读正文来源编号；timeline日期也须已读正文。flow是关系示意，可无来源或引用实际证据编号，摘要来源会标明未读正文，不得冒充原文验证或数值排名。每条主任务链最多4次渲染，参数校验失败不占渲染额度。最多20条数据、4系列、8流程节点。只提交数据，不提供代码。返回的markdown必须原样放入报告，读者可展开数据及来源。',parameters=dict(type='object',properties={
     'type':{'type':'string','enum':['bar','line','timeline','flow']},'title':{'type':'string'},'unit':{'type':'string'},'x_label':{'type':'string'},
     'comparability':{'type':'string','description':'数值指标的评测/统计口径；不同口径不得同轴排名'},'source_ids':{'type':'array','items':{'type':'string'}},
@@ -32,49 +37,17 @@ SPEC=dict(type='function',function=dict(name='build_chart',description='从结�
     'calculation':{'type':'string','description':'派生数值的可核对计算方法，原始值也保留在数据说明中'}},required=['type','title','source_ids'],additionalProperties=False)))
 
 
-def _text(value,limit=120):
-    if not isinstance(value,str) or not value.strip() or len(value)>limit:raise ValueError('图表文本缺失或超过长度限制。')
-    return value.strip()
+from .chart_schema import ChartInputError, configure, preflight
+configure(SPEC['function']['parameters'])
 
 
 def validate(spec,sources):
     from .web_sources import source_catalog
-    if not isinstance(spec,dict) or set(spec)-set(SPEC['function']['parameters']['properties']):raise ValueError('图表结构或字段无效。')
-    kind=spec.get('type');_text(spec.get('title'))
-    if kind not in {'bar','line','timeline','flow'}:raise ValueError('不支持该图表类型。')
-    if kind!='flow' and any(k in spec for k in ('flow_style','node_kinds','node_lanes','edge_labels')):raise ValueError('流程字段只能用于流程图。')
-    ids=spec.get('source_ids')
-    if not isinstance(ids,list) or len(ids)>12 or any(not isinstance(i,str) for i in ids):raise ValueError('来源编号无效。')
     catalog={s['id']:s for s in source_catalog(sources)}
-    if any(i not in catalog for i in ids):raise ValueError('来源编号不在本任务实际证据中；请复制当前证据清单中的完整编号。')
-    if any(catalog[i].get('level') not in ({'body','snippet'} if kind=='flow' else {'body'}) for i in ids):
-        raise ValueError('数值图与时间线须使用实际已读正文；流程示意可引用真实搜索摘要，但须标明未读正文。')
-    if kind!='flow' and not ids:raise ValueError('数值图与时间线必须提供已读正文来源。')
-    if 'calculation' in spec:_text(spec['calculation'],1000)
-    if kind in {'bar','line'}:
-        _text(spec.get('unit'),50);_text(spec.get('comparability'),600)
-        labels=spec.get('labels');series=spec.get('series')
-        if not isinstance(labels,list) or not 1<=len(labels)<=20:raise ValueError('图表需要1至20个不重复标签。')
-        for label in labels:_text(label,60)
-        if len(set(labels))!=len(labels):raise ValueError('图表标签不能重复。')
-        if not isinstance(series,list) or not 1<=len(series)<=4:raise ValueError('最多4个数据系列。')
-        for row in series:
-            if not isinstance(row,dict) or set(row)!={'name','values'}:raise ValueError('数据系列无效。')
-            _text(row.get('name'),60);values=row.get('values')
-            if not isinstance(values,list) or len(values)!=len(labels) or not any(v is not None for v in values):raise ValueError('数据数量须与标签一致；缺值保留为空。')
-            if any(v is not None and (type(v) not in (int,float) or not math.isfinite(v) or abs(v)>1e15) for v in values):raise ValueError('数据须为有限数值，不能用布尔值或文本冒充。')
-    elif kind=='timeline':
-        items=spec.get('items')
-        if not isinstance(items,list) or not 1<=len(items)<=15:raise ValueError('时间线需要1至15项。')
-        for row in items:
-            _text(row['label'],80)
-            start=datetime.fromisoformat(_text(row['start'],40));end=datetime.fromisoformat(row.get('end',row['start']))
-            if end<start:raise ValueError('结束时间不能早于开始时间。')
-    else:
-        from .report_flow import validate as validate_flow
-        validate_flow(spec,_text)
+    problems=preflight(spec,catalog,SPEC['function']['parameters'])
+    if problems:raise ChartInputError(problems)
     return [dict(id=i,title=catalog[i].get('title',catalog[i]['url']),url=catalog[i]['url'],level=catalog[i]['level'],truncated=bool(catalog[i].get('truncated')),
-        **{key:catalog[i].get(key) for key in ('read_ranges','snapshot_id','sha256','fetched_at')}) for i in ids]
+        **{key:catalog[i].get(key) for key in ('read_ranges','snapshot_id','sha256','fetched_at')}) for i in spec['source_ids']]
 
 
 def _render(spec):
@@ -135,18 +108,28 @@ def valid_id(ident):
     return ident
 
 
-def create(spec,sources,run_id):
-    references=validate(spec,sources)
-    valid_id(run_id)
+def change_budget(run_id,change):
+    """Single owner for durable rendering and draft receipts."""
     from .resource_lock import ResourceLock
     from .video import atomic_write
-    root=folder();root.mkdir(parents=True,exist_ok=True)
-    limit=root/'limits'/(run_id+'.json')
+    valid_id(run_id);path=folder()/'limits'/(run_id+'.json')
     with ResourceLock('report-charts-'+run_id):
-        total=json.loads(limit.read_text('utf-8'))['attempts'] if limit.exists() else 0
-        if total>=4:raise ValueError('同一主任务链最多生成4张图表；失败渲染也计入预算。')
-        limit.parent.mkdir(parents=True,exist_ok=True);atomic_write(limit,dict(attempts=total+1))
-    ident=uuid.uuid4().hex;stage='rendering';confirmed=[]
+        value=json.loads(path.read_text('utf-8')) if path.exists() else dict(attempts=0)
+        result=change(value)
+        path.parent.mkdir(parents=True,exist_ok=True);atomic_write(path,value)
+        return result
+
+
+def create(spec,sources,run_id,*,ident=None):
+    references=validate(spec,sources)
+    valid_id(run_id)
+    from .video import atomic_write
+    root=folder();root.mkdir(parents=True,exist_ok=True)
+    def reserve(value):
+        if value['attempts']>=4:raise ChartBudgetError()
+        value['attempts']+=1
+    change_budget(run_id,reserve)
+    ident=valid_id(ident) if ident is not None else uuid.uuid4().hex;stage='rendering';confirmed=[]
     try:
         images=_render(spec)
         for ext,raw in images.items():

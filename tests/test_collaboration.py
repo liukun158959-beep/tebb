@@ -130,7 +130,7 @@ class CollaborationTests(unittest.TestCase):
         reopened = Collaboration(path=self.service.path, managers=self.service.managers, start=False)
         try:
             agents = reopened.snapshot()["state"]["agents"]
-            self.assertEqual([a["name"] for a in agents], ["tebb · 通用助手", "自定义伙伴", "写作助手"])
+            self.assertEqual([a["name"] for a in agents], ["tebb · 通用助手", "自定义伙伴", "写作助手", "图表助手"])
             self.assertEqual(agents[1]["memory"], "KEEP_PRIVATE")
             self.assertEqual(agents[1]["model"], "custom-model")
             self.assertEqual(agents[1]["role"], "自定义职责")
@@ -157,7 +157,7 @@ class CollaborationTests(unittest.TestCase):
         self.assertFalse(any(r["conversation"] == "group-research" for r in state["runs"]))
         self.assertTrue(any(m["text"] == "独立会话保留" for m in state["messages"]))
         self.assertIn(state["selected"], [c["id"] for c in state["conversations"]])
-        self.assertEqual(len(state["agents"]), 3)
+        self.assertEqual(len(state["agents"]), 4)
         with self.assertRaisesRegex(ValueError, "会话不存在"):
             self.action(type="send", text="过期入口不能重建旧对话", target="", mode="message")
 

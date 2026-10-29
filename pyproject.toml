@@ -9,6 +9,7 @@ dependencies = [
     "psutil>=7.0,<8",
     "pillow>=10.0",
     "matplotlib>=3.9,<4",
+    "jsonschema>=4,<5",
     "python-dotenv>=1.0",
     "pywin32>=306",
     "pywebview>=5.0",

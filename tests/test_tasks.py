@@ -44,11 +44,23 @@ elif r['text']=='command_wait':
 elif r['text']=='video_failure':
  emit('failure',dict(type='APIConnectionError',message='片段 3/8 连接中断，已完成2/8',phase='片段3',completed=2,total=8))
  sys.exit(0)
+elif r['text'] in ('chart_failure','chart_timeout'):
+ emit('answer_reset',True)
+ emit('tool_start',dict(tool='build_chart'))
+ if r['text']=='chart_timeout': time.sleep(10)
+ emit('failure',dict(type='ChartBuildError',message='图稿修正仍失败'))
+ sys.exit(0)
 emit('result',r['text'])
 '''
 
 
 class TaskTests(unittest.TestCase):
+    def test_chart_failure_or_timeout_keeps_pre_correction_text_without_success(self):
+        for text,state in [('chart_failure','failed'),('chart_timeout','timed_out')]:
+            task=self.manager.wait(self.manager.submit(text,text,channel='collaboration',workflow='collaboration',requires_charts=True,task_limits=dict(call_timeout=.4,task_timeout=.8)))
+            self.assertEqual(task['state'],state)
+            self.assertEqual(task['answer'],'保留片段')
+
     def test_failed_standby_falls_back_to_a_cold_worker(self):
         self.manager.shutdown()
         self.worker.write_text(WORKER.replace("if '--standby' in sys.argv: print(json.dumps(dict(kind='standby_ready')),flush=True)","if '--standby' in sys.argv: sys.exit(1)"),encoding='utf-8')

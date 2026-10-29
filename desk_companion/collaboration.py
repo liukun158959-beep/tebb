@@ -85,7 +85,15 @@ def migrate_companions(state):
             if agent.get('role') in {'协调目标、拆分有限任务并明确验收条件','协调目标、拆分工作、汇总成果'}:agent['role'] = '理解用户目标，调用可用工具和职责伙伴，处理日程、事项、自动化及通用问题，核对实际结果后汇总交付'
         if version<3 and agent['id'] in {'tebb','writer'}:
             agent['tools']=sorted(set(agent.get('tools',[]))|{'构建图表'})
-    state['companion_version'] = 3
+    if version<4 and not any(a['id']=='chart' for a in state['agents']):
+        if len(state['agents'])<8 and not any(a['name']=='图表助手' for a in state['agents']):
+            owner=next((a for a in state['agents'] if a['id']=='tebb'),{})
+            state['agents'].append(dict(id='chart',name='图表助手',role='根据已有材料组织图表，核对节点、连线、条件、数值与来源；按预检定位修正，不编数据，不扩大采集或委派。',mark='D',tone='gold',model=owner.get('model',''),tools=['构建图表'],memory='',avatar='owl',personality='清晰、克制，先讲图表达的问题，再用最少必要结构说明。'))
+            state['conversations'].append(dict(id='dm-chart',title='图表助手',kind='dm',members=['chart'],coordinator='chart',goal='根据已有材料构建图表'))
+        else:
+            state['notice']='图表助手尚未添加：伙伴已满8位或已有同名自定义伙伴。保留现有配置，腾出位置或修改同名后重新读取。'
+            state['companion_version']=3;return
+    state['companion_version'] = 4
 
 
 def workspace_path():
@@ -722,6 +730,13 @@ class Collaboration:
                     elif kind == "verification": run.setdefault("checks", []).append(data)
                     elif kind == "citation_check": run["citation_check"]=data
                     elif kind == "delivery_check": run['delivery_check']=data
+                    elif kind == 'chart_build':
+                        builds=run.setdefault('chart_builds',{})
+                        old=builds.get(data['draft_id'],{})
+                        history=old.get('history',[])+[{k:data[k] for k in ('stage','attempt','issues','error','asset_id') if k in data}]
+                        builds[data['draft_id']]={**data,'history':history[-12:]}
+                        labels={'preflight_failed':'预检未通过','validated':'预检通过，开始构建','built':'构建完成','reused':'复用已成功图表','render_failed':'渲染失败','unconfirmed':'保存结果未确认','exhausted':'定向修正次数已用完'}
+                        run['events'].append('图稿 · '+data.get('title','')+' · '+labels.get(data['stage'],data['stage']))
                     elif kind in {"tool_start", "tool_end"}:
                         if kind == "tool_start":
                             counter={'web_fetch':'fetch_calls','web_search':'search_calls'}.get(data.get('tool'))

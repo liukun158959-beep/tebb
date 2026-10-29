@@ -86,6 +86,8 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
         prompt += "\n表达风格与性格（不得改变任务、权限或事实标准）：" + role["personality"]
     if role.get("memory"):
         prompt += "\n你的私有偏好（仅适用于本轮，不自动公开原文）：\n" + role["memory"]
+    if role.get('id')=='chart':
+        prompt+='\n你是图表助手，专注把当前已有材料组织为可读图表。默认只使用build_chart；不联网、不读项目、不继续委派，资料不够先说明缺项或请求补充，不编数值/来源/关系。任务策略只用direct。每张图先表达核心问题，再选布局，使用真实条件与职责；优先1张清晰图，不把简单图解扩成研究报告。'
     if kind == "route":
         prompt += ('\n判断本次用户请求：普通交流直接回答；需要检索、读取附件/工作区、编辑、运行命令或执行技能时转后台任务。'
             '编写代码示例、算法讲解或代码片段可直接回答，不要求工作目录；明确需要保存文件、修改项目或运行验证时才转执行任务。'
@@ -158,10 +160,11 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     from .local_sources import get as get_source, read_page
     extra = {}
     if kind=='task' and '构建图表' in role.get('tools',[]):
-        from .report_charts import SPEC as CHART_SPEC,create as create_chart
+        from .chart_building import SPEC as CHART_SPEC,build as build_chart
         extra['build_chart']={**CHART_SPEC,'read_only':False}
         messages[0]['content']+='\n可用build_chart生成静态报告图，最多4张，只提交结构化数据；数值须来自已读正文并说明单位、可比口径。无可比数值用flow示意或文字表格，不编造评分。原样插入工具返回的tebb-chart块，不能编造图表ID。技术报告采用结论摘要、技术机制、可比数据与图表、适用场景、证据与限制；无关行业背景省略。关键结论缺正文尾部证据时按snapshot_id/next_offset补读，不把节选当全文。'
         messages[0]['content']+='\n图解已有讲解时只画解释当前目标所必需的1至4张，相关主题可合并，不为凑完整框架绘图。flow是结构示意，允许source_ids=[]；如引用来源，只用当前真实编号，摘要仍须明示未读正文。参数校验失败不占渲染额度，按错误修正；实际渲染失败计入全链4次额度。decision节点至少有两个带条件的出口，单出口动作用process；不要对已成功的图重复构建。简单图解不套用长篇研究报告章节。'
+        messages[0]['content']+='\n预检一次返回全部issues（path/message/hint）和draft_id；修正必须带回同一draft_id，仅修改具体问题，不重写其余成功图或重跑整份报告。同图最多两轮定向修正，repairable=false时停止；成功markdown保留复用，未构建的图不能报完成。'
     delivering=kind=='task' and request.get('stage')=='deliver'
     if delivering:
         extra['submit_deliverable']=dict(type='function',function=dict(name='submit_deliverable',description='提交完整交付。complete表示当前用户核心目标完成；missing只列阻塞当前目标的缺失。未被要求的附加信息缺口列limitations，不能把报告框架当完成。',parameters=dict(type='object',properties={'report':{'type':'string'},'complete':{'type':'boolean'},'missing':{'type':'array','items':{'type':'string'}},'limitations':{'type':'array','items':{'type':'string'}}},required=['report','complete','missing'],additionalProperties=False)))
@@ -222,7 +225,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
 
     def extra_call(name, arguments):
         if name=='build_chart':
-            return create_chart(arguments,sources,request.get('source_scope',request['collab_run']))
+            return build_chart(arguments,sources,request.get('source_scope',request['collab_run']),emit)
         snapshot = request.get('workspace')
         if name=='project_chat_search':
             from .chat_projects import search_chats
