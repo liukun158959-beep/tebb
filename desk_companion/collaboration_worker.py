@@ -91,6 +91,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
             '编写代码示例、算法讲解或代码片段可直接回答，不要求工作目录；明确需要保存文件、修改项目或运行验证时才转执行任务。'
             '当前用户请求是本轮目标，历史中的失败、未授权或来源缺失仅是当时状态，不得据此删减本轮范围。需要协作时保留全部目标和@成员要求，不在这里编造执行结果。'
             '任何目标、对象或期望结果不清楚（如仅test/测试/帮我处理一下）时调用request_clarification，说明具体缺项并暂停；禁止先读项目、搜索或委派。日程缺结束时间或时长也先追问，不默认一小时或同步飞书。无需执行工具时直接输出Markdown回答，不要用JSON包裹。需要执行时只申请一次start_background_task，instructions填写用户完整目标、材料、限制和验收条件，strategy默认direct：明确简单任务由自己直接完成，不能强行拆分。只有确有独立职责分工或明确@多位伙伴才选delegate；这里不执行业务工具。')
+        prompt+='\n用户仅要求把刚才的讲解改成流程图、图解或其他表达形式时，复用已有上下文，优先direct直接构图，不自行扩大成多主题研究或为此联网/委派。缺少可比数值不妨碍构建不含数值的关系示意；只有用户明确要求核实/最新资料或确实缺少当前目标必需材料时才采集。'
     elif kind == "compress":
         prompt += '\n仅整理提供的会话为后续上下文，保留目标、决定、来源、未完成事项，输出Markdown摘要。'
     elif kind == "plan":
@@ -107,6 +108,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
             '采集任务仅交付精炼证据包、源码抽象、短摘述和原始链接，不抢先写整篇最终报告；不要只交付空白框架。')
         prompt+='\n只在确需独立分工时进入本阶段，禁止委派自己；自己能直接完成的工作不创建子任务，最终负责人在同一主任务中综合，禁止额外创建tebb汇总子任务。'
         prompt+='\n联网采集任务必须把本轮需比较的外部对象分别填入source_topics。先覆盖每个对象的定位与核心机制，再补可选细节，不要把有限请求耗在同一对象的多个首页、版本号或许可证查询。'
+        prompt+='\n全条主任务链共用最多4次图表渲染，不能安排超过4张图的交付；多个相关主题合并为1至4张必要示意，未要求的细分图不扩为验收目标。'
     elif kind == "task":
         prompt += "\n交付可阅读的Markdown成果，保留实际来源、证据缺口和适用限制，不要只返回执行承诺。"
         prompt += ('\n编写代码示例或解释算法时，直接提供代码，无需工作目录。只有操作本地项目才需要目录与权限。'
@@ -155,11 +157,11 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     from . import project_workspace as project
     from .local_sources import get as get_source, read_page
     extra = {}
-    chart_count=0
     if kind=='task' and '构建图表' in role.get('tools',[]):
         from .report_charts import SPEC as CHART_SPEC,create as create_chart
         extra['build_chart']={**CHART_SPEC,'read_only':False}
         messages[0]['content']+='\n可用build_chart生成静态报告图，最多4张，只提交结构化数据；数值须来自已读正文并说明单位、可比口径。无可比数值用flow示意或文字表格，不编造评分。原样插入工具返回的tebb-chart块，不能编造图表ID。技术报告采用结论摘要、技术机制、可比数据与图表、适用场景、证据与限制；无关行业背景省略。关键结论缺正文尾部证据时按snapshot_id/next_offset补读，不把节选当全文。'
+        messages[0]['content']+='\n图解已有讲解时只画解释当前目标所必需的1至4张，相关主题可合并，不为凑完整框架绘图。flow是结构示意，允许source_ids=[]；如引用来源，只用当前真实编号，摘要仍须明示未读正文。参数校验失败不占渲染额度，按错误修正；实际渲染失败计入全链4次额度。decision节点至少有两个带条件的出口，单出口动作用process；不要对已成功的图重复构建。简单图解不套用长篇研究报告章节。'
     delivering=kind=='task' and request.get('stage')=='deliver'
     if delivering:
         extra['submit_deliverable']=dict(type='function',function=dict(name='submit_deliverable',description='提交完整交付。complete表示当前用户核心目标完成；missing只列阻塞当前目标的缺失。未被要求的附加信息缺口列limitations，不能把报告框架当完成。',parameters=dict(type='object',properties={'report':{'type':'string'},'complete':{'type':'boolean'},'missing':{'type':'array','items':{'type':'string'}},'limitations':{'type':'array','items':{'type':'string'}}},required=['report','complete','missing'],additionalProperties=False)))
@@ -219,10 +221,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     messages.append(dict(role='user',content='本轮权威目标与本任务（以此为准，保留全部目标）：\n'+json.dumps(dict(objective=request.get('objective',request['text']),task=request['text'],members=request.get('members',[]),draft=request.get('draft',''),required_sources=request.get('required_sources',[]),source_topics=request.get('source_topics',[])),ensure_ascii=False)))
 
     def extra_call(name, arguments):
-        nonlocal chart_count
         if name=='build_chart':
-            if chart_count>=4:raise ValueError('本任务最多4张图表。')
-            chart_count+=1
             return create_chart(arguments,sources,request.get('source_scope',request['collab_run']))
         snapshot = request.get('workspace')
         if name=='project_chat_search':

@@ -19,7 +19,7 @@ class ChartChangeError(RuntimeError):
     def __init__(self,stage,ident,confirmed,spec):
         super().__init__(f'图表在{stage}阶段未完成，已有文件阶段为{confirmed}；正文与数据保留，不能声称图表已交付。')
         self.details=dict(stage=stage,chart_id=ident,confirmed_formats=confirmed,data=spec)
-SPEC=dict(type='function',function=dict(name='build_chart',description='从结构化数据生成报告静态图。bar/line须有单位、可比口径与已读正文来源编号；timeline的日期须有来源；flow是关系示意，不得用主观打分制造排名。最多20条数据、4系列、8流程节点。只提交数据，不提供代码。返回的markdown必须原样放入报告，读者可展开数据及来源。',parameters=dict(type='object',properties={
+SPEC=dict(type='function',function=dict(name='build_chart',description='从结构化数据生成报告静态图。bar/line须有单位、可比口径与已读正文来源编号；timeline日期也须已读正文。flow是关系示意，可无来源或引用实际证据编号，摘要来源会标明未读正文，不得冒充原文验证或数值排名。每条主任务链最多4次渲染，参数校验失败不占渲染额度。最多20条数据、4系列、8流程节点。只提交数据，不提供代码。返回的markdown必须原样放入报告，读者可展开数据及来源。',parameters=dict(type='object',properties={
     'type':{'type':'string','enum':['bar','line','timeline','flow']},'title':{'type':'string'},'unit':{'type':'string'},'x_label':{'type':'string'},
     'comparability':{'type':'string','description':'数值指标的评测/统计口径；不同口径不得同轴排名'},'source_ids':{'type':'array','items':{'type':'string'}},
     'labels':{'type':'array','items':{'type':'string'}},'series':{'type':'array','items':{'type':'object','properties':{'name':{'type':'string'},'values':{'type':'array','items':{'type':['number','null']}}},'required':['name','values'],'additionalProperties':False}},
@@ -46,7 +46,9 @@ def validate(spec,sources):
     ids=spec.get('source_ids')
     if not isinstance(ids,list) or len(ids)>12 or any(not isinstance(i,str) for i in ids):raise ValueError('来源编号无效。')
     catalog={s['id']:s for s in source_catalog(sources)}
-    if any(i not in catalog or catalog[i].get('level')!='body' for i in ids):raise ValueError('数值来源须为本任务实际读取的正文，不接受猜测编号或仅搜索摘要。')
+    if any(i not in catalog for i in ids):raise ValueError('来源编号不在本任务实际证据中；请复制当前证据清单中的完整编号。')
+    if any(catalog[i].get('level') not in ({'body','snippet'} if kind=='flow' else {'body'}) for i in ids):
+        raise ValueError('数值图与时间线须使用实际已读正文；流程示意可引用真实搜索摘要，但须标明未读正文。')
     if kind!='flow' and not ids:raise ValueError('数值图与时间线必须提供已读正文来源。')
     if 'calculation' in spec:_text(spec['calculation'],1000)
     if kind in {'bar','line'}:
@@ -71,7 +73,7 @@ def validate(spec,sources):
     else:
         from .report_flow import validate as validate_flow
         validate_flow(spec,_text)
-    return [dict(id=i,title=catalog[i].get('title',catalog[i]['url']),url=catalog[i]['url'],truncated=bool(catalog[i].get('truncated')),
+    return [dict(id=i,title=catalog[i].get('title',catalog[i]['url']),url=catalog[i]['url'],level=catalog[i]['level'],truncated=bool(catalog[i].get('truncated')),
         **{key:catalog[i].get(key) for key in ('read_ranges','snapshot_id','sha256','fetched_at')}) for i in ids]
 
 
@@ -157,7 +159,7 @@ def create(spec,sources,run_id):
     except Exception as exc:
         raise ChartChangeError(stage,ident,confirmed,spec) from exc
     return dict(ok=True,id=ident,markdown='```tebb-chart\n'+ident+'\n```',title=spec['title'],sources=references,
-                note='图表及数据已登记；来源范围不等于自动证明每个数值或可比口径。请原样插入markdown。')
+                note='图表及数据已登记；来源范围不等于自动证明每个数值或可比口径。请原样插入markdown。'+('含搜索摘要依据，未读取其正文，不能声称已按原文核实。' if any(s['level']=='snippet' for s in references) else ''))
 
 
 def load(ident):
@@ -197,7 +199,7 @@ def data_markdown(value):
         lines+=['关系示意：'+'；'.join(safe(spec['nodes'][a])+(' —'+safe(labels[i])+'→ ' if labels[i] else ' → ')+safe(spec['nodes'][b]) for i,(a,b) in enumerate(spec.get('edges',[])))]
         if any(lanes):lines+=['职责：'+'；'.join(safe(node)+'（'+safe(lane)+'）' for node,lane in zip(spec['nodes'],lanes))]
     if spec.get('calculation'):lines+=['计算说明：'+safe(spec['calculation'])]
-    lines+=['来源：'+('；'.join('['+safe(s['title'])+'](<'+s['url']+'>)'+('（正文节选）' if s['truncated'] else '') for s in value['sources']) or '关系示意，无数值结论')]
+    lines+=['来源：'+('；'.join('['+safe(s['title'])+'](<'+s['url']+'>)'+('（搜索摘要，未读取正文）' if s.get('level')=='snippet' else '（正文节选）' if s['truncated'] else '') for s in value['sources']) or '关系示意，无数值结论')]
     return '\n\n'.join(lines)
 
 

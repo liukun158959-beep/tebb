@@ -41,7 +41,8 @@ def validate(spec,text):
         for i in range(len(nodes)):
             outgoing=[j for j,(a,b) in enumerate(edges) if a==i]
             if (kinds and kinds[i]=='decision') or style=='decision' and len(outgoing)>1:
-                if len(outgoing)<2 or not labels or any(not labels[j].strip() for j in outgoing):raise ValueError('判断节点的分支必须标明条件。')
+                if len(outgoing)<2:raise ValueError('判断节点“'+nodes[i]+'”须至少两个出口；单出口动作用 process 类型。')
+                if not labels or any(not labels[j].strip() for j in outgoing):raise ValueError('判断节点“'+nodes[i]+'”的每条分支必须标明条件。')
     try:list(TopologicalSorter(graph(spec)).static_order())
     except CycleError:
         if style not in {'cycle','decision'}:raise ValueError('含反馈的关系请明确使用 cycle 或 decision 布局。')

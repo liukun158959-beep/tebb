@@ -18,6 +18,23 @@ FLOW=dict(type='flow',title='证据到报告',source_ids=[],nodes=['读取原文
 
 
 class ChartTests(unittest.TestCase):
+    def test_flow_keeps_actual_snippet_level_without_upgrading_numeric_evidence(self):
+        snippet={**SOURCE,'kind':'search','level':'snippet','truncated':True}
+        spec={**FLOW,'source_ids':[SOURCE_ID]}
+        result=charts.create(spec,[snippet],uuid.uuid4().hex)
+        self.assertEqual(charts.public(result['id'])['sources'][0]['level'],'snippet')
+        self.assertIn('搜索摘要，未读取正文',charts.export(result['markdown']))
+        self.assertNotIn('正文节选',charts.export(result['markdown']))
+        for numeric in (BAR,{**BAR,'type':'line'},dict(type='timeline',title='时间线',source_ids=[SOURCE_ID],items=[dict(label='日期',start='2026-10-29')])):
+            with self.subTest(kind=numeric['type']),self.assertRaises(ValueError):charts.validate(numeric,[snippet])
+        with self.assertRaises(ValueError):charts.validate({**FLOW,'source_ids':['guessed']},[snippet])
+
+    def test_single_exit_decision_reports_the_actual_repair_without_rendering(self):
+        root=uuid.uuid4().hex
+        with self.assertRaisesRegex(ValueError,'至少两个出口.*process'):
+            charts.create({**FLOW,'node_kinds':['process','decision','process'],'edge_labels':['输入','执行']},[],root)
+        self.assertFalse((charts.folder()/'limits'/(root+'.json')).exists())
+
     def test_five_flow_layouts_keep_branch_conditions_lanes_and_feedback_in_exports(self):
         cases=[{**FLOW,'flow_style':'steps'},
             dict(type='flow',title='条件',source_ids=[],flow_style='decision',nodes=['阅读','证据充分？','形成结论','补读'],edges=[[0,1],[1,2],[1,3],[3,1]],edge_labels=['','充分','不足','重新核对']),
@@ -103,6 +120,30 @@ class ChartWorkerTests(unittest.TestCase):
     send=flow.ExecutionFlowTests.send
     finish=flow.ExecutionFlowTests.finish
     control=flow.ExecutionFlowTests.control
+
+    def test_invalid_chart_parameters_do_not_exhaust_shared_render_budget(self):
+        root=self.send('把刚才的讲解改为流程图')
+        self.finish(root['id'],[self.control('start_background_task',instructions='做流程图',requires_charts=True)])
+        self.service.tick();run=self.service.execution_status(root['id']);request=copy.deepcopy(self.work.requests[run['task']])
+        request['limits']=dict(call_timeout=10,task_timeout=60)
+        events=[];calls=[]
+        class Model:
+            def chat(_,messages,tools,on_delta):
+                calls.append(1)
+                if len(calls)==1:
+                    invalid=self.control('build_chart',**{**FLOW,'source_ids':['guessed']})['tool_calls'][0]
+                    return dict(message=dict(role='assistant',tool_calls=[{**invalid,'id':str(i)} for i in range(4)]),usage={})
+                if len(calls)==2:
+                    self.assertTrue(all(not json.loads(m['content'])['ok'] for m in messages if m['role']=='tool'))
+                    return dict(message=self.control('build_chart',**FLOW),usage={})
+                value=json.loads(next(m['content'] for m in reversed(messages) if m['role']=='tool'))
+                self.assertTrue(value['ok'],value.get('error'))
+                return dict(message=dict(content='完整流程说明。\n'+value['markdown']),usage={})
+        execute(request,lambda k,d:events.append((k,d)),llm=Model())
+        charts.validate_report(next(d for k,d in events if k=='result'),root['id'],True)
+        budget=json.loads((charts.folder()/'limits'/(root['id']+'.json')).read_text('utf-8'))
+        self.assertEqual(budget['attempts'],1)
+        self.assertEqual(len(calls),3)
 
     def test_real_worker_tool_receipt_is_rendered_into_original_root_and_required_flag_survives(self):
         root=self.send('做一张流程图')

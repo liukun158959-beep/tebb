@@ -14,6 +14,13 @@ test('invalid chart id cannot read arbitrary paths or become executable markup',
  assert.equal(calls,0);assert(text(v.toJSON()).includes('图表标识无效'));assert.equal(v.root.findAllByType('script').length,0);await act(async()=>v.unmount());
 });
 
+test('flow snippet sources stay visibly unverified and never appear as body excerpts',async()=>{
+ const load=loader({'./api':{backendInfo:async()=>({}),rpc:async()=>({ok:true,image:'data:image/png;base64,iVBORw0KGgo=',spec:{title:'关系示意',type:'flow',nodes:['输入','输出'],edges:[[0,1]]},sources:[{id:'S1',title:'搜索结果',url:'https://example.org/',level:'snippet',truncated:true}]})}});const {ReportChart}=load('report-charts');let v;
+ await act(async()=>{v=create(React.createElement(ReportChart,{id:'e'.repeat(32)}));});
+ assert(text(v.toJSON()).includes('结构示意未按原文核实'));await act(async()=>button(v,'结构与依据').props.onClick());
+ assert(text(v.toJSON()).includes('搜索摘要，未读取正文'));assert(!text(v.toJSON()).includes('正文节选'));await act(async()=>v.unmount());
+});
+
 test('streamed text keeps the chart, image and expanded sources mounted and reads once',async()=>{
  const id='b'.repeat(32);let calls=0;const info={port:1,token:'t'};
  const load=loader({'./api':{rpc:async()=>{calls++;return {ok:true,image:'data:image/png;base64,iVBORw0KGgo=',render_version:2,spec:{type:'flow',title:'稳定流程',nodes:['读取','核对'],edges:[[0,1]]},sources:[]};}}});
