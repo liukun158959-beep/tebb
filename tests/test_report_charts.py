@@ -18,6 +18,22 @@ FLOW=dict(type='flow',title='证据到报告',source_ids=[],nodes=['读取原文
 
 
 class ChartTests(unittest.TestCase):
+    def test_five_flow_layouts_keep_branch_conditions_lanes_and_feedback_in_exports(self):
+        cases=[{**FLOW,'flow_style':'steps'},
+            dict(type='flow',title='条件',source_ids=[],flow_style='decision',nodes=['阅读','证据充分？','形成结论','补读'],edges=[[0,1],[1,2],[1,3],[3,1]],edge_labels=['','充分','不足','重新核对']),
+            dict(type='flow',title='并行',source_ids=[],flow_style='parallel',nodes=['目标','检索','核对','汇总'],edges=[[0,1],[0,2],[1,3],[2,3]]),
+            {**FLOW,'flow_style':'swimlane','node_lanes':['tebb','研究助手','用户']},
+            dict(type='flow',title='循环',source_ids=[],flow_style='cycle',nodes=['假设','验证','分析','调整'],edges=[[0,1],[1,2],[2,3],[3,0]])]
+        for spec in cases:
+            with self.subTest(style=spec['flow_style']):
+                value=charts.create(spec,[],uuid.uuid4().hex);meta,png=charts.load(value['id'])
+                self.assertEqual(meta['render_version'],2);self.assertTrue(png.startswith(b'\x89PNG'))
+                text=charts.export(value['markdown'])
+                for label in spec.get('edge_labels',[]):self.assertIn(label,text)
+                for lane in spec.get('node_lanes',[]):self.assertIn(lane,text)
+        for change in [dict(flow_style='code'),dict(flow_style='swimlane'),dict(node_kinds=['process']),dict(edge_labels=['多余']),dict(edges=[[0,1],[0,1]]),dict(node_lanes=['tebb'])]:
+            with self.subTest(change=change),self.assertRaises(ValueError):charts.validate({**FLOW,**change},[])
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         p=patch.dict(os.environ,DESK_COMPANION_DATA_DIR=self.temp.name);p.start();self.addCleanup(p.stop)

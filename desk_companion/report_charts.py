@@ -25,6 +25,10 @@ SPEC=dict(type='function',function=dict(name='build_chart',description='从结�
     'labels':{'type':'array','items':{'type':'string'}},'series':{'type':'array','items':{'type':'object','properties':{'name':{'type':'string'},'values':{'type':'array','items':{'type':['number','null']}}},'required':['name','values'],'additionalProperties':False}},
     'items':{'type':'array','items':{'type':'object','properties':{'label':{'type':'string'},'start':{'type':'string'},'end':{'type':'string'}},'required':['label','start'],'additionalProperties':False}},
     'nodes':{'type':'array','items':{'type':'string'}},'edges':{'type':'array','items':{'type':'array','items':{'type':'integer'},'minItems':2,'maxItems':2}},
+    'flow_style':{'type':'string','enum':['auto','steps','decision','parallel','swimlane','cycle'],'description':'按内容选择：线性步骤、条件分支、并行汇合、职责泳道、反馈循环；auto自动布局。反馈环必须明确cycle/decision。'},
+    'node_kinds':{'type':'array','items':{'type':'string','enum':['process','decision','terminal']}},
+    'edge_labels':{'type':'array','items':{'type':'string'},'description':'与edges一一对应；条件分支必须写明是/否或具体条件'},
+    'node_lanes':{'type':'array','items':{'type':'string'},'description':'与nodes一一对应的负责人或职责，swimlane必填'},
     'calculation':{'type':'string','description':'派生数值的可核对计算方法，原始值也保留在数据说明中'}},required=['type','title','source_ids'],additionalProperties=False)))
 
 
@@ -38,6 +42,7 @@ def validate(spec,sources):
     if not isinstance(spec,dict) or set(spec)-set(SPEC['function']['parameters']['properties']):raise ValueError('图表结构或字段无效。')
     kind=spec.get('type');_text(spec.get('title'))
     if kind not in {'bar','line','timeline','flow'}:raise ValueError('不支持该图表类型。')
+    if kind!='flow' and any(k in spec for k in ('flow_style','node_kinds','node_lanes','edge_labels')):raise ValueError('流程字段只能用于流程图。')
     ids=spec.get('source_ids')
     if not isinstance(ids,list) or len(ids)>12 or any(not isinstance(i,str) for i in ids):raise ValueError('来源编号无效。')
     catalog={s['id']:s for s in source_catalog(sources)}
@@ -64,16 +69,8 @@ def validate(spec,sources):
             start=datetime.fromisoformat(_text(row['start'],40));end=datetime.fromisoformat(row.get('end',row['start']))
             if end<start:raise ValueError('结束时间不能早于开始时间。')
     else:
-        from graphlib import TopologicalSorter
-        nodes=spec.get('nodes');edges=spec.get('edges',[])
-        if not isinstance(nodes,list) or not 1<=len(nodes)<=8:raise ValueError('流程图需要1至8个节点。')
-        for node in nodes:_text(node,80)
-        if not isinstance(edges,list) or len(edges)>16:raise ValueError('最多16条流程连接。')
-        graph={i:set() for i in range(len(nodes))}
-        for edge in edges:
-            if not isinstance(edge,list) or len(edge)!=2 or any(type(i) is not int or not 0<=i<len(nodes) for i in edge):raise ValueError('流程连接无效。')
-            graph[edge[1]].add(edge[0])
-        list(TopologicalSorter(graph).static_order())
+        from .report_flow import validate as validate_flow
+        validate_flow(spec,_text)
     return [dict(id=i,title=catalog[i].get('title',catalog[i]['url']),url=catalog[i]['url'],truncated=bool(catalog[i].get('truncated')),
         **{key:catalog[i].get(key) for key in ('read_ranges','snapshot_id','sha256','fetched_at')}) for i in ids]
 
@@ -84,41 +81,44 @@ def _render(spec):
     from matplotlib import rc_context
     from matplotlib.font_manager import FontProperties
     font=next((Path(p) for p in ['C:/Windows/Fonts/msyh.ttc','C:/Windows/Fonts/simhei.ttf'] if Path(p).exists()),None)
-    settings={'text.usetex':False,'text.parse_math':False,'font.size':11,'axes.unicode_minus':False}
+    settings={'text.usetex':False,'text.parse_math':False,'font.size':12,'axes.unicode_minus':False,
+        'figure.facecolor':'#fafbf9','axes.facecolor':'#fafbf9','axes.edgecolor':'#dce4dc',
+        'text.color':'#293a2f','axes.labelcolor':'#526a59','xtick.color':'#526a59','ytick.color':'#526a59',
+        'axes.spines.top':False,'axes.spines.right':False,'grid.color':'#dde5dd','grid.linewidth':.7}
     if font:settings['font.family']=FontProperties(fname=font).get_name()
-    kind=spec['type'];height=max(4,min(10,.45*len(spec.get('labels',spec.get('items',[])))+2))
+    kind=spec['type'];height=max(3.2,min(10,.45*len(spec.get('labels',spec.get('items',[])))+1.8))
+    if kind=='flow':height=max(4,min(12,len(spec['nodes'])*.75))
     with rc_context(settings):
-        fig=Figure(figsize=(10,height),layout='constrained');FigureCanvasAgg(fig);ax=fig.subplots()
+        fig=Figure(figsize=(8,height),layout='constrained');FigureCanvasAgg(fig);ax=fig.subplots()
         if kind in {'bar','line'}:
             labels=spec['labels'];series=spec['series'];positions=list(range(len(labels)))
             for index,row in enumerate(series):
                 values=[float('nan') if v is None else v for v in row['values']]
-                if kind=='bar':ax.barh([p+index*.8/len(series) for p in positions],values,height=.8/len(series),label=row['name'])
-                else:ax.plot(positions,values,marker='o',label=row['name'])
+                colors=['#607b66','#758baf','#ad825f','#947f9f'];color=colors[index]
+                if kind=='bar':
+                    bars=ax.barh([p+index*.8/len(series) for p in positions],values,height=.64/len(series),label=row['name'],color=color)
+                    ax.bar_label(bars,labels=['' if v is None else f'{v:g}' for v in row['values']],padding=5,fontsize=11,color='#293a2f')
+                else:
+                    ax.plot(positions,values,marker='o',markersize=5,linewidth=1.7,color=color,label=row['name'])
+                    if len(labels)<=8 and len(series)==1:
+                        for x,y in enumerate(row['values']):
+                            if y is not None:ax.annotate(f'{y:g}',(x,y),xytext=(0,9),textcoords='offset points',ha='center',fontsize=11,color='#293a2f')
             if kind=='bar':ax.set_yticks([p+(len(series)-1)*.4/len(series) for p in positions],labels=[textwrap.fill(s,18) for s in labels]);ax.invert_yaxis();ax.set_xlabel(spec['unit']);ax.set_axisbelow(True);ax.grid(axis='x',alpha=.2)
             else:ax.set_xticks(positions,labels=[textwrap.fill(s,10) for s in labels],rotation=30 if len(labels)>8 else 0);ax.set_ylabel(spec['unit']);ax.set_xlabel(spec.get('x_label',''));ax.grid(alpha=.2)
-            if len(series)>1:ax.legend()
+            ax.margins(x=.16,y=.18)
+            ax.tick_params(length=0,pad=8)
+            if len(series)>1:ax.legend(frameon=False,fontsize=11)
         elif kind=='timeline':
             import matplotlib.dates as dates
             items=spec['items']
             for i,row in enumerate(items):
                 start=dates.date2num(datetime.fromisoformat(row['start']));end=dates.date2num(datetime.fromisoformat(row.get('end',row['start'])))
-                if end>start:ax.barh(i,end-start,left=start,height=.5)
-                else:ax.scatter(start,i,s=50)
+                if end>start:ax.barh(i,end-start,left=start,height=.38,color='#607b66')
+                else:ax.scatter(start,i,s=40,color='#607b66')
             ax.set_yticks(range(len(items)),labels=[textwrap.fill(row['label'],22) for row in items]);ax.invert_yaxis();ax.xaxis_date();ax.xaxis.set_major_formatter(dates.ConciseDateFormatter(ax.xaxis.get_major_locator(),tz=timezone.utc));ax.set_xlabel('日期 / 时间（UTC）');ax.grid(axis='x',alpha=.2)
         else:
-            from graphlib import TopologicalSorter
-            nodes=spec['nodes'];edges=spec.get('edges',[]);graph={i:set() for i in range(len(nodes))}
-            for a,b in edges:graph[b].add(a)
-            depth={}
-            for n in TopologicalSorter(graph).static_order():depth[n]=max((depth[p]+1 for p in graph[n]),default=0)
-            layers={}
-            for n,d in depth.items():layers.setdefault(d,[]).append(n)
-            positions={n:(d,len(layer)/2-i) for d,layer in layers.items() for i,n in enumerate(layer)}
-            for a,b in edges:ax.annotate('',xy=positions[b],xytext=positions[a],arrowprops=dict(arrowstyle='->',shrinkA=25,shrinkB=25,color='#667b74'))
-            for n,(x,y) in positions.items():ax.text(x,y,textwrap.fill(nodes[n],12),ha='center',va='center',bbox=dict(boxstyle='round,pad=.7',facecolor='#edf3f0',edgecolor='#b8c9c1'))
-            ax.set_xlim(-.6,max(depth.values())+.6);ys=[y for x,y in positions.values()];ax.set_ylim(min(ys)-.8,max(ys)+.8);ax.axis('off')
-        ax.set_title(spec['title']+(' · 示意' if kind=='flow' else ''),pad=18)
+            from .report_flow import render as render_flow
+            render_flow(ax,spec)
         out={}
         for ext in ('png','svg'):
             stream=io.BytesIO();fig.savefig(stream,format=ext,dpi=130,metadata={'Creator':'tebb'} if ext=='svg' else None);out[ext]=stream.getvalue()
@@ -152,7 +152,7 @@ def create(spec,sources,run_id):
             if len(raw)>2_000_000:raise ValueError('图表超过大小限制，未登记成果。')
             path=root/(ident+'.'+ext);tmp=path.with_suffix('.'+ext+'.tmp');tmp.write_bytes(raw);tmp.replace(path);confirmed.append(ext)
         stage='registration'
-        metadata=dict(id=ident,run_id=run_id,spec=spec,sources=references,sha256=hashlib.sha256(images['png']).hexdigest())
+        metadata=dict(id=ident,run_id=run_id,spec=spec,sources=references,render_version=2,sha256=hashlib.sha256(images['png']).hexdigest())
         atomic_write(root/(ident+'.json'),metadata)
     except Exception as exc:
         raise ChartChangeError(stage,ident,confirmed,spec) from exc
@@ -191,7 +191,11 @@ def data_markdown(value):
         lines+=['单位：'+safe(spec['unit'])+'；口径：'+safe(spec['comparability']), '|项目|'+'|'.join(safe(s['name']) for s in spec['series'])+'|', '|---|'+'---|'*len(spec['series'])]
         lines+=['|'+safe(label)+'|'+'|'.join('缺失' if s['values'][i] is None else str(s['values'][i]) for s in spec['series'])+'|' for i,label in enumerate(spec['labels'])]
     elif spec['type']=='timeline':lines+=['- '+safe(r['label'])+'：'+safe(r['start'])+' → '+safe(r.get('end',r['start'])) for r in spec['items']]
-    else:lines+=['关系示意：'+'；'.join(safe(spec['nodes'][a])+' → '+safe(spec['nodes'][b]) for a,b in spec.get('edges',[]))]
+    else:
+        labels=spec.get('edge_labels') or ['']*len(spec.get('edges',[]))
+        lanes=spec.get('node_lanes') or ['']*len(spec['nodes'])
+        lines+=['关系示意：'+'；'.join(safe(spec['nodes'][a])+(' —'+safe(labels[i])+'→ ' if labels[i] else ' → ')+safe(spec['nodes'][b]) for i,(a,b) in enumerate(spec.get('edges',[])))]
+        if any(lanes):lines+=['职责：'+'；'.join(safe(node)+'（'+safe(lane)+'）' for node,lane in zip(spec['nodes'],lanes))]
     if spec.get('calculation'):lines+=['计算说明：'+safe(spec['calculation'])]
     lines+=['来源：'+('；'.join('['+safe(s['title'])+'](<'+s['url']+'>)'+('（正文节选）' if s['truncated'] else '') for s in value['sources']) or '关系示意，无数值结论')]
     return '\n\n'.join(lines)
