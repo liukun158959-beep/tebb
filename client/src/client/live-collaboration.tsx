@@ -66,7 +66,7 @@ export function LiveCollaboration({ info: provided, standalone = false, composeR
   const act = async (action: DemoAction): Promise<boolean> => {
     if (!info || !state || busy) return false;
     setBusy(true); setActionError("");
-    const body = { ...action, conversation: action.type === "select" ? action.id : state.selected };
+    const body = { ...action, conversation: action.type === "select" ? action.id : "conversation" in action && action.conversation ? action.conversation : state.selected };
     const fingerprint = JSON.stringify(body);
     if (!pending.current || pending.current.body !== fingerprint) pending.current = { body: fingerprint, id: crypto.randomUUID() };
     try {

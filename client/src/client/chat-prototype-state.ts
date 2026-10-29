@@ -1,10 +1,11 @@
+import type { ClarificationForm,ClarificationAction } from './clarification-state';
 // Local interaction model only. No model, tool, credential, or backend imports.
 export type DemoAgent = { id: string; name: string; role: string; mark: string; tone: string; model: string; tools: string[]; memory: string; avatar?: string; personality?: string };
 export type DemoProject = { id: string; name: string; primary?: string; instructions?: string; sources?: {id:string;title:string;text:string;truncated?:boolean}[] };
 export type DemoConversation = { id: string; title: string; kind: "dm" | "group"; members: string[]; coordinator: string; goal: string; legacy?: boolean; summary?: string; project_id?: string };
 export type DemoMessage = { id: string; conversation: string; sender: string; text: string; run?: string; kind?: "result" | "notice" };
 export type DemoRun = { id: string; conversation: string; agent: string; title: string; state: "running" | "waiting" | "succeeded" | "cancelled" | "pending" | "queued" | "cancelling" | "failed" | "timed_out" | "interrupted" | "needs_input";
-  require_execution?:boolean;clarification?:string;created?:number;finished?:number;phases?:{kind:string;calls:number;started:number;ended:number}[];chain?:{state:DemoRun['state'];calls:number;tool_calls:number;elapsed_ms:number|null;error:string;answer:string;children:string[]};
+  clarification_version?:string;clarification_form?:ClarificationForm;options_generation?:{state:string;error?:string;calls?:number};require_execution?:boolean;clarification?:string;created?:number;finished?:number;phases?:{kind:string;calls:number;started:number;ended:number}[];chain?:{state:DemoRun['state'];calls:number;tool_calls:number;elapsed_ms:number|null;error:string;answer:string;children:string[]};
   step: number; dependency?: string; dependencies?: string[]; delivery_state?: "running" | "succeeded" | "failed"; delivery_check?: { ok: boolean; missing?: string[]; missing_sources?: string[] }; updates: string[]; applied: number; events: string[]; artifact?: string;
   kind?: string; parent?: string; answer?: string; error?: string; status?: string; calls?: number; model?: string; input_tokens?: number; output_tokens?: number;
   changes?: { path: string; diff: string }[]; checks?: { command: string; state: string; exit_code: number | null; output: string; stale?: boolean; diff_limited?: boolean }[];
@@ -12,9 +13,9 @@ export type DemoRun = { id: string; conversation: string; agent: string; title: 
 export type DemoRequest = { id: string; conversation: string; run: string; state: "pending" | "approved" | "rejected" };
 export type DemoState = { version: 1; next: number; selected: string; projects?: DemoProject[]; agents: DemoAgent[]; conversations: DemoConversation[]; messages: DemoMessage[];
   runs: DemoRun[]; requests: DemoRequest[]; notice: string; companionVersion?: number; revision?: number; active_model?: string; workspace?: { primary: string; project_id?:string; revision?:string; references?:string[]; edit?:boolean; commands?:boolean }; skills?: { id: string; description: string }[]; models?: { id: string; model: string }[] };
-export type DemoAction =
+export type DemoAction = ClarificationAction
   | { type: "select"; id: string }
-  | { type: "send"; text: string; target: string; mode: "message" | "task" | "auto"; run?: string; skills?: string[]; attachments?: string[]; model_id?: string; sampling?: { reasoning_effort: string; temperature: number; top_p: number } }
+  | { type: "send"; conversation?:string;text: string; target: string; mode: "message" | "task" | "auto"; run?: string; skills?: string[]; attachments?: string[]; model_id?: string; sampling?: { reasoning_effort: string; temperature: number; top_p: number } }
   | { type: "create_project"; name: string }
   | { type: "rename_project"; id: string; name: string; instructions?: string }
   | { type: "open_folder_project"; primary: string; bind_id?: string }

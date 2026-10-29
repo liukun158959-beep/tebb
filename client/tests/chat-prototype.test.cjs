@@ -667,13 +667,41 @@ test('composer menu fits narrow and short viewports and is anchored by the avail
 });
 
 
-test('awaiting goal offers supplement without spinning and keeps human message unchanged',()=>{
+test('awaiting goal offers supplement without spinning and keeps human message unchanged',async()=>{
   environment();const state=initialDemo();state.selected='dm-tebb';
   const root={id:'clarify',conversation:state.selected,agent:'tebb',state:'needs_input',kind:'route',title:'test',step:0,updates:[],applied:0,calls:1,answer:'请补充具体目标',clarification:'请补充具体目标',events:['待补充'],chain:{state:'needs_input',calls:1,tool_calls:0,elapsed_ms:null,error:'',answer:'请补充具体目标',children:[]}};
   state.runs=[root];state.messages=[{id:'human',conversation:state.selected,sender:'user',run:root.id,text:'test'},{id:'answer',conversation:state.selected,sender:'tebb',run:root.id,text:root.answer}];
   const {ChatPrototype}=load('chat-prototype');let view;
   act(()=>{view=create(React.createElement(ChatPrototype,{developerMode:false,live:{state,act:async()=>true,busy:false,error:''}}));});
   const chat=view.root.findByProps({'aria-label':'协作聊天记录'});assert(text(chat).includes('test'));assert(text(chat).includes('尚未开始执行'));
-  const supplement=chat.findAllByType('button').find(node=>text(node)==='补充目标');assert(supplement);
-  act(()=>supplement.props.onClick());assert(text(view.root).includes('提交补充'));act(()=>view.unmount());
+  const supplement=chat.findAllByType('button').find(node=>text(node)==='改用文字补充');assert(supplement);
+  await act(async()=>{await supplement.props.onClick();});assert(text(view.root).includes('提交补充'));act(()=>view.unmount());
+});
+
+
+const choiceRun=()=>({id:'choice-root',conversation:'dm-tebb',agent:'tebb',state:'needs_input',kind:'route',title:'需求评审会',step:0,updates:[],applied:0,events:[],clarification:'2026-10-29 20:00，请选择时长',clarification_version:'v1',clarification_form:{version:'v1',questions:[{id:'duration',question:'评审会持续多久？',options:[{id:'half',label:'30分钟',value:'持续30分钟'},{id:'hour',label:'1小时',value:'持续1小时'}]}]}});
+test('structured choices have no default and only explicit continue submits, keeping answers on failure',async()=>{
+  environment();const {ClarificationCard}=load('clarification-card');const actions=[];let view;
+  await act(async()=>{view=create(React.createElement(ClarificationCard,{run:choiceRun(),onAction:async action=>{actions.push(action);return false;}}));});
+  const next=()=>view.root.findAllByType('button').find(b=>text(b)==='继续执行');assert(next().props.disabled);assert(view.root.findAllByType('input').every(i=>!i.props.checked));
+  act(()=>view.root.findAllByType('input').find(i=>i.props.value==='hour').props.onChange());assert.equal(actions.length,0);assert(!next().props.disabled);
+  await act(async()=>{await next().props.onClick();});assert.equal(actions.length,1);assert.equal(actions[0].conversation,'dm-tebb');assert.equal(actions[0].version,'v1');assert.deepEqual(actions[0].answers,{duration:{option_id:'hour'}});
+  assert(text(view.root).includes('保留当前选择'));assert(view.root.findAllByType('input').find(i=>i.props.value==='hour').props.checked);act(()=>view.unmount());
+});
+test('custom clarification and legacy option generation use the same original task binding',async()=>{
+  environment();const {ClarificationCard}=load('clarification-card');const actions=[];let view;const props={run:choiceRun(),onAction:async a=>{actions.push(a);return true;}};
+  await act(async()=>{view=create(React.createElement(ClarificationCard,props));});
+  act(()=>view.root.findAllByType('label').find(l=>text(l)==='自定义').findByType('input').props.onChange());
+  act(()=>view.root.findByProps({'aria-label':'评审会持续多久？的自定义答案'}).props.onChange({target:{value:'持续2小时'}}));
+  await act(async()=>view.root.findAllByType('button').find(b=>text(b)==='继续执行').props.onClick());assert.deepEqual(actions[0].answers,{duration:{custom:'持续2小时'}});act(()=>view.unmount());
+  const legacy={...choiceRun(),clarification_form:undefined};await act(async()=>{view=create(React.createElement(ClarificationCard,{...props,run:legacy}));});
+  await act(async()=>view.root.findAllByType('button').find(b=>text(b)==='生成可选答案').props.onClick());assert.equal(actions[1].type,'clarification_options');assert.equal(actions[1].id,legacy.id);act(()=>view.unmount());
+});
+test('global inbox shows a foreign waiting task and answers it without replacing current draft',async()=>{
+  environment();const state=initialDemo();state.selected='dm-writer';state.runs=[choiceRun()];state.messages=[];const actions=[];
+  const {ChatPrototype}=load('chat-prototype');let view;await act(async()=>{view=create(React.createElement(ChatPrototype,{developerMode:false,live:{state,act:async a=>{actions.push(a);return true;},busy:false,error:''}}));});
+  act(()=>view.root.findByProps({'aria-label':'协作消息'}).props.onChange({target:{value:'保留写作草稿'}}));
+  act(()=>view.root.findByProps({'aria-label':'待你处理'}).props.onClick());assert(text(view.root).includes('全部会话 · 待你处理'));assert(text(view.root).includes('需求评审会'));
+  const card=view.root.findByProps({'aria-label':'补充信息选项'});act(()=>card.findAllByType('input').find(i=>i.props.value==='hour').props.onChange());
+  await act(async()=>card.findAllByType('button').find(b=>text(b)==='继续执行').props.onClick());assert.equal(actions[0].conversation,'dm-tebb');assert.equal(actions[0].id,'choice-root');assert.equal(view.root.findByProps({'aria-label':'协作消息'}).props.value,'保留写作草稿');act(()=>view.unmount());
 });

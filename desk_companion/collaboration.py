@@ -38,6 +38,14 @@ def parse_route(text):
     if decision['mode']=='answer':
         from .execution_flow import claims_handoff
         if claims_handoff(content):raise ValueError('未取得真实后台提交，不能把口头派发声明当回答。')
+    if decision['mode']=='clarify' and decision.get('preset'):
+        if decision['preset']!='calendar_duration':raise ValueError('未知补充问题模板。')
+        from .clarification import duration_options
+        prepared=duration_options(content);decision.update(text=prepared['question'],questions=prepared['questions'])
+    if decision['mode']=='clarify' and decision.get('questions') is not None:
+        from .clarification import questions
+        decision['questions']=questions(decision['questions'])
+    if decision['mode']=='clarify' and len(content)>4000:raise ValueError('补充问题超过长度限制。')
     return decision
 
 
@@ -152,7 +160,7 @@ def dependencies(run):
 
 
 def call_budget(agent_id, kind='task'):
-    return 2 if kind in {'plan','route','chat','compress'} else 12 if agent_id == 'coder' else 8
+    return 2 if kind in {'plan','route','chat','compress','clarify_options'} else 12 if agent_id == 'coder' else 8
 
 
 def parse_plan(text, members):
@@ -233,6 +241,9 @@ class Collaboration:
             result.pop(key, None)
         # Internal snapshots/keys/worker requests never cross the browser boundary.
         for run in result["runs"]:
+            from .clarification import public_version
+            public_version(run)
+            if run.get('options_generation'):run['options_generation']={k:v for k,v in run['options_generation'].items() if k in {'state','error','calls'}}
             if not run.get('parent'):
                 run['chain'] = chain_view(run, result['runs'])
             for key in ("input", "agent_config", "members", "context", "cursor", "task", "attempt", "parent_draft", "source_evidence", "selection", "compress_ids", "public_answer"):
@@ -360,6 +371,9 @@ class Collaboration:
                 if readonly:
                     if action.get('type') in {'add_coder','compress','open_folder_project','migrate_projects'} or action.get('attachments') or action.get('skills'): raise ValueError('浏览器体验不开放本地工作区和技能执行，请使用桌面客户端')
                     if action.get('type') == 'agent' and set(action.get('agent',{}).get('tools',[])) - {'联网搜索','网页读取'}: raise ValueError('浏览器体验仅支持联网只读工具')
+                    if action.get('type')=='clarification_answer':
+                        paused=next((r for r in state['runs'] if r['id']==action.get('id')),None)
+                        if paused and set(paused['agent_config'].get('tools',[]))-{'联网搜索','网页读取'}:raise ValueError('此任务包含本地工具权限，请在桌面客户端补充。')
                     if action.get('type') == 'send':
                         c = next((c for c in state['conversations'] if c['id']==action.get('conversation')),None)
                         if c and any(set(a['tools'])-{'联网搜索','网页读取'} for a in state['agents'] if a['id'] in c['members']): raise ValueError('此会话包含本地工具权限，请在桌面客户端执行')
@@ -377,7 +391,13 @@ class Collaboration:
                 raise ValueError("项目不存在，请刷新后重新选择")
             return value
 
-        if kind == 'open_folder_project':
+        if kind in {'clarification_answer','clarification_options'}:
+            run=next((r for r in state['runs'] if r['id']==action.get('id') and r['conversation']==action.get('conversation')),None)
+            if not run:raise ValueError('原任务或会话已变化，请重新读取。')
+            from .clarification import answer,request_options
+            if kind=='clarification_options':request_options(run,action.get('version'))
+            else:self._apply(state,dict(type='send',conversation=run['conversation'],run=run['id'],text=answer(run,action)))
+        elif kind == 'open_folder_project':
             from .chat_projects import attach
             project = attach(state,action.get('primary'),self._id,action.get('bind_id',''))
             row = next((c for c in reversed(state['conversations']) if c.get('project_id')==project['id']),None)
@@ -479,7 +499,9 @@ class Collaboration:
                 run["updates"].append(text); run["events"].append("补充要求已接收，等待调用边界应用")
                 self._message(state, conversation["id"], "user", text, run["id"])
                 if run['state']=='needs_input':
+                    from .clarification import stop_options
                     if sum(r['state'] in ACTIVE for r in state['runs'])>=12:raise ValueError('已有较多任务，请稍后补充。')
+                    stop_options(run,self.managers['chat'])
                     run['context'].append(dict(sender=run['agent'],text=run['answer']))
                     # The continuing reply belongs after the human supplement.
                     # Keep its identity and task link, rather than duplicating it.
@@ -490,6 +512,8 @@ class Collaboration:
                     run['title'] = text[:160]
                     advance(run,'route',status='已收到目标补充，重新核对后执行')
                     run['clarification']=''
+                    run['supplemented_at']=time.time()
+                    run.pop('clarification_form',None)
                 return
             if action.get("mode", "auto") not in {"auto", "task", "message"}: raise ValueError("消息类型无效")
             target = action.get("target") or conversation["coordinator"]
@@ -547,6 +571,8 @@ class Collaboration:
                 stop_ids = expanded
             for item in state["runs"]:
                 if item["id"] in stop_ids and item["state"] in OPEN:
+                    from .clarification import stop_options
+                    stop_options(item,self.managers["chat"])
                     item["state"] = "cancelling" if item.get("task") and item['state'] in ACTIVE else "cancelled"
                     item["events"].append("已请求停止，不再派发后续任务")
                     if item['state']=='cancelling': self._manager(item).cancel(item["task"])
@@ -633,6 +659,14 @@ class Collaboration:
             # Polling and submitting occur under one state transaction. Deterministic
             # task IDs bridge a crash between queue insertion and state commit.
             for run in list(state["runs"]):
+                from .clarification import poll_options
+                try:poll_options(run,self.managers["chat"],self.path)
+                except Exception:
+                    generation=run.get('options_generation',{})
+                    if generation:
+                        generation.update(state='failed',error='生成选项的登记或读取结果未确认，原问题保留，原任务未恢复。请核对后重试。')
+                        run['events'].append('选项队列登记或读取未确认，未自动重试')
+                    else:raise
                 if run["state"] not in ACTIVE: continue
                 if run["state"] == "waiting":
                     preceding = [next(r for r in state['runs'] if r['id']==ident) for ident in dependencies(run)]
@@ -650,7 +684,7 @@ class Collaboration:
                         run['status'] = '等待工作目录的编码任务完成'; continue
                     request = dict(workflow="collaboration", collab_path=str(self.path), collab_run=run["id"],
                         role=run["agent_config"], kind=run["kind"], model_id=run["model_id"], context=run["context"], workspace=run.get("workspace"), selection=run.get("selection", {}),
-                        members=run.get("members", []), require_execution=run.get('require_execution',False), applied=run["applied"], draft=run.get("parent_draft", ""), budget=max(0, call_budget(run['agent'],run['kind'])-phase_calls(run)),
+                        reference_time=run.get("created",0), supplemented_at=run.get("supplemented_at"), members=run.get("members", []), require_execution=run.get('require_execution',False), applied=run["applied"], draft=run.get("parent_draft", ""), budget=max(0, call_budget(run['agent'],run['kind'])-phase_calls(run)),
                         objective=run.get('objective',run['input']),stage=run.get('stage','collect'),required_sources=run.get('required_sources',[]),
                         search_budget=max(0, run.get('search_limit',2)-run.get("search_calls",0)),fetch_budget=max(0,run.get('fetch_limit',4)-run.get("fetch_calls",0)),
                         source_topics=run.get('source_topics',[]),
@@ -710,7 +744,10 @@ class Collaboration:
                         self._finish(state,run,'failed','未取得有效的回答或任务路由，请重试'); continue
                     if decision['mode']=='clarify' or decision['mode']=='answer' and run.get('require_execution'):
                         question=decision.get('text') or '请补充要完成的目标、对象与期望结果。'
-                        run.update(answer=question,clarification=question)
+                        from .clarification import pause
+                        try:pause(run,question,decision.get("questions"))
+                        except ValueError:
+                            self._finish(state,run,'failed','补充问题格式无效，未执行工具。');continue
                         run['events'].append('待补充，尚未开始执行：'+question)
                         self._finish(state,run,'needs_input');continue
                     if decision['mode']=='answer':

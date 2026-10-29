@@ -1,3 +1,5 @@
+import { ClarificationCard } from './clarification-card';
+import { pendingClarifications } from './clarification-state';
 import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { DEMO_STORAGE, RUN_LABELS, STEP_LABELS, demoReducer, initialDemo, restoreDemo, runActive,
   type DemoAgent, type DemoConversation, type DemoProject, type DemoAction, type DemoRun, type DemoState } from "./chat-prototype-state";
@@ -140,7 +142,9 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
   const active = state.runs.filter(runActive);
   const visibleRuns = developer ? runs : runs.filter(run => !run.parent && (run.require_execution || run.state==='needs_input' || run.chain?.children.length || runs.some(child=>child.parent===run.id) || !["chat", "route", "compress"].includes(run.kind || "")));
   const pending = state.requests.filter(request => request.state === "pending");
-  const selectedRun = runs.find(run => run.id === updateRun);
+  const waitingInputs=pendingClarifications(state.runs);
+  const pendingCount=pending.length+waitingInputs.length;
+  const selectedRun = state.runs.find(run => run.id === updateRun);
   const currentArtifact = state.runs.find(run => run.id === artifactId);
   const draft = drafts[conversation.id] || "";
   useAutoGrowInput(input, draft, conversation.id);
@@ -232,13 +236,13 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
   function select(id: string) {
     dispatch({ type: "select", id }); setTarget(""); setUpdateRun(""); setFocusedRun(""); setMobileList(false); setPicker("");
   }
-  function supplement(run: DemoRun) {
-    select(run.conversation); setUpdateRun(run.id); setFocusedRun(run.id); setInspector(true); setTab("tasks");
+  async function supplement(run: DemoRun) {
+    if(live){if(!await sendAction({type:'select',id:run.conversation}))return;}else select(run.conversation); setUpdateRun(run.id); setFocusedRun(run.id); setInspector(true); setTab("tasks");
     input.current?.focus();
   }
   async function submit() {
     if (!draft.trim()) return;
-    const action: DemoAction = { type: "send", text: draft, target, mode, run: updateRun || undefined, skills, attachments: attachments.map(a => a.id), model_id: modelPick, ...(developer ? { sampling } : {}) };
+    const action: DemoAction = { type: "send", conversation:selectedRun?.conversation||conversation.id,text: draft, target, mode, run: updateRun || undefined, skills, attachments: attachments.map(a => a.id), model_id: modelPick, ...(developer ? { sampling } : {}) };
     if (live) { if (!await sendAction(action)) return; }
     else { const next = demoReducer(state, action); dispatch(action); if (next.notice) return; }
     following.current=true;
@@ -311,23 +315,23 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
           {state.agents.map(agent => <div className="cp-companion-card" key={agent.id}><button data-companion={agent.id} className="cp-conversation" onClick={()=>setEditingAgent(agent)}><Avatar agent={agent}/><span><strong>{agent.name}</strong><small>{agent.personality || agent.role}</small></span></button><button className="cp-text-button" onClick={()=>{dispatch({type:'new_chat',agent_id:agent.id});setListView('history');setTarget('');setUpdateRun('');}}>新对话</button></div>)}
           {!state.agents.some(a=>a.id==='coder') && <button className="cp-button cp-add-coder" onClick={()=>{dispatch({type:'add_coder'});setListView('history');}}>＋ 添加编码伙伴</button>}
         </div>}
-        <div className="cp-list-bottom"><button className="cp-inbox-link" onClick={() => { setInspector(true); setTab("inbox"); setMobileList(false); }}><span>◇ 待你处理</span><b>{pending.length}</b></button>
+        <div className="cp-list-bottom"><button className="cp-inbox-link" onClick={() => { setInspector(true); setTab("inbox"); setMobileList(false); }}><span>◇ 待你处理</span><b>{pendingCount}</b></button>
           <div className="cp-profile"><span className="cp-user-avatar">你</span><span><strong>我的工作空间</strong><small>{real ? "本地执行 · 真实用量" : "本地预览 · 未消耗模型额度"}</small></span></div></div>
       </aside>
 
       <div className="cp-chat">
         <header className="cp-chat-header"><div className="cp-chat-title"><button className="cp-icon-button cp-mobile-menu" aria-label="切换会话列表" aria-expanded={mobileList} onClick={() => setMobileList(!mobileList)}>☰</button><Avatar group={conversation.kind === "group"} agent={member(conversation.coordinator)} />
           <div><h1>{conversation.title}</h1><span className="cp-chat-subtitle">{currentProject && <span className="cp-project-breadcrumb" title={currentProject.name}><AppIcon name="folder" />{currentProject.name}<span aria-hidden="true"> / </span></span>}<span>{conversation.kind === "group" ? `你与 ${members.length} 位 Agent · ${member(conversation.coordinator)?.name} 协调` : member(conversation.coordinator)?.role}</span></span></div></div>
-          <div className="cp-context-actions">{real && onProject && <button className="cp-button cp-project-button" aria-label="工作目录与权限" title={state.workspace?.primary || "打开项目文件夹与配置权限"} onClick={onProject}><AppIcon name="folder"/><span>{state.workspace?.primary?.split(/[\\/]/).pop() || "文件夹"}</span></button>}<button className="cp-button" aria-label="当前任务" aria-expanded={inspector && tab==='tasks'} onClick={() => { setInspector(!(inspector && tab==='tasks')); setTab('tasks'); }} title="任务"><AppIcon name="tasks" /></button><button className="cp-button" aria-label="聊天伙伴" onClick={() => { setInspector(!(inspector && tab==='members')); setTab('members'); }} aria-expanded={inspector && tab==='members'} title="伙伴"><AppIcon name="members" /></button><button className="cp-button" aria-label="待你处理" onClick={() => { setInspector(!(inspector && tab==='inbox')); setTab('inbox'); }} aria-expanded={inspector && tab==='inbox'} title="待办"><AppIcon name="inbox" />{pending.length > 0 && <small className="cp-icon-count">{pending.length}</small>}</button></div></header>
+          <div className="cp-context-actions">{real && onProject && <button className="cp-button cp-project-button" aria-label="工作目录与权限" title={state.workspace?.primary || "打开项目文件夹与配置权限"} onClick={onProject}><AppIcon name="folder"/><span>{state.workspace?.primary?.split(/[\\/]/).pop() || "文件夹"}</span></button>}<button className="cp-button" aria-label="当前任务" aria-expanded={inspector && tab==='tasks'} onClick={() => { setInspector(!(inspector && tab==='tasks')); setTab('tasks'); }} title="任务"><AppIcon name="tasks" /></button><button className="cp-button" aria-label="聊天伙伴" onClick={() => { setInspector(!(inspector && tab==='members')); setTab('members'); }} aria-expanded={inspector && tab==='members'} title="伙伴"><AppIcon name="members" /></button><button className="cp-button" aria-label="待你处理" onClick={() => { setInspector(!(inspector && tab==='inbox')); setTab('inbox'); }} aria-expanded={inspector && tab==='inbox'} title="待办"><AppIcon name="inbox" />{pendingCount > 0 && <small className="cp-icon-count">{pendingCount}</small>}</button></div></header>
         {conversation.kind === "group" && <details className="cp-goal"><summary><span>共同目标</span><span>{conversation.goal || "为这个群确定一个目标，开始协作。"}</span></summary><p>{conversation.goal || "可在伙伴侧栏中调整协作群目标。"}</p></details>}
         <div className="cp-message-list" ref={messageList} onScroll={event=>{const el=event.currentTarget;following.current=el.scrollHeight-el.scrollTop-el.clientHeight<48;}} aria-label={real ? "协作聊天记录" : "原型聊天记录"}>
           {!messages.length && <div className="cp-empty-chat"><Avatar agent={member(conversation.coordinator)} /><h2>从一句话开始</h2><p>直接聊天，或者将目标交给 Agent。<br />私聊与协作群分别保留各自的消息。</p><button className="cp-button" onClick={() => { setDraft("帮我整理这周的研究方向"); setMode("auto"); input.current?.focus(); }}>试试交给 Agent ↗</button></div>}
           {messages.map(item => item.kind === "notice" ? <p key={item.id} className="cp-system-message">{item.text}</p> : <article key={item.id} className={`cp-message ${item.sender === "user" ? "cp-message-user" : ""}`}>
             {item.sender === "user" ? <span className="cp-user-avatar">你</span> : <Avatar agent={member(item.sender)} />}
             <div className="cp-message-content"><div className="cp-message-author"><strong>{item.sender === "user" ? "你" : member(item.sender)?.name}</strong>{item.kind === "result" && <span className="cp-result-tag">成果</span>}</div>
-              {item.sender !== 'user' && <>{runs.find(r=>r.id===item.run)&&<ExecutionTree run={runs.find(r=>r.id===item.run)!} runs={runs} agents={state.agents}/>}{onCalendar&&hasCalendarContext(runs.find(r=>r.id===item.run))&&<button type="button" className="cp-message-reference" onClick={onCalendar}>查看相关日程 →</button>}</>}
-              {(item.text || runs.find(r=>r.id===item.run)?.chain?.answer || !real) && <div className="cp-markdown"><StreamText text={executionMessage(item,runs)} active={!!item.run && runs.some(r=>r.id===item.run && runActive(r))} externalLinks={standalone} /></div>}
-              {item.sender !== 'user' && item.run && <div className="cp-message-footer">{runs.find(r=>r.id===item.run)?.state==='needs_input'&&<button className="cp-message-reference" onClick={()=>supplement(runs.find(r=>r.id===item.run)!)}>补充目标</button>}{(developer || runs.find(run=>run.id===item.run)?.state==='needs_input' || !["chat","route","compress"].includes(runs.find(run => run.id===item.run)?.kind || "")) && <button className="cp-message-reference" onClick={() => { setFocusedRun(item.run!); setInspector(true); setTab("tasks"); }}>↗ 关联任务</button>}
+              {item.sender !== 'user' && <>{runs.find(r=>r.id===item.run)?.state==='needs_input'&&<ClarificationCard key={item.run+':'+runs.find(r=>r.id===item.run)?.clarification_version} run={runs.find(r=>r.id===item.run)!} busy={!!live?.busy} onAction={action=>sendAction(action)} onText={()=>void supplement(runs.find(r=>r.id===item.run)!)} />}{runs.find(r=>r.id===item.run)&&<ExecutionTree run={runs.find(r=>r.id===item.run)!} runs={runs} agents={state.agents}/>}{onCalendar&&hasCalendarContext(runs.find(r=>r.id===item.run))&&<button type="button" className="cp-message-reference" onClick={onCalendar}>查看相关日程 →</button>}</>}
+              {(item.sender==='user'||runs.find(r=>r.id===item.run)?.state!=='needs_input') && (item.text || runs.find(r=>r.id===item.run)?.chain?.answer || !real) && <div className="cp-markdown"><StreamText text={executionMessage(item,runs)} active={!!item.run && runs.some(r=>r.id===item.run && runActive(r))} externalLinks={standalone} /></div>}
+              {item.sender !== 'user' && item.run && <div className="cp-message-footer">{(developer || runs.find(run=>run.id===item.run)?.state==='needs_input' || !["chat","route","compress"].includes(runs.find(run => run.id===item.run)?.kind || "")) && <button className="cp-message-reference" onClick={() => { setFocusedRun(item.run!); setInspector(true); setTab("tasks"); }}>↗ 关联任务</button>}
               {real && <small className="cp-message-usage" title="本条消息的执行模型与输入／输出 token 用量">{runs.find(r => r.id===item.run)?.model} · ↑ {runs.find(r => r.id===item.run)?.input_tokens || 0} / ↓ {runs.find(r => r.id===item.run)?.output_tokens || 0}</small>}
               {real && backend && backend.scope!=='collaboration' && item.sender!=='user' && item.run && runs.some(r=>r.id===item.run && r.state==='succeeded' && ['task','chat','route'].includes(r.kind || '') && (r.kind==='task'||!runs.some(child=>child.parent===r.id))) && <button className="cp-message-reference" title={currentProject?'保存到知识库并共享为本项目资料':'保存到知识库'} onClick={async()=>{try { const result=await rpc<{ok:boolean;error?:string}>(backend,'save_collaboration_note',{run_id:item.run}); if(!result.ok) throw new Error(result.error || '收藏失败'); setStorageError(currentProject?`已收藏到知识库，并加入「${currentProject.name}」项目资料。`:'已收藏到知识库的「伙伴成果」笔记，可继续作为资料使用。'); window.dispatchEvent(new Event('tebb-notebooks-changed')); } catch(error){setStorageError(String(error));} }}>{currentProject?'收藏到项目笔记':'收藏到笔记'}</button>}
               {item.kind === "result" && runs.find(run => run.id === item.run)?.artifact && <button className="cp-artifact-link" onClick={() => setArtifactId(item.run!)} title="打开完整成果文档"><span>▤</span><strong>{real ? "成果文档" : "成果文档 · 演示"}</strong><span>↗</span></button>}</div>}
@@ -361,7 +365,7 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
       </div>
 
       <aside className={`cp-inspector ${inspector ? "is-open" : ""}`} aria-hidden={!inspector} {...(!inspector ? { inert: "" } : {})} aria-label="协作详情"><header><span>{tab==='tasks' ? '任务' : tab==='members' ? '伙伴' : '待办'}</span><button className="cp-icon-button cp-inspector-close" onClick={() => setInspector(false)} aria-label="关闭协作详情">×</button></header>
-        <div className="cp-tabs" role="tablist" aria-label="协作详情分类">{([['tasks', '任务'], ['members', '成员'], ['inbox', `待办${pending.length ? ` ${pending.length}` : ""}`]] as const).map(([key, title]) =>
+        <div className="cp-tabs" role="tablist" aria-label="协作详情分类">{([['tasks', '任务'], ['members', '成员'], ['inbox', `待办${pendingCount ? ` ${pendingCount}` : ""}`]] as const).map(([key, title]) =>
           <button key={key} role="tab" id={`cp-tab-${key}`} aria-selected={tab === key} aria-controls="cp-detail-panel" tabIndex={tab === key ? 0 : -1} onClick={() => setTab(key)} onKeyDown={event => {
             if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
             event.preventDefault(); const keys = ["tasks", "members", "inbox"] as const;
@@ -374,8 +378,9 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
             <div className="cp-side-note">{real ? "最多2项长任务与1条聊天同时执行。只有用户提交能创建协作链，成员消息不会互相唤醒。" : "委派与交接会留下记录。演示不会调用真实工具或消耗模型额度。"}</div></> : tab === "members" ? <><div className="cp-section-heading"><span>你 ＋ {members.length} 位 Agent</span><button onClick={() => { setEditingGroup(null); setGroupOpen(true); }}>新建群</button></div>
               <div className="cp-member-card"><span className="cp-user-avatar">你</span><div><strong>你</strong><p>设定方向，做出决定</p></div><small>所有者</small></div>
               {members.map(agent => <div className="cp-member-card" key={agent.id}><Avatar agent={agent} /><div><strong>{agent.name}{agent.id === conversation.coordinator && <small>协调者</small>}</strong><p>{agent.role}</p><button onClick={() => setEditingAgent(agent)}>认识与配置 ↗</button></div></div>)}
-              {conversation.kind === "group" && <button className="cp-button cp-full" onClick={() => { setEditingGroup(conversation); setGroupOpen(true); }}>邀请或调整伙伴</button>}<button className="cp-button cp-full" onClick={addAgent}>＋ 创建 Agent</button><div className="cp-side-note">群里共享目标和成果。伙伴各有性格和擅长的事，你可以随时调整。</div></> : <><div className="cp-section-heading"><span>全部会话 · 待你处理</span><span>{pending.length} 项</span></div>
-                {!pending.length && <div className="cp-empty"><span>◇</span><h3>现在无需你介入</h3><p>{real ? "需要补充要求时，请引用具体任务；工作目录权限在目录设置中管理。" : "在成果文档中选择「演示交付确认」，体验任务如何向你请求决定。"}</p></div>}
+              {conversation.kind === "group" && <button className="cp-button cp-full" onClick={() => { setEditingGroup(conversation); setGroupOpen(true); }}>邀请或调整伙伴</button>}<button className="cp-button cp-full" onClick={addAgent}>＋ 创建 Agent</button><div className="cp-side-note">群里共享目标和成果。伙伴各有性格和擅长的事，你可以随时调整。</div></> : <><div className="cp-section-heading"><span>全部会话 · 待你处理</span><span>{pendingCount} 项</span></div>
+                {!pendingCount && <div className="cp-empty"><span>◇</span><h3>现在无需你介入</h3><p>{real ? "所有会话中需要补充信息的任务会显示在这里。" : "在成果文档中选择「演示交付确认」，体验任务如何向你请求决定。"}</p></div>}
+                {waitingInputs.map(run=><div key={run.id}><p className="cp-muted">{state.conversations.find(c=>c.id===run.conversation)?.title||'原对话'} · {run.title}</p><ClarificationCard key={run.id+':'+run.clarification_version} run={run} busy={!!live?.busy} onAction={action=>sendAction(action)} onText={()=>void supplement(run)} onOpen={()=>select(run.conversation)}/></div>)}
                 {pending.map(request => { const run = state.runs.find(item => item.id === request.run)!; return <article className="cp-request" key={request.id}><span className="cp-eyebrow">交付确认 · 演示</span><h3>{run.title}</h3><p>模拟确认将成果发送到飞书。点击后仅记录演示决定，没有实际发送。</p><div><button className="cp-button" onClick={() => dispatch({ type: "decide", id: request.id, approved: false })}>拒绝</button><button className="cp-button cp-primary" onClick={() => dispatch({ type: "decide", id: request.id, approved: true })}>确认演示</button></div><button className="cp-text-button" onClick={() => { select(request.conversation); setArtifactId(run.id); }}>查看原任务成果 ↗</button></article>; })}</>}
         </div></aside>
     </div>

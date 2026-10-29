@@ -6,7 +6,7 @@ const { act, create } = require('react-test-renderer');
 function load(name, mocks={}) {
   const base=path.resolve(__dirname,'../src/client',name);const filename=fs.existsSync(base+'.tsx')?base+'.tsx':base+'.ts';
   const mod=new Module(filename,module);mod.filename=filename;mod.paths=Module._nodeModulePaths(path.dirname(filename));
-  const original=mod.require.bind(mod);mod.require=id=>mocks[id]||(id.startsWith('./')?load(id.slice(2),mocks):original(id));
+  const original=mod.require.bind(mod);mod.require=id=>mocks[id]||(id.endsWith('.css')?{}:id.startsWith('./')?load(id.slice(2),mocks):original(id));
   mod._compile(ts.transpileModule(fs.readFileSync(filename,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,target:ts.ScriptTarget.ES2022}}).outputText,filename);return mod.exports;
 }
 const text=n=>typeof n==='string'?n:(n.children||[]).map(text).join('');
@@ -155,7 +155,7 @@ test('floating clarification resumes the original root instead of creating anoth
   const state={revision:1,selected:'dm',agents:[{id:'tebb',name:'tebb'}],conversations:[{id:'dm',title:'对话',coordinator:'tebb'}],messages:[{id:'question',conversation:'dm',sender:'tebb',run:'root',text:'请说明目标'}],runs:[{id:'root',conversation:'dm',agent:'tebb',kind:'route',state:'needs_input',answer:'请说明目标',events:[],updates:[],calls:1}],models:[]};
   const {PetChat}=load('pet-chat',{'./stream-text':{StreamText:({text})=>React.createElement('p',null,text)},'./api':{rpc:async(_i,method,args)=>{if(method==='load_task_progress')return {enabled:true};if(method==='collaboration_action')calls.push(args.action);return {state};}},'@tauri-apps/api/core':{isTauri:()=>false,invoke:async()=>false},'@tauri-apps/api/event':{listen:async()=>()=>{}}});let view;
   await act(async()=>{view=create(React.createElement(PetChat,{backend:{port:1,token:'test'}}));});
-  const supplement=view.root.findAllByType('button').find(node=>text(node)==='补充目标');assert(supplement);
+  const supplement=view.root.findAllByType('button').find(node=>text(node)==='改用文字补充');assert(supplement);
   await act(async()=>supplement.props.onClick());await act(async()=>view.root.findByProps({'aria-label':'浮动聊天消息'}).props.onChange({target:{value:'把Hello改小写',selectionStart:10}}));
   await act(async()=>view.root.findByType('form').props.onSubmit({preventDefault(){}}));
   assert.equal(calls[0].run,'root');assert.equal(calls[0].conversation,'dm');await act(async()=>view.unmount());

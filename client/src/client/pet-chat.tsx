@@ -1,3 +1,5 @@
+import { ClarificationCard } from './clarification-card';
+import type { ClarificationAction } from './clarification-state';
 import { ComposerPicker } from './composer-popover';
 import { useEffect, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -106,6 +108,12 @@ export function PetChat({ backend }: { backend?: BackendInfo }) {
     } catch (e) { if (alive.current) setError(String(e) + '；重试相同内容会沿用提交编号。'); }
     finally { if (alive.current) setBusy(false); }
   }
+  async function clarify(action:ClarificationAction){
+    if(!info||busy)return false;
+    const body=JSON.stringify(action);if(pending.current?.fingerprint!==body)pending.current={fingerprint:body,id:crypto.randomUUID()};
+    setBusy(true);setError('');try{const result=await rpc<{state:DemoState}>(info,'collaboration_action',{action:{...action,request_id:pending.current.id}});accept(result.state);pending.current=null;return true;}
+    catch(e){setError(String(e));return false;}finally{setBusy(false);}
+  }
   async function stop(id: string) {
     if (!info) return;
     try { const result = await rpc<{state:DemoState}>(info, 'collaboration_action', { action: { type:'cancel', id, conversation:cid, request_id:crypto.randomUUID() } }); accept(result.state); }
@@ -118,7 +126,7 @@ export function PetChat({ backend }: { backend?: BackendInfo }) {
     <div className="pet-chat-scroll" ref={scroller} onScroll={e => { const el=e.currentTarget; following.current = el.scrollHeight-el.scrollTop-el.clientHeight < 40; }} aria-label="聊天与任务过程">
       {!state && <p className="pet-chat-placeholder">正在连接当前会话…</p>}
       {state && !messages.length && <p className="pet-chat-placeholder">{current?.title || '当前会话'}<br/>可以直接提问，也可以 @ 伙伴安排任务。</p>}
-      {messages.map(message => { const run=runs.find(r=>r.id===message.run);return <article key={message.id} className={`pet-chat-message ${message.sender==='user'?'from-user':''}`}><small>{message.sender==='user'?'你':state?.agents.find(a=>a.id===message.sender)?.name || 'tebb'}</small>{message.sender!=='user' && run && <ExecutionTree run={run} runs={runs} agents={state?.agents||[]}/>}{run?.state==='needs_input'&&message.sender!=='user'&&<button type="button" onClick={()=>{setResumeRun(run.id);input.current?.focus();}}>补充目标</button>}<StreamText text={executionMessage(message,runs)} active={!!run && runActive(run) && !!message.text} />{message.sender!=='user' && run && (runActive(run)||run.state==='needs_input') && <button className="pet-chat-stop" onClick={()=>void stop(run.id)}>停止任务</button>}</article>; })}
+      {messages.map(message => { const run=runs.find(r=>r.id===message.run);return <article key={message.id} className={`pet-chat-message ${message.sender==='user'?'from-user':''}`}><small>{message.sender==='user'?'你':state?.agents.find(a=>a.id===message.sender)?.name || 'tebb'}</small>{message.sender!=='user' && run && <ExecutionTree run={run} runs={runs} agents={state?.agents||[]}/>}{run?.state==='needs_input'&&message.sender!=='user'&&<ClarificationCard key={run.id+':'+run.clarification_version} run={run} busy={busy} onAction={clarify} onText={()=>{setResumeRun(run.id);input.current?.focus();}}/>}{(message.sender==='user'||run?.state!=='needs_input')&&<StreamText text={executionMessage(message,runs)} active={!!run && runActive(run) && !!message.text} />}{message.sender!=='user' && run && (runActive(run)||run.state==='needs_input') && <button className="pet-chat-stop" onClick={()=>void stop(run.id)}>停止任务</button>}</article>; })}
       {progress?.enabled && progress.task && <details className="pet-chat-task" open><summary>其他通道 · {progress.task.text}</summary><ol>{progress.task.events?.map((event,index)=><li key={index}><span className="tebb-stream-new">{event}</span></li>)}</ol><StreamText text={progress.task.answer || progress.task.status} active={['running','queued','cancelling'].includes(progress.task.state)} /></details>}
     </div>
     {(error || pollError) && <p className="pet-chat-error" role="alert">{error || pollError}</p>}

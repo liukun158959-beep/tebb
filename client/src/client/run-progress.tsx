@@ -30,7 +30,7 @@ export function ExecutionTree({run,runs,agents}:{run:DemoRun;runs:DemoRun[];agen
   const elapsed=run.chain?.elapsed_ms??(active&&run.created?Math.max(0,now-run.created*1000):null);
   const children=run.chain?.children.map(id=>runs.find(child=>child.id===id)).filter((row):row is DemoRun=>!!row)||runs.filter(child=>child.parent===run.id);
   return <details className="tebb-run-progress"><summary>执行过程 · {run.chain?.calls??run.calls??0} 次模型调用{run.chain?` · ${run.chain.tool_calls} 次工具`:''}{elapsed!=null?` · ${Math.round(elapsed/1000)}秒（含等待）`:''}</summary>
-    {!!run.phases?.length&&<ol>{run.phases.map((phase,i)=><li key={i}>{({route:'核对目标',plan:'职责分工',task:'执行／汇总'} as Record<string,string>)[phase.kind]||phase.kind} · {phase.calls} 次调用 · {Math.round((phase.ended-phase.started)*1000)}ms</li>)}</ol>}
+    {!!run.phases?.length&&<ol>{run.phases.map((phase,i)=><li key={i}>{({route:'核对目标',plan:'职责分工',clarify_options:'补全选项',task:'执行／汇总'} as Record<string,string>)[phase.kind]||phase.kind} · {phase.calls} 次调用 · {Math.round((phase.ended-phase.started)*1000)}ms</li>)}</ol>}
     <RunProgress run={run}/>{children.map(child=><section key={child.id}><strong>{agents.find(a=>a.id===child.agent)?.name||child.agent} · {child.title}</strong><p>{({running:'执行中',succeeded:'已完成',cancelled:'已停止'} as Record<string,string>)[child.state]||RUN_LABELS[child.state]} · {child.calls||0} 次调用{child.finished&&child.created?` · ${Math.round(child.finished-child.created)}秒`:''}</p><RunProgress run={child}/>{(child.answer||child.error)&&<pre className="whitespace-pre-wrap">{child.error||child.answer}</pre>}</section>)}
   </details>;
 }

@@ -68,6 +68,30 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
                 if frame['type'] in ('done', 'error'):
                     return frame
 
+    async def test_structured_clarification_roundtrip_is_bound_versioned_and_authenticated(self):
+        from desk_companion.collaboration import Collaboration
+        from tests.test_collaboration import Queue,MODEL
+        from tests.test_clarification import QUESTIONS
+        import uuid
+        patch('desk_companion.model_catalog.require_active',return_value=MODEL).start()
+        patch('desk_companion.model_catalog.require_item',return_value=MODEL).start()
+        c=Collaboration(self.host.work_board.path,managers=dict(work=Queue(),chat=Queue()),start=False);self.host._collaboration=c;self.addCleanup(c.shutdown)
+        result=await self.notebook_rpc('collaboration_action',action=dict(type='send',conversation='dm-tebb',text='明晚20点评审会',mode='auto',request_id='rpc-question-create'))
+        root=result['state']['runs'][-1];c.tick();saved=c.execution_status(root['id'])
+        c.managers['chat'].complete(saved['task'],json.dumps(dict(mode='clarify',text='2026-10-29 20:00，请选择时长',questions=QUESTIONS)));c.tick()
+        page=await self.notebook_rpc('load_collaboration');run=page['state']['runs'][-1]
+        self.assertEqual(run['state'],'needs_input');self.assertEqual(run['clarification_form']['questions'],QUESTIONS)
+        self.assertEqual(page['state']['requests'],[])  # Inbox derives from runs, not a copied mutable list.
+        await self.notebook_rpc('collaboration_action',action=dict(type='select',conversation='dm-writer',request_id='rpc-question-foreign'))
+        action=dict(type='clarification_answer',id=run['id'],conversation=run['conversation'],version=run['clarification_version'],answers={'duration':{'option_id':'hour'}},request_id='rpc-question-answer')
+        await self.notebook_rpc('collaboration_action',action=action);await self.notebook_rpc('collaboration_action',action=action)
+        saved=c.execution_status(run['id']);self.assertEqual(saved['state'],'pending');self.assertEqual(len(saved['updates']),1)
+        page=await self.notebook_rpc('load_collaboration');self.assertEqual(page['state']['selected'],'dm-writer');self.assertEqual(len(page['state']['runs']),1)
+        from websockets.exceptions import ConnectionClosed
+        with self.assertRaises(ConnectionClosed):
+            async with connect(self.url.replace('test-token','bad-token'),proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc',method='collaboration_action',args=dict(action=action))));await ws.recv()
+
     async def test_search_settings_and_probe_are_authenticated_and_skip_host_lock(self):
         import httpx
         from desk_companion import search_service
