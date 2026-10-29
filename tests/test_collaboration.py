@@ -36,6 +36,31 @@ class Queue:
 
 
 class CollaborationTests(unittest.TestCase):
+    def test_route_control_never_flashes_in_chat_when_advancing_to_execution(self):
+        run=self.service.action(dict(type='send',conversation='dm-tebb',text='创建一场明确日程',mode='auto',request_id=uuid.uuid4().hex))['state']['runs'][-1]
+        self.service.tick()
+        run=next(r for r in self.state()['runs'] if r['id']==run['id'])
+        task=next(iter(self.chat.items))
+        control=json.dumps(dict(mode='task',instructions='创建日程',strategy='direct'))
+        self.chat.complete(task,control)
+        self.service.tick()
+        state=self.state()
+        message=next(m for m in state['messages'] if m.get('run')==run['id'] and m['sender']=='tebb')
+        self.assertNotIn('instructions',message['text'])
+        self.assertNotIn('strategy',message['text'])
+
+    def test_public_router_prose_remains_draft_during_worker_handoff(self):
+        run=self.service.action(dict(type='send',conversation='dm-tebb',text='执行明确任务',mode='auto',request_id=uuid.uuid4().hex))['state']['runs'][-1]
+        self.service.tick();task=next(iter(self.chat.items))
+        self.chat.complete(task,json.dumps(dict(mode='task',instructions='执行任务',strategy='direct')))
+        self.chat.items[task]['events'].append(dict(seq=4,kind='token',data='我来核对。'))
+        self.service.tick();self.service.tick()
+        current=next(r for r in self.state()['runs'] if r['id']==run['id'])
+        self.assertEqual(current['answer'],'我来核对。');self.assertTrue(current['answer_pending'])
+        task=next(iter(self.work.items));self.work.complete(task,'已核对的最终正文')
+        self.service.tick()
+        current=next(r for r in self.state()['runs'] if r['id']==run['id'])
+        self.assertEqual(current['answer'],'已核对的最终正文');self.assertNotIn('answer_pending',current)
     def test_partner_memory_updates_only_member_memory_and_preserves_configuration(self):
         before=copy.deepcopy(next(a for a in self.state()['agents'] if a['id']=='research'))
         started=self.service.action(dict(type='send',conversation='dm-research',text='核对资料来源',mode='auto',request_id=uuid.uuid4().hex))['state']['runs'][-1]
@@ -87,8 +112,9 @@ class CollaborationTests(unittest.TestCase):
         task.update(state='succeeded',answer=json.dumps(dict(mode='task',instructions='control only')))
         self.service.tick();state=self.state()
         route=next(r for r in state['runs'] if r['id']==run['id'])
-        self.assertEqual(route['answer'],'');self.assertIsNone(route['parent'])
+        self.assertEqual(route['answer'],'第一段');self.assertTrue(route['answer_pending']);self.assertIsNone(route['parent'])
         self.assertEqual(route['kind'],'task');self.assertEqual(len(state['runs']),1)
+        self.assertNotIn('control only',str(state['messages']))
         self.assertNotIn('已开始处理，任务进度会持续更新。',str(state['messages']))
 
     def test_public_snapshot_delta_updates_orders_deletions_and_redacts_internal_data(self):

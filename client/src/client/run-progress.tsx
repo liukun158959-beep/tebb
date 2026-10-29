@@ -24,6 +24,11 @@ export function executionMessage(message:DemoMessage,runs:DemoRun[]){
   return run?.chain?.answer||message.text;
 }
 
+export function DraftNotice({run}:{run?:DemoRun}) {
+  return run?.answer_pending && runActive({...run,state:run.chain?.state||run.state})
+    ? <small role="status" className="block text-xs text-muted-foreground">上一段草稿 · 正在继续处理</small> : null;
+}
+
 export function ExecutionTree({run,runs,agents}:{run:DemoRun;runs:DemoRun[];agents:{id:string;name:string}[]}){
   const [now,setNow]=useState(Date.now());
   const active=runActive({...run,state:run.chain?.state||run.state});
@@ -41,7 +46,7 @@ export function RunProgress({run}: {run?: DemoRun}) {
   const active = runActive({...run,state}), events = run.events || [];
   const status = state==='needs_input'?'待补充 · 尚未开始执行':active ? progressText(run.status || events.at(-1) || '正在准备…') : run.chain?.error || run.error || `已结束 · ${events.length} 条执行记录`;
   return <details className={`tebb-run-progress ${active ? 'is-running' : ''}`}>
-    <summary>{active && <i className="tebb-stream-cursor" />}<span>{status}</span></summary>
+    <summary>{active && <i className="tebb-stream-cursor" />}<span>{active && run.answer_pending ? '保留上一段草稿 · ' : ''}{status}</span></summary>
     <ol>{events.map((event,index) => <li key={index}>{progressText(event)}</li>)}</ol>
     <ChartBuildProgress builds={run.chart_builds} active={active}/>
   </details>;

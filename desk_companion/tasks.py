@@ -180,13 +180,14 @@ class TaskManager:
                 db.commit()
         return source
 
-    def event(self, task_id, kind, data):
+    def event(self, task_id, kind, data, *, replace_answer=False):
         # 思考仅流到当前窗口，不保存进监控台，不转发到飞书。
         if kind != "think":
             with self.db() as db:
                 db.execute("INSERT INTO events(task,kind,data,ts) VALUES(?,?,?,?)", (task_id, kind, json.dumps(data), time.time()))
                 if kind == "token":
-                    db.execute("UPDATE tasks SET answer=answer||? WHERE id=?", (str(data), task_id))
+                    query = "UPDATE tasks SET answer=? WHERE id=?" if replace_answer else "UPDATE tasks SET answer=answer||? WHERE id=?"
+                    db.execute(query, (str(data), task_id))
                 db.commit()
         callback = self.listeners.get(task_id)
         if callback:
@@ -277,10 +278,10 @@ class TaskManager:
                             outcome["answer"] = str(data)
                             self.update(task_id, answer=outcome["answer"])
                         elif kind == "answer_reset":
-                            if request.get('workflow')=='collaboration' and request.get('requires_charts'):
-                                partial=self.get(task_id,events=False)['answer']
-                                if partial.strip():outcome['chart_partial']=partial
-                            self.update(task_id, answer="")
+                            # Keep the last received draft while tools/revisions wait.
+                            # The first new token atomically replaces it, never
+                            # publishing a blank answer between the two versions.
+                            outcome['replace_pending'] = True
                             self.event(task_id, kind, data)
                         elif kind == "failure":
                             outcome["error"] = data.get("message", "任务失败") if isinstance(data, dict) else str(data)
@@ -307,7 +308,8 @@ class TaskManager:
                                 phase["waiting_note"] = time.monotonic() + 30
                             if kind == "llm_progress":
                                 continue
-                            self.event(task_id, kind, data)
+                            replace = kind == 'token' and bool(data) and outcome.pop('replace_pending', False)
+                            self.event(task_id, kind, data, replace_answer=replace)
                 except Exception:
                     outcome["error"] = "任务通信中断，工具可能已经执行，请查看时间线。"
                 finally:
@@ -348,13 +350,11 @@ class TaskManager:
                 if reason == "timed_out" and "answer" in outcome:
                     self.finish(task_id, "succeeded", "笔记已完成；自动归档达到时限，请核实飞书保存回执。", answer=outcome["answer"])
                 else:
-                    if outcome.get('chart_partial') and not self.get(task_id,events=False)['answer'].strip():self.update(task_id,answer=outcome['chart_partial'])
                     self.finish(task_id, reason, message + "已保留部分答案和工具记录；继续前请确认已执行的操作。")
                     self._save_partial(row, reason)
             elif "answer" in outcome:
                 self.finish(task_id, "succeeded", answer=outcome["answer"])
             else:
-                if outcome.get('chart_partial') and not self.get(task_id,events=False)['answer'].strip():self.update(task_id,answer=outcome['chart_partial'])
                 self.finish(task_id, "timed_out" if outcome.get("timed_out") else "failed", outcome.get("error", "任务进程意外退出，请检查模型配置。"))
                 self._save_partial(row, "failed")
         except Exception:

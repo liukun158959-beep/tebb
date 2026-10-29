@@ -666,6 +666,7 @@ class Collaboration:
 
     def _finish(self, state, run, status, error=""):
         run["state"] = status; run["error"] = error
+        run.pop('answer_pending', None)
         if status not in OPEN:run['finished']=time.time()
         for message in state["messages"]:
             if message.get("run") == run["id"] and message["sender"] == run["agent"]:
@@ -718,7 +719,10 @@ class Collaboration:
                     kind, data = event["kind"], event["data"]
                     if kind == "status": run["events"].append(str(data)); run["status"] = str(data)
                     elif kind == 'token' and run['kind'] == 'route': run['public_answer'] = run.get('public_answer','') + str(data)
-                    elif kind == 'answer_reset': run.pop('public_answer',None)
+                    elif kind == 'answer_reset':
+                        run.pop('public_answer',None)
+                        run['answer_pending'] = True
+                    elif kind == 'token': run.pop('answer_pending', None)
                     elif kind == "llm_start": run["calls"] += 1; run["events"].append("调用模型：" + run["model"])
                     elif kind == "collab_applied": run["applied"] = int(data)
                     elif kind == "usage":
@@ -744,7 +748,10 @@ class Collaboration:
                             run["tool_calls"] = run.get("tool_calls", 0)+1
                         run["events"].append(f"{kind}: {data.get('tool')} {data.get('url') or data.get('query') or ''} {data.get('status', '')} {data.get('provider') or ''} {data.get('error', '')}")
                         run['status'] = ('正在调用：' if kind=='tool_start' else '调用结束：') + str(data.get('tool',''))
-                run["answer"] = run.get('public_answer','') if run['kind'] in {'route','plan'} and task['state'] not in TERMINAL else task["answer"]
+                # Router/planner results are private control JSON even at completion.
+                # Only the validated answer or public streamed prose reaches chat.
+                run["answer"] = (run.get('public_answer',run.get('answer','')) if run['kind'] in {'route','plan'} else
+                                 task["answer"] or run.get('answer',''))
                 if run["state"] != "cancelling": run["state"] = task["state"]
                 for message in state["messages"]:
                     if message.get("run") == run["id"] and message["sender"] == run["agent"]: message["text"] = run["answer"]
@@ -759,12 +766,12 @@ class Collaboration:
                     if phase_calls(run) >= call_budget(run['agent'],run['kind']):
                         self._finish(state, run, "failed", "调用预算已用完，最新补充尚未应用；请参考部分结果新建任务")
                     else:
-                        run.update(state="pending", attempt=run["attempt"]+1, cursor=0, parent_draft=run["answer"])
+                        run.update(state="pending", attempt=run["attempt"]+1, cursor=0, parent_draft=task['answer'])
                         run["events"].append("收到迟到补充，在剩余预算内修订；未交接旧成果")
                     continue
                 if run['kind'] == 'route':
                     try:
-                        decision = parse_route(run['answer'])
+                        decision = parse_route(task['answer'])
                         content = decision.get('instructions') if decision['mode']=='task' else decision.get('text')
                     except (ValueError, TypeError):
                         self._finish(state,run,'failed','未取得有效的回答或任务路由，请重试'); continue
@@ -782,14 +789,14 @@ class Collaboration:
                     # Same root owns readiness, direct work and final delivery.
                     delegate=decision.get('strategy')=='delegate' and bool(run.get('members'))
                     run['requires_charts']=decision.get('requires_charts',False)
-                    advance(run,'plan' if delegate else 'task',status='目标明确，准备职责分工' if delegate else '目标明确，直接执行')
+                    advance(run,'plan' if delegate else 'task',status='目标明确，准备职责分工' if delegate else '目标明确，直接执行',preserve_answer=True)
                     continue
                 if run['kind'] == 'compress':
                     conversation = next(c for c in state['conversations'] if c['id']==run['conversation'])
                     conversation['summary'] = run['answer']; conversation['summary_ids'] = run.get('compress_ids', [])
                 if run["kind"] == "plan":
                     try:
-                        plans = parse_plan(run["answer"], {m["id"] for m in run["members"] if m["id"]!=run["agent"]})
+                        plans = parse_plan(task["answer"], {m["id"] for m in run["members"] if m["id"]!=run["agent"]})
                     except (ValueError, TypeError):
                         self._finish(state, run, "failed", "协调者未返回有效委派计划，未执行任何子任务")
                         continue
@@ -814,7 +821,7 @@ class Collaboration:
                         if stage=='deliver': child['required_sources']=list(dict.fromkeys(child['required_sources']+[s for previous in children for s in previous.get('required_sources',[])]))
                         child["workspace"] = run["workspace"]; child["title"] = plan["title"]; child["selection"] = run.get("selection", {}); children.append(child)
                     run['events'].append('委派已校验：'+ '；'.join(next(a['name'] for a in state['agents'] if a['id']==p['agent_id'])+'：'+p['title'] for p in plans))
-                    advance(run,'task',state='waiting',status='等待职责伙伴成果，再由负责人汇总')
+                    advance(run,'task',state='waiting',status='等待职责伙伴成果，再由负责人汇总',preserve_answer=True)
                     run.update(dependencies=[c['id'] for c in children],stage='deliver',objective=run['input'])
                     continue
                 self._finish(state, run, "succeeded")

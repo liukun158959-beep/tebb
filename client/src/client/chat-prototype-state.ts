@@ -8,7 +8,7 @@ export type ChartDraftView={draft_id:string;title:string;stage:string;attempt:nu
 export type DemoRun = { id: string; conversation: string; agent: string; title: string; state: "running" | "waiting" | "succeeded" | "cancelled" | "pending" | "queued" | "cancelling" | "failed" | "timed_out" | "interrupted" | "needs_input";
   clarification_version?:string;clarification_form?:ClarificationForm;options_generation?:{state:string;error?:string;calls?:number};require_execution?:boolean;clarification?:string;created?:number;finished?:number;phases?:{kind:string;calls:number;started:number;ended:number}[];chain?:{state:DemoRun['state'];calls:number;tool_calls:number;elapsed_ms:number|null;error:string;answer:string;children:string[]};
   step: number; dependency?: string; dependencies?: string[]; delivery_state?: "running" | "succeeded" | "failed"; delivery_check?: { ok: boolean; missing?: string[]; missing_sources?: string[] }; updates: string[]; applied: number; events: string[]; artifact?: string;
-  kind?: string; parent?: string; answer?: string; error?: string; status?: string; calls?: number; model?: string; input_tokens?: number; output_tokens?: number;
+  kind?: string; parent?: string; answer?: string; answer_pending?: boolean; error?: string; status?: string; calls?: number; model?: string; input_tokens?: number; output_tokens?: number;
   chart_builds?:Record<string,ChartDraftView>;
   changes?: { path: string; diff: string }[]; checks?: { command: string; state: string; exit_code: number | null; output: string; stale?: boolean; diff_limited?: boolean }[];
   citation_check?: { ok: boolean; pages_read: number; matched: { url: string; level: string; truncated: boolean;read_ranges?:number[][];characters?:number }[]; unverified: string[] } };

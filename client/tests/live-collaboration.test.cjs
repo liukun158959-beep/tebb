@@ -29,6 +29,19 @@ function env() {
 }
 const strings = node => typeof node === 'string' ? node : (node.children || []).map(strings).join('');
 
+test('pending replacement is labelled as a retained draft in both chat surfaces', async () => {
+  env();
+  const {RunProgress,DraftNotice}=load('run-progress');
+  const run={id:'r',state:'running',answer_pending:true,events:[],status:'正在读取资料'};
+  let view;await act(async()=>{view=create(React.createElement(RunProgress,{run}));});
+  assert(strings(view.toJSON()).includes('保留上一段草稿'));
+  await act(async()=>view.update(React.createElement(RunProgress,{run:{...run,answer_pending:false}})));
+  assert(!strings(view.toJSON()).includes('保留上一段草稿'));
+  await act(async()=>view.update(React.createElement(DraftNotice,{run})));
+  assert.equal(view.root.findByProps({role:'status'}).children.join(''),'上一段草稿 · 正在继续处理');
+  await act(async()=>view.unmount());
+});
+
 test('browser capability stays scoped, is removed from the address, and malformed grants are rejected', () => {
   env(); const mocks = { './api': {}, './chat-prototype': {}, './startup': {} };
   const { browserAccess } = load('live-collaboration', mocks);

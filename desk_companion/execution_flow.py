@@ -28,13 +28,16 @@ def phase_calls(run):
     return run.get('calls', 0) - run.get('phase_start_calls', 0)
 
 
-def advance(run, kind, *, state='pending', status=''):
+def advance(run, kind, *, state='pending', status='', preserve_answer=False):
     now = time.time()
+    draft=run.get('answer','') if preserve_answer else ''
     run.setdefault('phases', []).append(dict(kind=run['kind'], calls=phase_calls(run),
         started=run.get('phase_started', run.get('created', now)), ended=now))
     run.update(kind=kind, state=state, phase_start_calls=run.get('calls', 0), phase_started=now,
                attempt=run.get('attempt', 0) + 1, cursor=0, task='', answer='', error='', status=status)
     run.pop('public_answer', None)
+    run.pop('answer_pending', None)
+    if draft:run.update(answer=draft,answer_pending=True)
     run.pop('artifact', None)
     run['events'].append(status or '进入下一阶段')
 

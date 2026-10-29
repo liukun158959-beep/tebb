@@ -481,3 +481,14 @@ pnpm --dir client build
 本机材料在 `output/calendar-stability-2026-10-28/`：`repeat-before.log/repeat-root-cause.log` 为失败复现，`repeat-final.log/layout-final.log` 为修复后认证组件验收，`frontend-final.log/types-final.log/build-final.log` 为前端检查；`embedded-light.png/embedded-dark.png/embedded-narrow.png` 展示当前布局。页面滚动应由工作区拥有，`.fc-scroller` 不产生独立纵向溢出；窄屏仅保留七列横向查看。浏览器远端注入 TimeCalendar，正式同步仍由真实 CalendarAdapter 执行；本轮未写真实飞书或构建发布包。
 
 #142 验证：前端完整 172 项通过，类型检查及生产构建通过（既有分包体积提示保留）。认证 WebSocket 浏览器验证同一新建同步记录连续三次改期、慢回执、页面滚动中的预览与落点一致，以及无内部纵向滚动/网格线、凌晨锚点、760/390/320px 周/单日。后端与原生壳代码未改，本轮不重复声明后端全量或发布包验收。
+## 回复短暂出现后消失（#177）
+
+路由/规划的最终结果是内部控制数据，不是聊天正文。此前阶段交接会把控制 JSON 短暂写入消息，下一轮又清空；工具调用和修订的 answer_reset 也会立即删除已经收到的片段，实际记录中后续正文需等待约4–33秒。
+
+现在只将公开流式文字或校验后的回答写入消息，控制 JSON 不经过聊天投影。重写时保留上一段草稿并显示标记，首个新 token 在同一存储事务里替换旧段，避免空白或把两版拼接。跨阶段交接也保留公开草稿；失败/取消保留片段与真实错误，不把草稿报成成功。结果记录与原有取消、预算、工具回执继续保留。
+
+```powershell
+python -m unittest tests.test_tasks tests.test_execution_flow tests.test_collaboration -v
+```
+
+真实浏览器＋认证 RPC 的隔离回归以每20ms采样验证路由公开说明、工具等待和最终回答持续可见，且不出现控制 JSON；主窗和浮动聊天复用同一任务进度与草稿标记。

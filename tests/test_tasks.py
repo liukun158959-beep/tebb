@@ -44,6 +44,17 @@ elif r['text']=='command_wait':
 elif r['text']=='video_failure':
  emit('failure',dict(type='APIConnectionError',message='片段 3/8 连接中断，已完成2/8',phase='片段3',completed=2,total=8))
  sys.exit(0)
+elif r['text'] in ('replace_reply','replace_failure'):
+ emit('answer_reset',True)
+ time.sleep(.35)
+ if r['text']=='replace_failure':
+  emit('failure',dict(type='OfflineError',message='新版本未返回'))
+  sys.exit(0)
+ emit('token','新版')
+ time.sleep(.25)
+ emit('token','正文')
+ emit('result','新版正文')
+ sys.exit(0)
 elif r['text'] in ('chart_failure','chart_timeout'):
  emit('answer_reset',True)
  emit('tool_start',dict(tool='build_chart'))
@@ -55,6 +66,21 @@ emit('result',r['text'])
 
 
 class TaskTests(unittest.TestCase):
+    def test_replacement_keeps_visible_text_until_atomic_first_new_token(self):
+        task_id=self.manager.submit('replace_reply','replacement','collaboration')
+        deadline=time.monotonic()+5
+        while not any(e['kind']=='answer_reset' for e in self.manager.get(task_id)['events']):
+            self.assertLess(time.monotonic(),deadline);time.sleep(.01)
+        self.assertEqual(self.manager.get(task_id)['answer'],'保留片段')
+        observed=[]
+        while self.manager.get(task_id)['state'] not in {'succeeded','failed','timed_out'}:
+            observed.append(self.manager.get(task_id)['answer']);time.sleep(.005)
+        self.assertTrue(observed)
+        self.assertTrue(all(value in {'保留片段','新版','新版正文'} for value in observed),set(observed))
+        self.assertEqual(self.manager.wait(task_id)['answer'],'新版正文')
+        failed=self.manager.wait(self.manager.submit('replace_failure','replacement','collaboration'))
+        self.assertEqual(failed['state'],'failed')
+        self.assertEqual(failed['answer'],'保留片段')
     def test_chart_failure_or_timeout_keeps_pre_correction_text_without_success(self):
         for text,state in [('chart_failure','failed'),('chart_timeout','timed_out')]:
             task=self.manager.wait(self.manager.submit(text,text,channel='collaboration',workflow='collaboration',requires_charts=True,task_limits=dict(call_timeout=.4,task_timeout=.8)))

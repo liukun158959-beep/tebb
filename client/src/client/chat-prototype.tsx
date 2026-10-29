@@ -13,7 +13,7 @@ import "./chat-prototype.css";
 import { ComposerPicker } from './composer-popover';
 import { StreamText } from "./stream-text";
 import { useAutoGrowInput } from './auto-grow-input';
-import { ExecutionTree, executionMessage, visibleChatMessage, hasCalendarContext } from './run-progress';
+import { DraftNotice, ExecutionTree, executionMessage, visibleChatMessage, hasCalendarContext } from './run-progress';
 import { Markdown } from "./Markdown";
 import { ProjectMigration } from './project-migration';
 import { CompanionAvatar as Avatar, RailButton, AVATAR_NAMES, AppIcon, readDeveloperMode, saveDeveloperMode } from "./companion-ui";
@@ -322,6 +322,7 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
             {item.sender === "user" ? <span className="cp-user-avatar">你</span> : <Avatar agent={member(item.sender)} />}
             <div className="cp-message-content"><div className="cp-message-author"><strong>{item.sender === "user" ? "你" : member(item.sender)?.name}</strong>{item.kind === "result" && <span className="cp-result-tag">成果</span>}</div>
               {item.sender !== 'user' && <>{runs.find(r=>r.id===item.run)?.state==='needs_input'&&<ClarificationCard key={item.run+':'+runs.find(r=>r.id===item.run)?.clarification_version} run={runs.find(r=>r.id===item.run)!} busy={!!live?.busy} onAction={action=>sendAction(action)} onText={()=>void supplement(runs.find(r=>r.id===item.run)!)} />}{runs.find(r=>r.id===item.run)&&<ExecutionTree run={runs.find(r=>r.id===item.run)!} runs={runs} agents={state.agents}/>}{onCalendar&&hasCalendarContext(runs.find(r=>r.id===item.run))&&<button type="button" className="cp-message-reference" onClick={onCalendar}>查看相关日程 →</button>}</>}
+              {item.sender!=='user' && <DraftNotice run={runs.find(r=>r.id===item.run)}/>}
               {(item.sender==='user'||runs.find(r=>r.id===item.run)?.state!=='needs_input') && (item.text || runs.find(r=>r.id===item.run)?.chain?.answer || !real) && <div className="cp-markdown"><StreamText text={executionMessage(item,runs)} active={!!item.run && runs.some(r=>r.id===item.run && runActive(r))} externalLinks={standalone} /></div>}
               {item.sender !== 'user' && item.run && <div className="cp-message-footer">{(developer || runs.find(run=>run.id===item.run)?.state==='needs_input' || !["chat","route","compress"].includes(runs.find(run => run.id===item.run)?.kind || "")) && <button className="cp-message-reference" onClick={() => { setFocusedRun(item.run!); setInspector(true); setTab("tasks"); }}>↗ 关联任务</button>}
               {real && <small className="cp-message-usage" title="本条消息的执行模型与输入／输出 token 用量">{runs.find(r => r.id===item.run)?.model} · ↑ {runs.find(r => r.id===item.run)?.input_tokens || 0} / ↓ {runs.find(r => r.id===item.run)?.output_tokens || 0}</small>}
