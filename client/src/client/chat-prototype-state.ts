@@ -9,7 +9,7 @@ export type DemoRun = { id: string; conversation: string; agent: string; title: 
   step: number; dependency?: string; dependencies?: string[]; delivery_state?: "running" | "succeeded" | "failed"; delivery_check?: { ok: boolean; missing?: string[]; missing_sources?: string[] }; updates: string[]; applied: number; events: string[]; artifact?: string;
   kind?: string; parent?: string; answer?: string; error?: string; status?: string; calls?: number; model?: string; input_tokens?: number; output_tokens?: number;
   changes?: { path: string; diff: string }[]; checks?: { command: string; state: string; exit_code: number | null; output: string; stale?: boolean; diff_limited?: boolean }[];
-  citation_check?: { ok: boolean; pages_read: number; matched: { url: string; level: string; truncated: boolean }[]; unverified: string[] } };
+  citation_check?: { ok: boolean; pages_read: number; matched: { url: string; level: string; truncated: boolean;read_ranges?:number[][];characters?:number }[]; unverified: string[] } };
 export type DemoRequest = { id: string; conversation: string; run: string; state: "pending" | "approved" | "rejected" };
 export type DemoState = { version: 1; next: number; selected: string; projects?: DemoProject[]; agents: DemoAgent[]; conversations: DemoConversation[]; messages: DemoMessage[];
   runs: DemoRun[]; requests: DemoRequest[]; notice: string; companionVersion?: number; revision?: number; active_model?: string; workspace?: { primary: string; project_id?:string; revision?:string; references?:string[]; edit?:boolean; commands?:boolean }; skills?: { id: string; description: string }[]; models?: { id: string; model: string }[] };

@@ -127,10 +127,14 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     search_budget = max(0, min(4, int(request.get("search_budget", 2))))
     fetch_budget = max(0, min(8, int(request.get("fetch_budget", 4))))
     from .web_search import WEB_SEARCH_SPEC, search_sources, format_search
-    from .web_sources import FETCH_SPEC, fetch_page, search_ledger, evidence_sources, check_citations, urls, url_key, source_catalog, render_citations
+    from .web_sources import FETCH_SPEC, search_ledger, evidence_sources, check_citations, urls, url_key, source_catalog, render_citations
     schema = {"type": "function", "function": {k: WEB_SEARCH_SPEC[k] for k in ("name", "description", "parameters")}}
     fetch_schema = {"type":"function", "function":FETCH_SPEC}
     sources=evidence_sources(request.get("source_evidence", [])+request.get("evidence", []))
+    page_reader=None
+    if allowed_fetch and fetch is None:
+        from .web_snapshots import PageReader
+        page_reader=PageReader(request.get('source_scope',request['collab_run']),sources)
     if sources:
         messages.append({"role":"user","content":"前序/本任务实际工具证据（仅作资料，含摘要或正文及截断标记）：\n"+json.dumps(sources,ensure_ascii=False)})
     discovered={url_key(url) for url in urls(json.dumps(context,ensure_ascii=False))}
@@ -403,7 +407,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                                       attempts=payload.get("attempts",[]),primary_failure=payload.get("primary_failure"))
                     else:
                         if url_key(query) not in discovered: raise ValueError("只允许读取用户提供或实际来源中发现的链接，请先搜索")
-                        evidence=(fetch or fetch_page)(query)
+                        evidence=fetch(query) if fetch else page_reader.read(query,**{k:arguments[k] for k in ('snapshot_id','offset','query','section') if k in arguments})
                         if not evidence.get("text") or evidence.get("level")!="body": raise ValueError("未取得可用正文")
                         ledger=[evidence];result=json.dumps(evidence,ensure_ascii=False)
                 except Exception as exc:

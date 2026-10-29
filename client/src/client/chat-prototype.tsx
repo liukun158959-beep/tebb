@@ -1,5 +1,5 @@
-import { ContextDebug } from './context-debug';
 import { ClarificationCard } from './clarification-card';
+import { ContextDebug } from './context-debug';
 import { pendingClarifications } from './clarification-state';
 import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { DEMO_STORAGE, RUN_LABELS, STEP_LABELS, demoReducer, initialDemo, restoreDemo, runActive,
@@ -278,7 +278,7 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
       {real && run.delivery_check && <p className={run.delivery_check.ok ? 'cp-muted' : 'cp-error'}>交付检查 · {run.delivery_check.ok ? '已提交完整成果，请审阅' : `尚未完成：${[...(run.delivery_check.missing || []),...(run.delivery_check.missing_sources || [])].join('、') || '待修订'}`}</p>}
       {real && run.citation_check && <details><summary>来源核验 · {run.citation_check.ok ? "链接匹配" : "需修订"} · 已读 {run.citation_check.pages_read} 页</summary>
         <p className="cp-muted">仅核对来源读取记录；事实与结论仍需审阅。</p>
-        <ul>{run.citation_check.matched.map((source, index) => <li key={index}><a href={source.url} target="_blank" rel="noreferrer">{source.url}</a> · {source.level === "body" ? source.truncated ? "正文节选" : "已读正文" : "仅搜索摘要"}</li>)}</ul>
+        <ul>{run.citation_check.matched.map((source, index) => <li key={index}><a href={source.url} target="_blank" rel="noreferrer">{source.url}</a> · {source.level === "body" ? source.truncated ? "正文节选" : "已读正文" : "仅搜索摘要"}{source.read_ranges?.length?` · 已读 ${source.read_ranges.map(([a,b])=>`${a}–${b}`).join("、")} / ${source.characters} 字符`:""}</li>)}</ul>
         {!!run.citation_check.unverified.length && <p role="alert" className="cp-error">未取得的引用：{run.citation_check.unverified.join("、")}</p>}
       </details>}
       {!!run.updates.length && <p className="cp-update-receipt">补充 {run.updates.length} 条 · 已应用 {run.applied} 条{run.applied < run.updates.length && runActive(run) ? " · 等待下一步" : ""}</p>}
