@@ -57,8 +57,8 @@ def style_for(spec):
     return 'decision' if branches and spec.get('edge_labels') else 'parallel' if branches else 'steps'
 
 
-def render(ax,spec):
-    from matplotlib.patches import FancyBboxPatch,Polygon,FancyArrowPatch
+def layout(spec):
+    """Theme-independent positions, shared by screen and static renderers."""
     nodes=spec['nodes'];edges=spec.get('edges',[]);style=style_for(spec);n=len(nodes)
     try:
         predecessors=graph(spec);depth={}
@@ -78,17 +78,26 @@ def render(ax,spec):
     if style=='cycle':positions={i:(2.7*math.sin(2*math.pi*i/n),1.9*math.cos(2*math.pi*i/n)) for i in range(n)}
     elif style=='swimlane':
         lanes=list(dict.fromkeys(spec['node_lanes']));positions={i:(lanes.index(spec['node_lanes'][i])*2.7,-index*gap) for index,i in enumerate(sorted(depth,key=lambda i:(depth[i],i)))}
-        for j,lane in enumerate(lanes):
-            ax.text(j*2.7,1.05,lane,ha='center',va='center',fontsize=12,color='#627568')
-            ax.axvline(j*2.7-1.3,color='#e1e8e0',lw=.8,zorder=0)
     elif style=='steps' and n<=4:positions={i:(depth[i]*2.6,(len(rows[depth[i]])-1)/2-rows[depth[i]].index(i)) for i in range(n)}
     else:positions={i:((rows[d].index(i)-(len(rows[d])-1)/2)*2.8,-d*gap) for i,d in depth.items()}
-    kinds=spec.get('node_kinds',[]);patches={}
+    kinds=spec.get('node_kinds',[]);items=[]
     for i,label in enumerate(nodes):
         x,y=positions[i];kind=kinds[i] if kinds else 'decision' if style=='decision' and sum(a==i for a,b in edges)>1 else 'terminal' if not any(a==i for a,b in edges) or not any(b==i for a,b in edges) else 'process'
         wrapped=textwrap.fill(label,10);height=max(.62,.23*(wrapped.count('\n')+1)+.2);width=2.05
-        if kind=='decision':
-            height=max(1.0,height*1.5);patch=Polygon([(x-width*.6,y),(x,y+height*.65),(x+width*.6,y),(x,y-height*.65)],closed=True)
+        if kind=='decision':height=max(1.0,height*1.5)
+        items.append(dict(index=i,x=x,y=y,width=width,height=height,kind=kind,lines=wrapped.splitlines()))
+    return dict(style=style,nodes=items,depth=[depth[i] for i in range(n)],lanes=list(dict.fromkeys(spec.get('node_lanes',[]))) if style=='swimlane' else [])
+
+
+def render(ax,spec):
+    from matplotlib.patches import FancyBboxPatch,Polygon,FancyArrowPatch
+    result=layout(spec);style=result['style'];positions={r['index']:(r['x'],r['y']) for r in result['nodes']};depth=dict(enumerate(result['depth']));edges=spec.get('edges',[]);patches={}
+    for j,lane in enumerate(result['lanes']):
+        ax.text(j*2.7,1.05,lane,ha='center',va='center',fontsize=12,color='#627568')
+        ax.axvline(j*2.7-1.3,color='#e1e8e0',lw=.8,zorder=0)
+    for row in result['nodes']:
+        i,x,y,width,height,kind=(row[k] for k in ('index','x','y','width','height','kind'));wrapped='\n'.join(row['lines'])
+        if kind=='decision':patch=Polygon([(x-width*.6,y),(x,y+height*.65),(x+width*.6,y),(x,y-height*.65)],closed=True)
         else:patch=FancyBboxPatch((x-width/2,y-height/2),width,height,boxstyle='round,pad=.08,rounding_size='+('.3' if kind=='terminal' else '.1'))
         patch.set(facecolor='#ffffff' if kind=='terminal' else '#eaf0e9',edgecolor='#d4dfd3',linewidth=.9,zorder=3);ax.add_patch(patch);patches[i]=patch
         ax.text(x,y,wrapped,ha='center',va='center',fontsize=12,color='#293a2f',zorder=4)

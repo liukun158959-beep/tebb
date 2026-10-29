@@ -18,6 +18,15 @@ FLOW=dict(type='flow',title='证据到报告',source_ids=[],nodes=['读取原文
 
 
 class ChartTests(unittest.TestCase):
+    def test_screen_flow_layout_preserves_old_assets_and_uses_shared_positions(self):
+        from desk_companion.report_flow import layout
+        result=charts.create(FLOW,[],uuid.uuid4().hex)
+        path=charts.folder()/(result['id']+'.json');before=path.read_bytes()
+        public=charts.public(result['id'])
+        self.assertEqual(public['flow_layout'],layout(FLOW))
+        self.assertEqual([n['index'] for n in public['flow_layout']['nodes']],[0,1,2])
+        self.assertEqual(path.read_bytes(),before)
+
     def test_flow_keeps_actual_snippet_level_without_upgrading_numeric_evidence(self):
         snippet={**SOURCE,'kind':'search','level':'snippet','truncated':True}
         spec={**FLOW,'source_ids':[SOURCE_ID]}

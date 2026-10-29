@@ -172,7 +172,11 @@ def load(ident):
 
 def public(ident):
     value,raw=load(ident)
-    return dict(ok=True,**value,image='data:image/png;base64,'+base64.b64encode(raw).decode())
+    extra={}
+    if value['spec']['type']=='flow':
+        from .report_flow import layout
+        extra['flow_layout']=layout(value['spec'])
+    return dict(ok=True,**value,**extra,image='data:image/png;base64,'+base64.b64encode(raw).decode())
 
 
 def referenced(text):return [valid_id(m[1].strip()) for m in FENCE.finditer(text)]
