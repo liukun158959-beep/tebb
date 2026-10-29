@@ -1,5 +1,7 @@
 # Windows 发布构建
 
+自动检查与手动候选构建见 [CI/CD](CI_CD.md)。`release-candidate.yml` 默认只产生 Actions 候选资产；正式发布继续需要独立指令，不覆盖历史版本。
+
 当前产物是独立 x64 便携 ZIP。发布前需执行 Python、前端、Rust 和隔离运行时验证；发布脚本拒绝个人配置与日志。不要把整个开发工作目录压缩上传。
 
 主品牌统一为 `tebb`。下一次发布包名为 `tebb-<version>-windows-x64.zip`，入口为 `tebb.exe`；先按新版本维护 manifest、版本号、更新说明与主题图，避免覆盖已有 v0.2.3 发布。新 manifest 增加 `product_name: "tebb"`，供飞书卡片使用；没有该字段的历史 manifest 继续使用旧品牌。历史 Release、旧 ZIP 文件名和已发送卡片保持原记录。

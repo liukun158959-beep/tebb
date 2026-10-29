@@ -1,5 +1,7 @@
 # 开发 tebb
 
+自动回归与候选发布见 [CI/CD](CI_CD.md)，模型耗时样本与优化见 [2026-10-30 链路分析](MODEL_LATENCY_2026-10-30.md)，用户目录及系统飞书登录边界见 [飞书连接](FEISHU_CONNECTION.md)。
+
 产品介绍见 [README](../README.md)，使用和配置见 [首次使用](GETTING_STARTED.md)。本页面向需要运行源码、理解项目结构或提交改动的开发者。
 
 ## 从源码运行
