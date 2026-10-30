@@ -49,6 +49,20 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         self.service.close()
         await self.service.wait_closed()
 
+    async def test_onboarding_progress_uses_authenticated_rpc_and_actual_model_state(self):
+        from desk_companion import onboarding
+        with patch.object(onboarding, 'public_catalog', return_value={'items': []}):
+            saved = await self.notebook_rpc('save_onboarding_progress', step='terminal')
+            self.assertTrue(saved['ok'])
+            status = await self.notebook_rpc('load_onboarding')
+            self.assertEqual(status['step'], 'terminal')
+            self.assertTrue(status['show'])
+            self.assertFalse((await self.notebook_rpc('complete_onboarding'))['ok'])
+        with patch.object(onboarding, 'public_catalog', return_value={'items': [{'id': 'fake-model'}]}):
+            self.assertTrue((await self.notebook_rpc('complete_onboarding'))['ok'])
+            self.assertFalse((await self.notebook_rpc('load_onboarding'))['show'])
+        self.assertNotIn('api_key', (Path(self.temp.name) / 'onboarding.json').read_text('utf-8'))
+
     async def notebook_rpc(self, method, _timeout=5, **args):
         async with connect(self.url, proxy=None) as ws:
             await ws.send(json.dumps(dict(type='rpc', id=method, method=method, args=args)))

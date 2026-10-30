@@ -5,12 +5,26 @@ import shutil
 
 from .paths import asset_root, data_root
 from .model_catalog import public_catalog
+from .resource_lock import ResourceLock
+from .video import atomic_write
+
+LOCK = ResourceLock('onboarding')
+STEPS = ('model', 'feishu', 'terminal')
+
+
+def _saved():
+    path = data_root() / 'onboarding.json'
+    try:
+        value = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+        return value if isinstance(value, dict) else {}
+    except (json.JSONDecodeError, UnicodeError):
+        return {}  # A damaged hint must not prevent the real settings from opening.
 
 
 def status() -> dict:
     root = data_root()
-    path = root / "onboarding.json"
-    saved = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    with LOCK:
+        saved = _saved()
     models = public_catalog()
     return {
         "ok": True,
@@ -18,6 +32,7 @@ def status() -> dict:
         "data_dir": str(root),
         "assets_dir": str(asset_root()),
         "configured": bool(models["items"]),
+        "step": saved.get('step') if saved.get('step') in STEPS else 'model',
         "checks": {
             "github": shutil.which("gh") is not None,
             "feishu": shutil.which("lark-cli") is not None,
@@ -30,7 +45,16 @@ def status() -> dict:
 
 
 def complete() -> dict:
-    (data_root() / "onboarding.json").write_text(
-        json.dumps({"version": 1, "completed": True}) + "\n", encoding="utf-8"
-    )
+    if not public_catalog()['items']:
+        return {'ok': False, 'error': '请先在设置中保存模型，再完成引导。'}
+    with LOCK:
+        atomic_write(data_root() / 'onboarding.json', {'version': 2, 'completed': True, 'step': 'model'})
     return {"ok": True}
+
+
+def save_progress(step) -> dict:
+    if type(step) is not str or step not in STEPS:
+        return {'ok': False, 'error': '未知引导步骤。'}
+    with LOCK:
+        atomic_write(data_root() / 'onboarding.json', {'version': 2, 'completed': False, 'step': step})
+    return {'ok': True}

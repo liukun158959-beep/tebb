@@ -124,7 +124,7 @@ export function TerminalPane(props: { info: BackendInfo | null; session: string;
   }
   const ownRunning = jobs.some(j => j.session === session && runningJob(j));
   return <section className="terminal-pane" aria-label="沙箱终端">
-    <details className="terminal-policy"><summary><span className={`terminal-dot ${status?.ready ? "ready" : ""}`} />{status?.ready ? "沙箱已连接" : "沙箱未就绪"} · Bash · 网络关闭</summary>
+    <details className="terminal-policy"><summary data-guide-anchor="terminal-check"><span className={`terminal-dot ${status?.ready ? "ready" : ""}`} />{status?.ready ? "沙箱已连接" : "沙箱未就绪"} · Bash · 网络关闭</summary>
       <p>命令仅持久读写本会话 /workspace，Windows 目录、个人环境变量不可见。每条命令使用新环境，文件保留；关闭侧栏不停止命令。</p>
       <label>WSL 发行版<input aria-label="WSL 发行版" value={distro} onChange={e => setDistro(e.target.value)} /></label><button className="desk-menu-item" disabled={!!busy} onClick={() => void probe(true)}>连接沙箱</button><button className="desk-menu-item" disabled={!!busy} onClick={() => void probe()}>重新检查</button>{status?.error && <p role="alert">{status.error}</p>}
     </details>

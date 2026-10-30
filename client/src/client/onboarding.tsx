@@ -1,105 +1,84 @@
-import { useRef, useState } from "react";
-import { rpc, type BackendInfo } from "./api";
-import type { ModelList } from "./settings";
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { rpc, type BackendInfo } from './api';
+import { guideAnchor, useGuideAnchor } from './onboarding-anchor';
+import { GUIDE_PHASES, guidePlacement, initialGuidePhase, modelGuideTarget, type GuidePhase, type ModelSetupState } from './onboarding-state';
+import './onboarding.css';
 
 export type SetupStatus = {
-  ok: boolean; show: boolean; configured: boolean; data_dir: string; assets_dir: string;
+  ok: boolean; show: boolean; configured: boolean; data_dir: string; assets_dir: string; step?: string;
   checks: { github: boolean; feishu: boolean; knowledge: boolean; pet: boolean; live2d?: boolean };
 };
+export type GuideDestination = 'settings' | 'feishu' | 'terminal' | 'collaboration';
 
 export function SetupGuide(props: {
-  info: BackendInfo; status: SetupStatus; models: ModelList;
-  onModels: (models: ModelList) => void; onClose: (completed?: boolean) => void;
-  onNavigate: (pane: "settings" | "board" | "feishu", sub?: string) => void;
+  info: BackendInfo; status: SetupStatus; modelState: ModelSetupState | null;
+  configured: boolean; feishuConnected: boolean; modelBusy: boolean;
+  onClose: (completed?: boolean) => void; onNavigate: (pane: GuideDestination) => void;
 }) {
-  const active = props.models.items.find((item) => item.id === props.models.active);
-  const [step, setStep] = useState(0);
-  const [url, setUrl] = useState(active?.base_url || "");
-  const [model, setModel] = useState(active?.model || "");
-  const [key, setKey] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [saved, setSaved] = useState(!!active);
-  const [tested, setTested] = useState(false);
-  const closeRef = useRef<HTMLButtonElement>(null);
-  const button = "desk-btn desk-btn-lg";
-  async function submit(test: boolean) {
-    setBusy(true); setError(""); setNotice("");
+  const [phase, setPhase] = useState<GuidePhase>(() => initialGuidePhase(props.configured, props.status.step));
+  const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const latest = useRef(props); latest.current = props;
+  const panel = useRef<HTMLElement>(null);
+  const [panelHeight, setPanelHeight] = useState(260);
+  const paused = useRef(false);
+  const target = phase === 'model' ? modelGuideTarget(props.modelState) : phase === 'feishu'
+    ? { anchor: 'feishu-connect', title: props.feishuConnected ? '飞书已连接' : '飞书可以稍后连接', text: props.feishuConnected ? '当前 tebb 已连接飞书；具体权限以页面实际结果为准。' : '想读取日程、待办或文档时，在这里明确连接。系统已有登录不等于 tebb 已连接；现在也可以跳过。' }
+    : { anchor: 'terminal-check', title: '终端按需准备', text: '这里显示沙箱的真实检查结果。环境未就绪时先按提示准备；引导不会安装组件或执行命令，可以稍后再来。' };
+  const rect = useGuideAnchor(target.anchor);
+  const position = guidePlacement(rect, viewport.width, viewport.height, panelHeight);
+  const handAngle = rect ? Math.atan2(rect.top + rect.height / 2 - position.top - 40, rect.left + rect.width / 2 - position.left - 40) * 180 / Math.PI + 90 : -25;
+  const navigate = () => latest.current.onNavigate(phase === 'model' ? 'settings' : phase);
+  useEffect(() => { navigate(); }, [phase]);
+  useEffect(() => {
+    const update = () => setViewport({ width: window.visualViewport?.width || window.innerWidth, height: window.visualViewport?.height || window.innerHeight });
+    window.addEventListener('resize', update); window.visualViewport?.addEventListener('resize', update); update();
+    const observer = new ResizeObserver(() => { if (panel.current) setPanelHeight(panel.current.getBoundingClientRect().height); });
+    if (panel.current) observer.observe(panel.current);
+    return () => { window.removeEventListener('resize', update); window.visualViewport?.removeEventListener('resize', update); observer.disconnect(); };
+  }, []);
+  async function pause() {
+    if (busy || props.modelBusy || paused.current) return;
+    paused.current = true; setBusy(true); setError('');
     try {
-      const payload = { id: active?.id || "", base_url: url.trim(), model: model.trim(), api_key: key.trim() };
-      if (test) {
-        const result = await rpc<{ ok: boolean; error?: string; message?: string }>(props.info, "test_model", { payload });
-        if (!result.ok) throw new Error(result.error || "连通测试失败。");
-        setTested(true); setNotice(result.message || "连通正常。");
-      } else {
-        const result = await rpc<ModelList>(props.info, "save_model_entry", { payload });
-        if (!result.ok) throw new Error(result.error || "保存失败。");
-        props.onModels(result); setKey(""); setSaved(true); setNotice("模型已保存，可以继续或测试连通。");
-      }
+      const result = await rpc<{ok:boolean;error?:string}>(props.info, 'save_onboarding_progress', { step: phase });
+      if (!result.ok) throw Error(result.error || '引导进度未保存。');
+      props.onClose();
+    } catch (err) { paused.current = false; setBusy(false); setError(String(err)); }
+  }
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); void pause(); } };
+    window.addEventListener('keydown', escape);
+    return () => window.removeEventListener('keydown', escape);
+  });
+  async function next() {
+    if (phase === 'model' && !props.modelState?.saved) return;
+    setBusy(true); setError('');
+    const nextPhase = GUIDE_PHASES[GUIDE_PHASES.indexOf(phase) + 1];
+    try {
+      const result = await rpc<{ok:boolean;error?:string}>(props.info, nextPhase ? 'save_onboarding_progress' : 'complete_onboarding', nextPhase ? { step: nextPhase } : {});
+      if (!result.ok) throw Error(result.error || '引导进度未保存，请重试。');
+      if (nextPhase) setPhase(nextPhase);
+      else { props.onClose(true); props.onNavigate('collaboration'); }
     } catch (err) { setError(String(err)); }
     finally { setBusy(false); }
   }
-  async function finish(pane?: "settings" | "board" | "feishu", sub?: string) {
-    setBusy(true); setError("");
-    try {
-      const result = await rpc<{ ok: boolean }>(props.info, "complete_onboarding");
-      if (!result.ok) throw new Error("引导状态保存失败，请重试。");
-      props.onClose(true);
-      if (pane) props.onNavigate(pane, sub);
-    } catch (err) { setError(String(err)); setBusy(false); }
+  function point() {
+    navigate();
+    const node = guideAnchor(target.anchor);
+    node?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+    node?.focus({ preventScroll: true });
   }
-  function change(fn: () => void) { fn(); setSaved(false); setTested(false); setNotice(""); setError(""); }
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-6" data-onboarding>
-      <section role="dialog" aria-modal="true" aria-labelledby="setup-title" className="flex max-h-full w-full max-w-2xl flex-col rounded-xl border border-border bg-background shadow-2xl"
-        onKeyDown={(ev) => {
-          if (ev.key === "Escape" && !busy) { ev.stopPropagation(); props.onClose(); }
-          if (ev.key !== "Tab") return;
-          const elements = Array.from(ev.currentTarget.querySelectorAll<HTMLElement>("button:not(:disabled), input, a[href]"));
-          const first = elements[0], last = elements[elements.length - 1];
-          if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last?.focus(); }
-          else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first?.focus(); }
-        }}>
-        <header className="flex items-start justify-between border-b border-border px-7 py-5">
-          <div><p className="mb-1 text-xs text-primary">首次使用 · {step + 1} / 3</p><h1 id="setup-title" className="text-xl font-semibold">{["欢迎使用 tebb", "连接你的模型", "按需启用其他功能"][step]}</h1></div>
-          <button ref={closeRef} autoFocus type="button" className={button} disabled={busy} onClick={() => props.onClose()}>稍后设置</button>
-        </header>
-        <div className="overflow-y-auto px-7 py-6 text-sm leading-6">
-          {step === 0 ? <div className="space-y-4">
-            <p>先连接一个兼容 OpenAI Chat Completions 协议的模型，就能开始对话、保存记忆和整理笔记。其他功能可以之后再配置。</p>
-            <p>准备好服务商提供的 <strong>API 地址（Base URL）、API Key、模型 ID</strong>。网页聊天账号不一定包含 API 服务，请到服务商控制台查看。</p>
-            <p>配置入口始终在主窗左侧「设置 → 模型」。本引导也可在设置页重新打开。</p>
-            <div className="rounded-lg border border-border p-4 text-muted-foreground">Key 保存在这台电脑的配置文件中，页面不会回显。不要把 Key 写进聊天、截图或共享备份。测试连通和对话会把内容发给你填写的服务商，并可能按其规则计费。</div>
-          </div> : step === 1 ? <div className="space-y-4">
-            <p>与「设置 → 模型」共用同一份配置。先保存，再测试连通；测试成功后可直接开始对话。</p>
-            <label className="block">API 地址（Base URL）<input className="mt-1 w-full border border-border bg-background px-3 py-2" value={url} disabled={busy} autoComplete="off" placeholder="https://api.example.com/v1" onChange={(ev) => change(() => setUrl(ev.target.value))} /><span className="text-xs text-muted-foreground">填写服务商的完整接口根地址，通常包含 /v1；不要填网页聊天地址，也不要加 /chat/completions。</span></label>
-            <label className="block">模型 ID<input className="mt-1 w-full border border-border bg-background px-3 py-2" value={model} disabled={busy} autoComplete="off" placeholder="服务商模型列表中的准确 ID" onChange={(ev) => change(() => setModel(ev.target.value))} /><span className="text-xs text-muted-foreground">照抄控制台的模型 ID，大小写和版本保持一致。使用工具时，模型还需支持 tool calling。</span></label>
-            <label className="block">API Key<input className="mt-1 w-full border border-border bg-background px-3 py-2" type="password" value={key} disabled={busy} autoComplete="off" placeholder={active?.has_key ? "已保存，留空保留原 Key" : "从服务商控制台复制"} onChange={(ev) => change(() => setKey(ev.target.value))} /></label>
-            <div className="flex gap-2"><button type="button" className={`${button} desk-btn-solid`} disabled={busy} onClick={() => void submit(false)}>保存模型</button><button type="button" className={button} disabled={busy} onClick={() => void submit(true)}>测试连通</button></div>
-            <p className="text-xs text-muted-foreground">401 / 403：检查 Key 与权限；404：检查 Base URL 和模型 ID；超时：检查网络。保存成功不代表接口已连通。</p>
-            {saved && !tested ? <p className="text-xs text-muted-foreground">已保存，还未在本次引导中验证连通；可稍后在设置页测试。</p> : null}
-          </div> : <div className="space-y-4">
-            <p>{props.models.items.length ? "模型配置已保存。以下功能按需设置。" : "尚未配置模型，可先浏览界面，开始对话前到设置页补齐。"}</p>
-            {[
-              { title: "飞书日程、任务和文档", state: props.status.checks.feishu ? "已检测到 lark-cli，登录态在飞书页查看" : "需要安装 lark-cli", text: "安装后先执行 lark-cli config init，再到「飞书」页登录并授权需要的范围。", pane: "feishu" as const },
-              { title: "GitHub 看板", state: props.status.checks.github ? "已检测到 gh，仍需登录" : "需要 GitHub CLI", text: "安装 gh 并执行 gh auth login，再打开「看板 → GitHub」。只读取当前登录账号可见的仓库。", pane: "board" as const, sub: "github" },
-              { title: "知识库", state: props.status.checks.knowledge ? "检索运行库已安装" : "需要额外安装检索运行库", text: "在左侧「知识库」选择并下载向量 / 重排模型，再添加文档。首次下载较大；便携版按使用说明安装知识库扩展。", pane: "board" as const, sub: "knowledge" },
-              { title: "桌宠形象与外观", state: "内置小伴可直接使用", text: `设置页可切换纸白、鼠尾草与墨黑皮肤，无需下载素材。若要使用凯尔希，在 ${props.status.assets_dir} 放入 Core/live2dcubismcore.js 与 skins/kaltsit/kaltsit.model3.json 及引用素材，再从设置页选择；外观不会更改 Agent 人格。`, pane: "settings" as const },
-            ].map((item) => <div key={item.title} className="rounded-lg border border-border p-4"><div className="flex items-center justify-between gap-3"><strong>{item.title}</strong><button type="button" className={button} disabled={busy} onClick={() => void finish(item.pane, item.sub)}>前往设置</button></div><p className="text-xs text-primary">{item.state}</p><p className="mt-1 text-muted-foreground">{item.text}</p></div>)}
-            <p><strong>MCP 与技能：</strong>在用户目录新建 mcp.json 配置外部工具，在对话输入框通过 / 选择；技能随发布包提供。配置示例见使用说明。</p>
-            <p className="break-all"><strong>配置、聊天和日志目录：</strong><br />{props.status.data_dir}</p>
-            <p className="text-muted-foreground">备份这个目录可以保留配置和记忆。升级替换程序文件即可；备份包含密钥，请妥善保管。</p>
-          </div>}
-          {notice ? <p role="status" className="mt-4 text-primary">{notice}</p> : null}
-          {error ? <p role="alert" className="mt-4 text-destructive">{error}</p> : null}
-        </div>
-        <footer className="flex justify-between gap-3 border-t border-border px-7 py-4">
-          <button type="button" className={button} disabled={busy || step === 0} onClick={() => { setStep(step - 1); setNotice(""); setError(""); }}>上一步</button>
-          {step === 1 && !saved ? <button type="button" className={button} disabled={busy} onClick={() => setStep(2)}>先浏览，稍后配置</button> : null}
-          {step < 2 ? <button type="button" className={`${button} desk-btn-solid`} disabled={busy || (step === 1 && !saved)} onClick={() => { setStep(step + 1); setNotice(""); setError(""); }}>{step === 0 ? "开始配置" : "继续"}</button> : <button type="button" className={`${button} desk-btn-solid`} disabled={busy} onClick={() => void finish()}>完成引导</button>}
-        </footer>
-      </section>
-    </div>
-  );
+  const disabled = busy || props.modelBusy;
+  return <div data-onboarding className="setup-guide-layer">
+    {rect && <div aria-hidden="true" className="setup-guide-focus" style={{ left: rect.left - 5, top: rect.top - 5, width: rect.width + 10, height: rect.height + 10 }} />}
+    <section ref={panel} role="region" aria-label="桌宠使用引导" className="setup-guide-card" style={position} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); void pause(); } }}>
+      <header><div key={target.anchor} className={`setup-guide-pet ${props.modelState?.error && phase === 'model' ? 'setup-guide-pet-error' : ''}`} style={{ '--setup-hand-angle': `${handAngle}deg` } as CSSProperties} aria-hidden="true"><span className="setup-guide-eyes"/><span className="setup-guide-hand"/></div><div><p className="setup-guide-caption">tebb 带你设置 · {GUIDE_PHASES.indexOf(phase) + 1} / 3</p><h2>{target.title}</h2></div></header>
+      <p className="setup-guide-message" aria-live="polite" aria-atomic="true">{target.text}</p>
+      {phase === 'model' && props.modelState?.error && <p className="setup-guide-error" role="alert">{props.modelState.error} 请在原表单修正后再试。</p>}
+      {error && <p className="setup-guide-error" role="alert">{error}</p>}
+      <div className="setup-guide-actions"><button type="button" className="desk-btn" disabled={disabled} onClick={point}>{rect ? '指给我看' : '返回配置位置'}</button><button type="button" className="desk-btn" disabled={disabled} onClick={() => void pause()}>稍后继续</button><button type="button" className="desk-btn desk-btn-solid" disabled={disabled || phase === 'model' && !props.modelState?.saved} onClick={() => void next()}>{phase === 'model' ? props.modelState?.tested ? '继续' : '继续，稍后测试' : phase === 'feishu' ? props.feishuConnected ? '继续' : '跳过飞书' : '完成引导'}</button></div>
+      {phase !== 'model' && <button type="button" className="setup-guide-back" disabled={disabled} onClick={() => { setError(''); setPhase(GUIDE_PHASES[GUIDE_PHASES.indexOf(phase) - 1]); }}>上一步</button>}
+    </section>
+  </div>;
 }

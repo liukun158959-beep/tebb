@@ -83,7 +83,7 @@ export function FeishuPane(props: {
           ))}
         </ul>
       ) : null}
-      <div className="mt-6">
+      <div className="mt-6" data-guide-anchor="feishu-connect" tabIndex={-1}>
         {logged ? (
           <span data-feishu-logout="">
             <Button type="button" variant="secondary" size="sm" disabled={props.busy} onClick={props.onLogout}>

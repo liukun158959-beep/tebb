@@ -51,6 +51,7 @@ import { Markdown, MdLink, openableHref, PlainLinks } from "./Markdown";
 import { DEFAULT_SAMPLING, samplingFromInputs, EFFORTS, type Sampling } from "./sampling";
 import { startupFailed, startupReady, startupStatus } from "./startup";
 import { SetupGuide, type SetupStatus } from "./onboarding";
+import type { ModelSetupState } from './onboarding-state';
 import { ReleaseIntro, ReleaseSettings, useReleaseIntro } from "./release";
 import {
   backendInfo,
@@ -108,6 +109,7 @@ type Thread = {
 export function App() {
   const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
   const [showGuide, setShowGuide] = useState(false);
+  const [guideModel, setGuideModel] = useState<ModelSetupState | null>(null);
   const [dark, setDark] = useState(() => { try { return localStorage.getItem("tebb.theme") !== "light"; } catch { return true; } });
   const [sidebarState, setSidebarState] = useState({ open: false, available: false });
   const [settingsSection,setSettingsSection] = useState("assistant");
@@ -1599,22 +1601,22 @@ export function App() {
     }
   }
 
-  async function testSettings(draft: { base_url: string; model: string; api_key: string }) {
+  async function testSettings(draft: { base_url: string; model: string; api_key: string }): Promise<boolean> {
     const { base_url, model, api_key } = settingsPayload(draft);
     const editing = modelItems.find((row) => row.id === editingModelId);
     if (!base_url || !model || (!api_key && !editing?.has_key)) {
       setSettingsNotice("");
       setSettingsError("测试前先填 API 地址、模型名和 Key。");
-      return;
+      return false;
     }
     if (debugKind) {
       setSettingsError("");
       setSettingsNotice("调试样本，未测试连通。");
-      return;
+      return false;
     }
     if (!info) {
       setSettingsError("还没有连上本地后端。恢复：重启客户端。");
-      return;
+      return false;
     }
     setSettingsBusy(true);
     setSettingsError("");
@@ -1625,8 +1627,10 @@ export function App() {
       });
       if (!data.ok) throw new Error(data.error || "连通测试失败。");
       setSettingsNotice(data.message || "连通正常。");
+      return true;
     } catch (err) {
       setSettingsError(String(err));
+      return false;
     } finally {
       setSettingsBusy(false);
     }
@@ -1822,16 +1826,16 @@ export function App() {
   return (
     <div className="tebb-workspace relative flex h-full overflow-hidden bg-background text-foreground" data-pane={pane}>
       {showGuide && info && setupStatus ? <SetupGuide
-        info={info} status={setupStatus} models={{ ok: true, active: activeModelId, items: modelItems }}
-        onModels={(models) => rememberModels(models)} onClose={(completed) => {
+        info={info} status={setupStatus} modelState={guideModel} configured={!!modelItems.length}
+        feishuConnected={feishuLoggedIn(feishu)} modelBusy={settingsBusy || feishuBusy}
+        onClose={(completed) => {
           setShowGuide(false);
           if (completed) setSetupStatus(current => current ? { ...current, show: false } : current);
         }}
-        onNavigate={(nextPane, sub) => {
-          if (sub === "knowledge") void openKnowledge();
-          else if (nextPane === "feishu") void openFeishu();
-          else if (nextPane === "board") void openBoard();
-          else setPane(nextPane);
+        onNavigate={(nextPane) => {
+          if (nextPane === "feishu") void openFeishu();
+          else if (nextPane === "terminal") openTerminal();
+          else { if (nextPane === "settings") setSettingsSection('assistant'); setPane(nextPane); }
         }}
       /> : null}
       {agentDebugOpen ? <AgentDebugDialog info={info} debug={!!debugKind} onClose={() => setAgentDebugOpen(false)} /> : null}
@@ -2164,10 +2168,10 @@ export function App() {
               <div hidden={settingsSection!=='about'}><ReleaseSettings info={info} onShowIntro={releaseIntro.show}/>{developerMode&&<button type="button" className="desk-menu-item" onClick={()=>setAgentDebugOpen(true)}>调用调试</button>}</div>
               <div hidden={settingsSection!=='connections'}><ModelNetworkSettings info={info} debug={!!debugKind}/><SearchSettings info={info} debug={!!debugKind}/><StatusGrid cards={statuses} onOpenFeishu={()=>void openFeishu()}/></div>
               <div hidden={!['assistant','appearance'].includes(settingsSection)}><SettingsPane section={settingsSection==='appearance'?'appearance':'assistant'}
-                onOpenGuide={() => {
+                onOpenGuide={(replay = false) => {
                   if (!info) return;
                   void rpc<SetupStatus>(info, "load_onboarding").then((setup) => {
-                    setSetupStatus(setup); setShowGuide(true);
+                    setSetupStatus(replay ? { ...setup, step: 'model' } : setup); setShowGuide(true);
                   }).catch((err) => setSettingsError(String(err)));
                 }}
                 model={modelForm}
@@ -2187,7 +2191,8 @@ export function App() {
                 onPickFile={(file) => void pickBackground(file)}
                 onClearBackground={() => clearBgRef.current()}
                 onSave={(draft) => void saveSettings(draft)}
-                onTest={(draft) => void testSettings(draft)}
+                onTest={testSettings}
+                onSetupChange={setGuideModel}
                 onEdit={editModel}
                 onDelete={(id) => void deleteModel(id)}
                 onSavePersona={(text) => void savePersona(text)}

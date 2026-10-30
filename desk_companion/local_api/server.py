@@ -36,7 +36,7 @@ RPC_METHODS = frozenset({
     "list_video_tasks", "start_video_task", "continue_video_task",
     "load_video_settings", "save_video_settings", "list_task_videos", "export_task_video",
     "load_wiki_connection", "save_wiki_connection",
-    "load_onboarding", "complete_onboarding", "report_pet_status", "check_updates",
+    "load_onboarding", "complete_onboarding", "save_onboarding_progress", "report_pet_status", "check_updates",
     "load_pet_preferences", "save_pet_preferences",
     "list_agent_tasks", "get_agent_task", "cancel_agent_task", "continue_agent_task", "save_agent_task_settings", "load_task_progress",
     "list_debug_calls", "get_debug_call", "set_debug_recording", "explain_debug_call", "load_context_debug", "save_context_capacity",
@@ -177,7 +177,7 @@ def _dispatch(method: str, args: dict, preview=False) -> dict:
             from ..agent_debug import context
             with context(session=HOST.state.session_id, channel="backend"):
                 return target(**kwargs)
-        if method.startswith("terminal_") or method in {"tebb_operation", "check_automation_execution","load_local_calendar", "change_local_calendar", "calendar_sync_step", "load_schedule", "change_schedule", "load_schedule_week", "load_schedule_month", "inspect_schedule_event", "load_work_board", "change_work_item", "compress_context", "load_chat_log", "load_memory",
+        if method.startswith("terminal_") or method in {"load_onboarding", "complete_onboarding", "save_onboarding_progress", "tebb_operation", "check_automation_execution","load_local_calendar", "change_local_calendar", "calendar_sync_step", "load_schedule", "change_schedule", "load_schedule_week", "load_schedule_month", "inspect_schedule_event", "load_work_board", "change_work_item", "compress_context", "load_chat_log", "load_memory",
                       "load_notebook", "new_notebook", "save_notebook_note", "delete_notebook_note",
                       "export_notebook_markdown", "export_notebook_feishu", "open_notebook_file",
                       "reveal_notebook_file", "delete_notebook_file",

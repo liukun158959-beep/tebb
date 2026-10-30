@@ -20,11 +20,34 @@ class OnboardingTests(unittest.TestCase):
         self.catalog = {"active": "", "items": []}
         patch.object(onboarding, "public_catalog", side_effect=lambda: self.catalog).start()
 
-    def test_empty_install_shows_guide_and_completion_does_not_block_missing_model(self):
+    def test_empty_install_cannot_complete_without_a_saved_model(self):
         self.assertTrue(onboarding.status()["show"])
-        onboarding.complete()
-        self.assertEqual(json.loads((self.root / "onboarding.json").read_text())["completed"], True)
+        self.assertFalse(onboarding.complete()['ok'])
+        self.assertFalse((self.root / 'onboarding.json').exists())
         self.assertTrue(onboarding.status()["show"])
+
+    def test_pause_resumes_optional_stage_without_storing_form_fields(self):
+        self.catalog = {'active': 'm', 'items': [{'id': 'm', 'has_key': True}]}
+        self.assertTrue(onboarding.save_progress('feishu')['ok'])
+        self.assertEqual(onboarding.status()['step'], 'feishu')
+        self.assertTrue(onboarding.status()['show'])
+        self.assertEqual(set(json.loads((self.root / 'onboarding.json').read_text())), {'version', 'completed', 'step'})
+        self.assertTrue(onboarding.complete()['ok'])
+        self.assertFalse(onboarding.status()['show'])
+
+    def test_invalid_progress_does_not_overwrite_a_valid_checkpoint(self):
+        onboarding.save_progress('terminal')
+        for value in ('unknown', '../settings', None, {}, ['model']):
+            self.assertFalse(onboarding.save_progress(value)['ok'])
+        self.assertEqual(onboarding.status()['step'], 'terminal')
+
+    def test_legacy_completed_and_damaged_checkpoint_keep_settings_available(self):
+        self.catalog = {'active': 'm', 'items': [{'id': 'm', 'has_key': True}]}
+        path = self.root / 'onboarding.json'
+        for raw in ('{"version":1,"completed":true}', '{broken', '[]'):
+            path.write_text(raw, encoding='utf-8')
+            self.assertFalse(onboarding.status()['show'])
+            self.assertEqual(onboarding.status()['step'], 'model')
 
     def test_existing_config_is_preserved_and_not_forced_through_guide(self):
         self.catalog = {"active": "m", "items": [{"id": "m", "has_key": True}]}

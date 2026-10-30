@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { ModelSetupState } from './onboarding-state';
 
 export const BG_STORAGE_KEY = "desk-companion-bg";
 const BG_MAX = 2_000_000;
@@ -184,26 +185,45 @@ export function SettingsPane(props: {
   onPickFile: (file: File) => void;
   onClearBackground: () => void;
   onSave: (draft: { id: string; base_url: string; model: string; api_key: string }) => void;
-  onTest: (draft: { base_url: string; model: string; api_key: string }) => void;
+  onTest: (draft: { base_url: string; model: string; api_key: string }) => Promise<boolean>;
+  onSetupChange?: (state: ModelSetupState) => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
   onSavePersona: (persona: string) => void;
-  onOpenGuide: () => void;
+  onOpenGuide: (replay?: boolean) => void;
 }) {
   const [baseUrl, setBaseUrl] = useState(props.model?.base_url || "");
   const [modelName, setModelName] = useState(props.model?.model || "");
   const [apiKey, setApiKey] = useState("");
+  const [tested, setTested] = useState(false);
+  const revision = useRef(0);
   const [persona, setPersona] = useState(props.persona);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setBaseUrl(props.model?.base_url || "");
     setModelName(props.model?.model || "");
+    revision.current += 1; setTested(false);
   }, [props.model?.base_url, props.model?.model]);
 
   useEffect(() => {
     setApiKey("");
+    revision.current += 1; setTested(false);
   }, [props.keyEpoch]);
+
+  const saved = !!props.editingId && !!props.model?.has_key && !apiKey.trim()
+    && baseUrl.trim() === props.model?.base_url && modelName.trim() === props.model?.model;
+  useEffect(() => {
+    props.onSetupChange?.({ hasBase: !!baseUrl.trim(), hasModel: !!modelName.trim(),
+      hasKey: !!apiKey.trim() || !!props.model?.has_key, saved, tested, busy: props.busy, error: props.modelError });
+  }, [baseUrl, modelName, apiKey, props.model?.has_key, saved, tested, props.busy, props.modelError, props.onSetupChange]);
+  function changed(update: () => void) { revision.current += 1; setTested(false); update(); }
+  async function testConnection() {
+    const started = revision.current;
+    setTested(false);
+    const passed = await props.onTest({ base_url: baseUrl, model: modelName, api_key: apiKey });
+    if (started === revision.current) setTested(passed);
+  }
 
   useEffect(() => {
     setPersona(props.persona);
@@ -213,7 +233,7 @@ export function SettingsPane(props: {
     <div data-settings className="mx-auto flex max-w-xl flex-col gap-8">
       <section className="rounded-lg border border-border p-4 text-sm">
         <p className="mb-3 text-muted-foreground">首次使用或不确定配置位置时，可以重新打开引导，查看模型、账号和可选功能的准备步骤。</p>
-        <button type="button" className="desk-btn desk-btn-lg" onClick={props.onOpenGuide}>打开使用引导</button>
+        <div className="flex flex-wrap gap-2"><button type="button" className="desk-btn desk-btn-lg" onClick={() => props.onOpenGuide(false)}>继续使用引导</button><button type="button" className="desk-btn desk-btn-lg" onClick={() => props.onOpenGuide(true)}>从头重播引导</button></div>
       </section>
       <section hidden={props.section==='appearance'} className="flex flex-col gap-3">
         <h2 className="text-sm font-semibold text-primary">模型</h2>
@@ -241,9 +261,11 @@ export function SettingsPane(props: {
           <span className="text-muted-foreground">API 地址</span>
           <input
             data-model-base
+            data-guide-anchor="model-base"
             placeholder="https://api.example.com/v1"
             value={baseUrl}
-            onChange={(ev) => setBaseUrl(ev.target.value)}
+            disabled={props.busy}
+            onChange={(ev) => changed(() => setBaseUrl(ev.target.value))}
             className="border border-border bg-background px-3 py-2"
             autoComplete="off"
           />
@@ -253,9 +275,11 @@ export function SettingsPane(props: {
           <span className="text-muted-foreground">模型名</span>
           <input
             data-model-name
+            data-guide-anchor="model-name"
             placeholder="控制台中的准确模型 ID"
             value={modelName}
-            onChange={(ev) => setModelName(ev.target.value)}
+            disabled={props.busy}
+            onChange={(ev) => changed(() => setModelName(ev.target.value))}
             className="border border-border bg-background px-3 py-2"
             autoComplete="off"
           />
@@ -265,11 +289,13 @@ export function SettingsPane(props: {
           <span className="text-muted-foreground">API Key</span>
           <input
             data-model-key
+            data-guide-anchor="model-key"
             data-model-key-filled={apiKey.trim() ? "1" : "0"}
             data-model-has-key={props.model?.has_key ? "1" : "0"}
             type="password"
             value={apiKey}
-            onChange={(ev) => setApiKey(ev.target.value)}
+            disabled={props.busy}
+            onChange={(ev) => changed(() => setApiKey(ev.target.value))}
             placeholder={props.model?.has_key ? "已保存，留空则不改" : "必填"}
             className="border border-border bg-background px-3 py-2"
             autoComplete="off"
@@ -284,6 +310,7 @@ export function SettingsPane(props: {
           <button
             type="button"
             data-model-save
+            data-guide-anchor="model-save"
             disabled={props.busy}
             className="desk-btn desk-btn-lg desk-btn-solid"
             onClick={() =>
@@ -313,9 +340,10 @@ export function SettingsPane(props: {
           <button
             type="button"
             data-model-test
+            data-guide-anchor="model-test"
             disabled={props.busy}
             className="desk-btn desk-btn-lg"
-            onClick={() => props.onTest({ base_url: baseUrl, model: modelName, api_key: apiKey })}
+            onClick={() => void testConnection()}
           >
             测试连通
           </button>

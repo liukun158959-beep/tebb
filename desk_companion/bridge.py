@@ -204,6 +204,10 @@ class Bridge:
         from .onboarding import complete
         return complete()
 
+    def save_onboarding_progress(self, step) -> dict:
+        from .onboarding import save_progress
+        return save_progress(step)
+
     def report_pet_status(self, ready: bool, message: str = "") -> dict:
         from .logutil import log
         if type(ready) is not bool or type(message) is not str:
