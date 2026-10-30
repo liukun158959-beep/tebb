@@ -1,6 +1,15 @@
 const {test,assert,React,create,act,loader,text,button,registerMarkdown}=require('./component-fixture.cjs');
 const inspect=()=>({ok:true,items:[{id:'call',created:1,model:'model',agent:'tebb',phase:'route',run_id:'root',state:'succeeded'}],has_more:false,selected:'call',model_id:'m1',recording:true,agents:[{id:'tebb',name:'tebb',memory:'当前偏好'}],budget:{input_tokens:4000,input_source:'provider',window:null,output_reserve:0,remaining:null,over_by:0,capacity_source:'unknown'},detail:{request:{model:'model',messages:[{role:'system',content:'规则'},{role:'user',content:'完整请求的末尾'.repeat(2500)}],tools:[{name:'safe'}]},request_raw:'完整JSON末尾',call:{state:'succeeded'}}});
 
+test('an unsent conversation never queries an old conversation or exposes its memory as the new request',async()=>{
+ global.window={setInterval:()=>1,clearInterval(){}};const calls=[];
+ const load=loader({'./api':{rpc:async(...args)=>{calls.push(args);return inspect();}}});const {ContextDebug}=load('context-debug');let view;
+ await act(async()=>{view=create(React.createElement(ContextDebug,{info:{port:1,token:'t'},conversation:''}));});
+ await act(async()=>button(view,'上下文').props.onClick());
+ assert.deepEqual(calls,[]);assert.equal(button(view,'记忆').props.disabled,true);
+ await act(async()=>view.unmount());
+});
+
 test('ordinary composer loads actual context only after opening and never invents window percentage',async()=>{
  global.window={setInterval:()=>1,clearInterval(){}};const calls=[];const load=loader({'./api':{rpc:async(_info,method,args)=>{calls.push({method,args});return inspect();}}});
  const {ContextDebug}=load('context-debug');let v;await act(async()=>{v=create(React.createElement(ContextDebug,{info:{port:1,token:'t'},conversation:'dm-tebb'}));});

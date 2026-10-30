@@ -1851,7 +1851,6 @@ export function App() {
         <TopToolbar title={pane === "chat" ? noteSessionId ? "笔记" : ({ thread: "对话", knowledge: "知识库", notebooks:"笔记" })[chatFace] :
           ({ work: "事项", board: "日程", feishu: "飞书", settings: "设置", automation: "自动化", monitor: "AI 执行", video: "视频学习", collaboration: "伙伴聊天", pet: "桌宠" })[pane]}
           model={modelItems.find(m => m.id === activeModelId)?.model ? `默认：${modelItems.find(m => m.id === activeModelId)?.model}` : ""} connected={!!info || !!debugKind} busy={busy || noteBusy}
-          onNewChat={coreChat ? () => { setPane("collaboration"); window.dispatchEvent(new CustomEvent("tebb-new-chat")); } : undefined}
           onFile={() => setLocalDialog("file")} onFolder={openProjectFolder} onTerminal={openTerminal} sidebarOpen={sidebarState.open} sidebarAvailable={sidebarState.available} onSidebarToggle={togglePreview} />
         {noteSourcesOpen&&<NotebookSources info={info} docs={noteDocs} checked={noteChecked} busy={noteBusy||knowledgeBusy} debug={!!debugKind} onCheck={(id,on)=>setNoteChecked(cur=>on?[...new Set([...cur,id])]:cur.filter(value=>value!==id))} onAdd={(doc_id,label,source)=>knowledgeCall('add_knowledge',{doc_id,label,source})} onLocal={()=>{setNoteSourcesOpen(false);setLocalDialog('file');}} onClose={()=>setNoteSourcesOpen(false)}/>}
         {localDialog && <LocalSourcesDialog info={info} initialKind={localDialog} debug={!!debugPane()} onClose={() => { setLocalDialog(null); setLocalDialogMinimized(false); }} onPreview={previewSource} onMinimizedChange={setLocalDialogMinimized}

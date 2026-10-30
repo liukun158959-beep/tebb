@@ -387,7 +387,9 @@ class Collaboration:
                         if paused and set(paused['agent_config'].get('tools',[]))-{'联网搜索','网页读取','构建图表'}:raise ValueError('此任务包含本地工具权限，请在桌面客户端补充。')
                     if action.get('type') == 'send':
                         c = next((c for c in state['conversations'] if c['id']==action.get('conversation')),None)
-                        if c and any(set(a['tools'])-{'联网搜索','网页读取','构建图表'} for a in state['agents'] if a['id'] in c['members']): raise ValueError('此会话包含本地工具权限，请在桌面客户端执行')
+                        draft = action.get('new_chat')
+                        members = c['members'] if c else [draft.get('agent_id')] if isinstance(draft, dict) else []
+                        if any(set(a['tools'])-{'联网搜索','网页读取','构建图表'} for a in state['agents'] if a['id'] in members): raise ValueError('此会话包含本地工具权限，请在桌面客户端执行')
                 state["notice"] = ""
                 self._apply(state, action)
                 db.execute("INSERT INTO receipts VALUES(?,?)", (client_id, fingerprint))
@@ -489,6 +491,23 @@ class Collaboration:
             if state["selected"] == conversation["id"]:
                 state["selected"] = state["conversations"][0]["id"]
         elif kind == "send":
+            if 'new_chat' in action:
+                draft = action['new_chat']
+                ident = action.get('conversation')
+                if (not isinstance(draft, dict) or not isinstance(ident, str)
+                        or not re.fullmatch(r'dm-[a-f0-9]{32}', ident) or action.get('run')):
+                    raise ValueError('新对话首发参数无效')
+                if conversation:
+                    raise ValueError('该草稿已创建对话，请重新读取核对首条消息')
+                agent = next((a for a in state['agents'] if a['id'] == draft.get('agent_id')), None)
+                if not agent: raise ValueError('伙伴不存在')
+                pid = draft.get('project_id')
+                if not isinstance(pid, str) or (pid and not any(p['id'] == pid for p in state['projects'])):
+                    raise ValueError('项目不存在，请刷新后重新选择')
+                conversation = dict(id=ident, title='新对话', kind='dm', members=[agent['id']],
+                                    coordinator=agent['id'], goal='', project_id=pid)
+                state['conversations'].append(conversation)
+                state['selected'] = ident
             if not conversation: raise ValueError("会话不存在")
             text = action.get("text")
             if not isinstance(text, str) or not text.strip() or len(text) > 4000: raise ValueError("消息须为1至4000字")

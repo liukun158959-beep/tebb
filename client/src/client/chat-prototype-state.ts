@@ -17,7 +17,7 @@ export type DemoState = { version: 1; next: number; selected: string; projects?:
   runs: DemoRun[]; requests: DemoRequest[]; notice: string; companionVersion?: number; revision?: number; active_model?: string; workspace?: { primary: string; project_id?:string; revision?:string; references?:string[]; edit?:boolean; commands?:boolean }; skills?: { id: string; description: string }[]; models?: { id: string; model: string }[] };
 export type DemoAction = ClarificationAction
   | { type: "select"; id: string }
-  | { type: "send"; conversation?:string;text: string; target: string; mode: "message" | "task" | "auto"; run?: string; skills?: string[]; attachments?: string[]; model_id?: string; sampling?: { reasoning_effort: string; temperature: number; top_p: number } }
+  | { type: "send"; conversation?:string;new_chat?:{agent_id:string;project_id:string};text: string; target: string; mode: "message" | "task" | "auto"; run?: string; skills?: string[]; attachments?: string[]; model_id?: string; sampling?: { reasoning_effort: string; temperature: number; top_p: number } }
   | { type: "create_project"; name: string }
   | { type: "rename_project"; id: string; name: string; instructions?: string }
   | { type: "open_folder_project"; primary: string; bind_id?: string }
@@ -83,7 +83,7 @@ export function demoReducer(previous: DemoState, action: DemoAction): DemoState 
   const message = (conversation: string, sender: string, text: string, run?: string, kind?: DemoMessage["kind"]) => {
     state.messages.push({ id: id(), conversation, sender, text, run, kind });
   };
-  const conversation = state.conversations.find(item => item.id === state.selected)!;
+  let conversation = state.conversations.find(item => item.id === state.selected)!;
   const projects = state.projects ??= [];
   const projectFor = (given: string | undefined) => given ?? conversation.project_id ?? '';
   if (action.type === 'open_folder_project') {
@@ -148,6 +148,18 @@ export function demoReducer(previous: DemoState, action: DemoAction): DemoState 
   } else if (action.type === "send") {
     const text = action.text.trim().slice(0, 4000);
     if (!text) return previous;
+    if(action.new_chat){
+      const agent=state.agents.find(a=>a.id===action.new_chat!.agent_id),pid=action.new_chat.project_id;
+      const reject=(notice:string)=>({...previous,notice});
+      if(!agent||!action.conversation||!/^dm-[a-f0-9]{32}$/.test(action.conversation)||action.run)return reject('新对话参数无效。');
+      const existing=state.conversations.find(c=>c.id===action.conversation);
+      if(existing){state.selected=existing.id;return state;}
+      if(pid&&!projects.some(p=>p.id===pid))return reject('项目不存在，请重新选择。');
+      const mention=text.match(/^@([^\s]+)(?:\s|$)/);
+      if((action.target&&action.target!==agent.id)||(mention&&![agent.id,agent.name].includes(mention[1])))return reject('发送对象不在当前会话中。');
+      conversation={id:action.conversation,title:text.replace(/\n/g,' ').slice(0,40),kind:'dm',members:[agent.id],coordinator:agent.id,goal:'',project_id:pid};
+      state.conversations.push(conversation);state.selected=conversation.id;
+    }
     if (action.run) {
       const run = state.runs.find(item => item.id === action.run && item.conversation === conversation.id);
       if (!run || !runActive(run)) { state.notice = "这项任务已结束或不属于当前会话，请重新选择。"; return state; }

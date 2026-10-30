@@ -95,6 +95,29 @@ test('an uncertain request retries with the same id; polling cannot erase its er
   await act(async()=>view.unmount());
 });
 
+test('first-send identity survives a lost reply and an intervening selected-conversation action',async()=>{
+ env();let props;const calls=[];const base={version:1,next:1,revision:1,selected:'old',agents:[],conversations:[],messages:[],runs:[],requests:[],notice:''};
+ const rpc=async(_info,method,args)=>{
+   if(method==='load_collaboration')return {state:base};
+   calls.push(structuredClone(args.action));
+   if(args.action.type==='send')throw Error('reply lost');
+   return {state:{...base,revision:2,selected:'other'}};
+ };
+ const {LiveCollaboration}=load('live-collaboration',{'./api':{rpc},'./startup':{startupReady(){}},'./chat-prototype':{ChatPrototype:p=>{props=p;return React.createElement('div');}}});
+ let view;await act(async()=>{view=create(React.createElement(LiveCollaboration,{info:{port:1,token:'test'}}));});
+ const id='dm-'+'a'.repeat(32),first={type:'send',conversation:id,new_chat:{agent_id:'tebb',project_id:''},text:'first',target:'',mode:'auto'};
+ await act(async()=>{assert.equal(await props.live.act(first),false);});
+ await act(async()=>{assert.equal(await props.live.act({type:'select',id:'other'}),true);});
+ await act(async()=>{assert.equal(await props.live.act(structuredClone(first)),false);});
+ const sends=calls.filter(a=>a.type==='send');
+ assert.deepEqual(sends[0],sends[1]);assert.equal(sends[0].request_id,id);assert.equal(sends[0].conversation,id);
+ await act(async()=>props.live.confirmAction('different-action'));
+ assert.match(props.live.error,/reply lost/);
+ await act(async()=>props.live.confirmAction(id));
+ assert.equal(props.live.error,'');
+ await act(async()=>view.unmount());
+});
+
 test('real workspace renders actual output and sends actions without changing demo storage', async () => {
   env();global.localStorage={getItem(){throw new Error('real mode must not read demo storage');},setItem(){throw new Error('real mode must not write demo storage');}};
   const { initialDemo }=load('chat-prototype-state');const state=initialDemo();

@@ -103,6 +103,30 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             async with connect(self.url.replace('test-token','bad-token'),proxy=None) as ws:
                 await ws.send(json.dumps(dict(type='rpc',method='load_context_debug',args=dict(conversation='dm-tebb'))));await ws.recv()
 
+    async def test_first_chat_message_is_atomic_and_idempotent_over_authenticated_rpc(self):
+        import uuid
+        from desk_companion.collaboration import Collaboration
+        from tests.test_collaboration import Queue, MODEL
+        patch('desk_companion.model_catalog.require_active', return_value=MODEL).start()
+        patch('desk_companion.model_catalog.require_item', return_value=MODEL).start()
+        service=Collaboration(self.host.work_board.path,managers=dict(work=Queue(),chat=Queue()),start=False)
+        self.host._collaboration=service;self.addCleanup(service.shutdown)
+        before=(await self.notebook_rpc('load_collaboration'))['state']
+        ident='dm-'+uuid.uuid4().hex
+        action=dict(type='send',conversation=ident,new_chat=dict(agent_id='tebb',project_id=''),text='首条消息事务验证',mode='message',request_id=ident)
+        result=(await self.notebook_rpc('collaboration_action',action=action))['state']
+        self.assertEqual(len(result['conversations']),len(before['conversations'])+1)
+        self.assertEqual(len(result['runs']),len(before['runs'])+1)
+        await self.notebook_rpc('collaboration_action',action=dict(type='select',conversation='dm-writer',request_id=uuid.uuid4().hex))
+        replay=(await self.notebook_rpc('collaboration_action',action=action))['state']
+        self.assertEqual(replay['selected'],'dm-writer')
+        self.assertEqual(len(replay['runs']),len(result['runs']))
+        self.assertEqual(len([m for m in replay['messages'] if m['conversation']==ident and m['sender']=='user']),1)
+        from websockets.exceptions import ConnectionClosed
+        with self.assertRaises(ConnectionClosed):
+            async with connect(self.url.replace('test-token','bad-token'),proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc',method='collaboration_action',args=dict(action=action))));await ws.recv()
+
     async def test_report_chart_rpc_is_authenticated(self):
         import uuid
         from desk_companion import report_charts

@@ -319,7 +319,6 @@
 .cp-history-row > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cp-history-row small { color: var(--cp-muted); font-size: 9px; }
 .cp-history-row:hover, .cp-history-row.is-selected { background: hsl(var(--primary) / .08); }
-.cp-add-coder { margin: 18px 8px; }
 .cp-context-actions { display: flex; flex-shrink: 0; gap: 6px; }
 .cp-chat-header { min-height: 58px; padding: 9px 18px; }
 .cp-inspector { position: static; width: 300px; max-width: 35%; display: none; }
@@ -556,9 +555,6 @@
 .pet-chat-compose-actions button { width:20px; height:22px; padding:0; font-size:13px; color:hsl(var(--muted-foreground)); background:transparent; }
 .pet-chat-compose-actions button:hover { color:hsl(var(--primary)); }
 
-.cp-sidebar-actions { display:flex; gap:8px; }
-.cp-sidebar-actions svg { width:20px; height:20px; }
-.cp-create-group { color:hsl(var(--primary)) !important; background:hsl(var(--primary) / .1); border:1px solid hsl(var(--primary) / .25); }
 .cp-context-actions .cp-project-button { display:inline-flex; align-items:center; gap:5px; max-width:150px; }
 .cp-project-button span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:90px; font-size:11px; }
 .cp-composer-picker small { color:hsl(var(--muted-foreground)); }
@@ -570,8 +566,7 @@
 .cp-history-item > .cp-conversation { min-width: 0; padding-right: 28px; }
 .cp-history-more { position: absolute; right: 1px; width: 25px; height: 25px; opacity: .5; }
 .cp-history-item:hover .cp-history-more, .cp-history-item:focus-within .cp-history-more { opacity: 1; }
-.cp-history-more svg, .cp-project-heading svg, .cp-new-project svg { width: 15px; height: 15px; flex-shrink: 0; }
-.cp-list-heading .cp-new-project { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--cp-muted); }
+.cp-history-more svg, .cp-project-heading svg { width: 15px; height: 15px; flex-shrink: 0; }
 .cp-project-heading { display: flex; align-items: center; min-height: 34px; gap: 1px; }
 .cp-project-toggle { display: flex; align-items: center; min-width: 0; flex: 1; gap: 6px; text-align: left; padding: 5px 2px; }
 .cp-project-toggle strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 550; }
@@ -581,10 +576,6 @@
 .cp-chat-project { margin-bottom: 3px; }
 .cp-project-chats { margin-left: 12px; border-left: 1px solid var(--cp-line); padding-left: 3px; }
 .cp-project-chats[hidden] { display: none; }
-.cp-project-chats .cp-conversation { padding-top: 6px; padding-bottom: 6px; }
-.cp-project-chats .cp-conversation .cp-avatar { width: 24px; height: 24px; border-radius: 7px; }
-.cp-project-chats .cp-conversation small { display: none; }
-.cp-project-chats .cp-conversation strong { font-size: 12px; font-weight: 450; }
 .cp-project-empty { display: flex; flex-wrap: wrap; gap: 5px 10px; padding: 7px 8px; font-size: 11px; color: var(--cp-muted); }
 .cp-project-empty button { color: var(--cp-accent); }
 .cp-root .cp-project-empty, .cp-root .cp-project-empty button { font-size: 11px; }

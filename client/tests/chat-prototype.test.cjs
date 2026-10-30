@@ -26,6 +26,10 @@ const { initialDemo, demoReducer: reduce, restoreDemo, DEMO_STORAGE } = load('ch
 const send = (state, text, rest = {}) => reduce(state, { type: 'send', text, target: '', mode: 'message', ...rest });
 const text = node => typeof node === 'string' ? node : (node.children || []).map(text).join('');
 const button = (view, label) => view.root.findAllByType('button').find(node => node.props['aria-label'] === label || text(node) === label);
+async function openGroup(view){
+  await act(async()=>button(view,'新对话').props.onClick());
+  await act(async()=>view.root.findByProps({'aria-label':'新对话伙伴'}).props.onChange({target:{value:'__group__'}}));
+}
 
 function environment() {
   const saved = new Map(), timers = new Map(); let seq = 0;
@@ -34,6 +38,65 @@ function environment() {
   global.document = { documentElement: { classList: { contains: () => true, toggle() {} } }, activeElement: { focus() {} }, getElementById() {} };
   return { saved, timers };
 }
+
+test('new conversations retain one draft across navigation, commit on send and require explicit discard',async()=>{
+ const {saved}=environment(),seed=initialDemo();seed.models=[{id:'chosen',model:'Chosen model'}];saved.set(DEMO_STORAGE,JSON.stringify(seed));
+ const {ChatPrototype}=load('chat-prototype');let view;await act(async()=>{view=create(React.createElement(ChatPrototype));});
+ const before=JSON.parse(saved.get(DEMO_STORAGE));
+ await act(async()=>button(view,'新对话').props.onClick());
+ assert.equal(JSON.parse(saved.get(DEMO_STORAGE)).conversations.length,before.conversations.length);
+ await act(async()=>view.root.findByProps({'aria-label':'原型消息'}).props.onChange({target:{value:'请保留这份新的草稿'}}));
+ await act(async()=>view.root.findByProps({'aria-label':'本轮模型'}).props.onChange({target:{value:'chosen'}}));
+ await act(async()=>view.root.findByProps({'data-conversation':'dm-writer'}).props.onClick());
+ assert.equal(view.root.findByProps({'aria-label':'原型消息'}).props.value,'');
+ await act(async()=>button(view,'新对话').props.onClick());
+ assert.equal(view.root.findByProps({'aria-label':'原型消息'}).props.value,'请保留这份新的草稿');
+ assert.equal(view.root.findByProps({'aria-label':'本轮模型'}).props.value,'chosen');
+ await act(async()=>button(view,'新对话').props.onClick());
+ assert.equal(JSON.parse(saved.get(DEMO_STORAGE)).conversations.length,before.conversations.length);
+ await act(async()=>view.root.findByType('form').props.onSubmit({preventDefault(){}}));
+ const after=JSON.parse(saved.get(DEMO_STORAGE));
+ assert.equal(after.conversations.length,before.conversations.length+1);
+ assert.equal(after.messages.filter(m=>m.conversation===after.selected&&m.sender==='user').length,1);
+ assert.equal(view.root.findByProps({'aria-label':'原型消息'}).props.value,'');
+ assert.equal(view.root.findAllByProps({'aria-label':'新对话草稿'}).length,0);
+ await act(async()=>button(view,'新对话').props.onClick());
+ await act(async()=>view.root.findByProps({'aria-label':'原型消息'}).props.onChange({target:{value:'暂时保留'}}));
+ await act(async()=>button(view,'放弃新对话草稿').props.onClick());
+ await act(async()=>button(view,'保留草稿').props.onClick());
+ assert.equal(view.root.findByProps({'aria-label':'原型消息'}).props.value,'暂时保留');
+ await act(async()=>button(view,'放弃新对话草稿').props.onClick());
+ await act(async()=>button(view,'确认放弃草稿').props.onClick());
+ assert.deepEqual(JSON.parse(saved.get(DEMO_STORAGE)).conversations,after.conversations);
+ await act(async()=>button(view,'新对话').props.onClick());
+ assert.equal(view.root.findByProps({'aria-label':'原型消息'}).props.value,'');
+ await act(async()=>view.unmount());
+});
+
+test('uncertain first sends preserve the frozen body across navigation and reconcile without an automatic resend',async()=>{
+ environment();const seed=initialDemo(),actions=[];const {ChatPrototype}=load('chat-prototype');let view;
+ const live={state:seed,busy:false,error:'回执丢失',act:async action=>{actions.push(structuredClone(action));return false;}};
+ await act(async()=>{view=create(React.createElement(ChatPrototype,{live}));});
+ await act(async()=>button(view,'新对话').props.onClick());
+ await act(async()=>view.root.findByProps({'aria-label':'协作消息'}).props.onChange({target:{value:'发送结果需要核对'}}));
+ await act(async()=>view.root.findByType('form').props.onSubmit({preventDefault(){}}));
+ const first=actions.find(a=>a.type==='send');
+ assert.match(first.conversation,/^dm-[a-f0-9]{32}$/);assert.deepEqual(first.new_chat,{agent_id:'tebb',project_id:''});
+ assert.equal(view.root.findByProps({'aria-label':'协作消息'}).props.readOnly,true);
+ assert.equal(view.root.findByProps({'aria-label':'新对话伙伴'}).props.disabled,true);
+ await act(async()=>view.root.findByProps({'data-conversation':'dm-writer'}).props.onClick());
+ await act(async()=>button(view,'新对话').props.onClick());
+ assert.equal(view.root.findByProps({'aria-label':'协作消息'}).props.value,first.text);
+ await act(async()=>view.root.findByType('form').props.onSubmit({preventDefault(){}}));
+ assert.deepEqual(actions.filter(a=>a.type==='send'),[first,first]);
+ const committed=reduce(seed,first);committed.revision=2;
+ await act(async()=>view.update(React.createElement(ChatPrototype,{live:{...live,state:committed,error:''}})));
+ assert.equal(view.root.findAllByProps({'aria-label':'新对话草稿'}).length,0);
+ assert.equal(view.root.findByType('h1').children[0],first.text);
+ assert.equal(actions.filter(a=>a.type==='send').length,2);
+ assert.equal(committed.conversations.length,seed.conversations.length+1);
+ await act(async()=>view.unmount());
+});
 
 test('composer grows, caps overflow and shrinks after clearing, including width changes',()=>{
   environment();let resized;global.ResizeObserver=class{constructor(cb){resized=cb;}observe(){}disconnect(){}};
@@ -181,7 +244,7 @@ test('UI creates groups and Agent settings; reset is explicit and does not touch
   const { saved } = environment(); saved.set('real-chat-sentinel', 'keep');
   const { ChatPrototype } = load('chat-prototype'); let view;
   await act(async () => { view = create(React.createElement(ChatPrototype, {standalone:true})); });
-  await act(async () => button(view, '新建协作群').props.onClick());
+  await openGroup(view);
   let modal = view.root.findByProps({ role: 'dialog' });
   await act(async () => modal.findAllByType('input').find(node => node.props.type !== 'checkbox').props.onChange({ target: { value: '技术观察' } }));
   await act(async () => modal.findByType('form').props.onSubmit({ preventDefault() {} }));
@@ -259,8 +322,8 @@ test('context menu manages conversations; memory has one dedicated composer entr
   const dm = () => view.root.findByProps({ 'data-chat-partner': 'research' });
   await act(async () => dm().props.onContextMenu(contextEvent()));
   assert(button(view, '删除对话')); assert(!button(view, '调试伙伴记忆'));
-  await act(async () => view.root.findByProps({ role: 'menu' }).props.onKeyDown({ key: 'Escape', preventDefault() {} }));
-  assert.equal(view.root.findAllByProps({ role: 'menu' }).length, 0);
+  await act(async () => view.root.findByProps({ role: 'menu', 'aria-label':'会话操作' }).props.onKeyDown({ key: 'Escape', preventDefault() {} }));
+  assert.equal(view.root.findAllByProps({ role: 'menu', 'aria-label':'会话操作' }).length, 0);
   for(let i=0;i<5;i++) await act(async () => view.root.findByProps({'data-product-version':true}).props.onClick());
   assert.equal(saved.get('tebb.developer-mode'), 'true');
   await act(async () => dm().props.onContextMenu(contextEvent()));
@@ -270,7 +333,7 @@ test('context menu manages conversations; memory has one dedicated composer entr
   await act(async () => dm().props.onKeyDown(contextEvent({ key: 'F10', shiftKey: true })));
   assert(!button(view, '调试伙伴记忆'));
   await act(async () => view.root.findByProps({ className: 'cp-menu-dismiss' }).props.onMouseDown());
-  assert.equal(view.root.findAllByProps({ role: 'menu' }).length, 0);
+  assert.equal(view.root.findAllByProps({ role: 'menu', 'aria-label':'会话操作' }).length, 0);
   await act(async () => view.unmount());
 });
 
@@ -288,9 +351,11 @@ test('delete inactive DM removes history, preserves companions and opens a fresh
   assert(!state.messages.some(m => m.text === '待删除消息'));
   assert.equal(state.agents.length, 3);
   await act(async () => button(view,'伙伴').props.onClick());
-  await act(async () => view.root.findByProps({'data-companion':'writer'}).parent.findAllByType('button').find(b=>text(b)==='新对话').props.onClick());
+  const countBefore=state.conversations.length;
+  await act(async () => view.root.findByProps({'data-companion':'writer'}).props.onClick());
   state = JSON.parse(saved.get(DEMO_STORAGE));
-  assert.notEqual(state.selected, 'dm-writer');
+  assert.equal(state.conversations.length,countBefore);
+  assert.equal(view.root.findByProps({'aria-label':'新对话伙伴'}).props.value,'writer');
   assert.equal(view.root.findByType('h1').children[0], '新对话');
   await act(async () => view.unmount());
 });
@@ -425,7 +490,7 @@ test('sidebar creates, renames and deletes projects, and moving finished convers
   const submitModal=async()=>act(async()=>view.root.findByProps({role:'dialog'}).findByType('form').props.onSubmit({preventDefault(){}}));
   const initial=state();
   await act(async()=>view.root.findByProps({'aria-label':'原型消息'}).props.onChange({target:{value:'保留我的草稿'}}));
-  await act(async()=>button(view,'新建项目').props.onClick());
+  await act(async()=>button(view,'打开文件夹').props.onClick());
   await act(async()=>view.root.findByProps({'aria-label':'项目名称'}).props.onChange({target:{value:'Atlas'}}));
   await submitModal();const pid=state().projects[0].id;
   assert(view.root.findByProps({'data-chat-project':pid}));
@@ -451,19 +516,24 @@ test('sidebar creates, renames and deletes projects, and moving finished convers
   await act(async()=>view.unmount());
 });
 
-test('project new-chat and group creation inherit the folder, and ungrouped entry leaves it', async () => {
+test('the unified draft and group picker keep explicit project ownership', async () => {
   const {saved}=environment();let state=reduce(initialDemo(),{type:'create_project',name:'研究'});
-  saved.set(DEMO_STORAGE,JSON.stringify(state));const pid=state.projects[0].id;
+  const pid=state.projects[0].id;state.selected='dm-tebb';state.conversations.find(c=>c.id==='dm-tebb').project_id=pid;
+  saved.set(DEMO_STORAGE,JSON.stringify(state));
   const {ChatPrototype}=load('chat-prototype');let view;await act(async()=>{view=create(React.createElement(ChatPrototype));});
-  await act(async()=>button(view,'在研究中新建对话').props.onClick());
-  state=JSON.parse(saved.get(DEMO_STORAGE));assert.equal(state.conversations.find(c=>c.id===state.selected).project_id,pid);
-  await act(async()=>button(view,'新建协作群').props.onClick());
+  const count=state.conversations.length;
+  await act(async()=>button(view,'新对话').props.onClick());
+  assert.equal(view.root.findByProps({'aria-label':'新对话所属项目'}).props.value,pid);
+  assert.equal(JSON.parse(saved.get(DEMO_STORAGE)).conversations.length,count);
+  await openGroup(view);
   const dialog=view.root.findByProps({role:'dialog'});assert.equal(dialog.findByProps({'aria-label':'协作群所属项目'}).props.value,pid);
   await act(async()=>dialog.findAllByType('input').find(n=>n.props.maxLength===40).props.onChange({target:{value:'资料研究'}}));
   await act(async()=>dialog.findByType('form').props.onSubmit({preventDefault(){}}));
   state=JSON.parse(saved.get(DEMO_STORAGE));assert.equal(state.conversations.find(c=>c.id===state.selected).project_id,pid);
-  await act(async()=>button(view,'新建未归类对话').props.onClick());
-  state=JSON.parse(saved.get(DEMO_STORAGE));assert.equal(state.conversations.find(c=>c.id===state.selected).project_id,'');
+  await act(async()=>button(view,'新对话').props.onClick());
+  await act(async()=>view.root.findByProps({'aria-label':'新对话所属项目'}).props.onChange({target:{value:''}}));
+  assert.equal(view.root.findByProps({'aria-label':'新对话所属项目'}).props.value,'');
+  assert.equal(JSON.parse(saved.get(DEMO_STORAGE)).conversations.length,count+1);
   await act(async()=>view.unmount());
 });
 
@@ -482,7 +552,7 @@ test('failed project saves keep the name and dialog available for retry', async 
 test('real folder entry opens the chooser and creates a folder-bound project without a manual name form',async()=>{
  environment();const actions=[],calls=[];const {ChatPrototype}=load('chat-prototype',{'./api':{rpc:async(_i,method,args)=>{calls.push({method,args});return {paths:['E:/Atlas']};}}});let view;
  await act(async()=>{view=create(React.createElement(ChatPrototype,{backend:{port:1,token:'fixture'},live:{state:initialDemo(),busy:false,error:'',act:async a=>{actions.push(a);return true;}}}));});
- await act(async()=>button(view,'新建项目').props.onClick());
+ await act(async()=>button(view,'打开文件夹').props.onClick());
  assert.equal(calls[0].args.operation,'pick');assert.equal(actions[0].type,'open_folder_project');assert.equal(actions[0].primary,'E:/Atlas');
  assert.equal(view.root.findAllByProps({'aria-label':'项目名称'}).length,0);
  await act(async()=>view.unmount());
@@ -621,7 +691,7 @@ test('history and companions use separate tabs; companion settings do not replac
  assert.equal(view.root.findAllByProps({'data-companion':'research'}).length,0);
  await act(async()=>button(view,'伙伴').props.onClick());
  assert.equal(view.root.findAllByProps({'data-conversation':'group-research'}).length,0);
- await act(async()=>view.root.findByProps({'data-companion':'research'}).props.onClick());
+ await act(async()=>button(view,'研究助手的设置').props.onClick());
  assert(view.root.findByProps({role:'dialog'}));assert.equal(JSON.parse(saved.get(DEMO_STORAGE)).selected,original);
  await act(async()=>button(view,'关闭弹窗').props.onClick());
  await act(async()=>view.unmount());
@@ -640,14 +710,16 @@ test('successful answer can be collected without sending a new message or openin
 });
 
 
-test('group creation stays obvious in both navigation tabs and project control is outside the composer',async()=>{
+test('one visible create entry serves both tabs, with group choice and correct workspace scope',async()=>{
  environment();const {ChatPrototype}=load('chat-prototype');let view;
  await act(async()=>{view=create(React.createElement(ChatPrototype,{live:{state:initialDemo(),act:async()=>true,busy:false,error:''},onProject(){}}));});
- const group=button(view,'新建协作群');assert.equal(group.findAllByType('svg').length,1);
- await act(async()=>button(view,'伙伴').props.onClick());assert(button(view,'新建协作群'));
- await act(async()=>button(view,'新建协作群').props.onClick());assert(view.root.findByProps({role:'dialog'}));
- assert.equal(view.root.findAllByProps({className:'cp-project-context'}).length,0);
+ assert.equal(view.root.findAllByType('button').filter(b=>text(b)==='新对话').length,1);
  assert(button(view,'工作目录与权限'));
+ await act(async()=>button(view,'伙伴').props.onClick());
+ assert.equal(view.root.findAllByType('button').filter(b=>text(b)==='新对话').length,1);
+ await openGroup(view);assert(view.root.findByProps({role:'dialog'}));
+ assert.equal(view.root.findAllByProps({className:'cp-project-context'}).length,0);
+ assert(!button(view,'工作目录与权限'));
  await act(async()=>view.unmount());
 });
 
