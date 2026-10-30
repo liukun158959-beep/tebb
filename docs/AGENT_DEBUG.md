@@ -486,6 +486,8 @@ pnpm --dir client build
 
 ## 主窗渲染诊断（#196）
 
+后续 #193 实际冷启动验收：`output/cold-start-193-full/` 使用真正 `pnpm tauri dev --no-watch --config ...`，仅将开发端口、构建目录、Vite缓存、业务数据及WebView目录隔离，保留默认代理。Cargo从空目录编译后，真实本地后端连接成功，缺少模型时进入实际配置引导；原生截图通过，连续8次只读状态均为healthy、无页面异常。该工作树没有复现用户原始纯黑，不能据此认定根因已修复。现有退出接口已关闭该自建实例，没有结束用户原开发进程。
+
 主窗 React 根节点增加错误边界：启动完成后的渲染异常也显示恢复界面和 `render_failed` 编号。重新加载仅刷新界面，不会由错误边界重新发送消息或重跑任务；持续存在的源码异常仍需修复。
 
 在主窗开发者工具或已授权的隔离 WebView 调试连接中，可只读调用 `window.__DESK_UI_DIAGNOSTICS__()`，返回 `{state:'healthy',failure:null}` 或 `{state:'failed',failure:{code:'render_failed',errorType:'Error'|'TypeError'|'ReferenceError'}}`。此快照仅反映已挂载根组件的渲染状态，不代表后台、模型和第三方服务健康；不包含原始异常消息、会话、配置或凭据，也不提供任意执行或故障注入接口。HTML/主脚本尚未载入时该入口尚不存在，应继续核对 dev server 请求与 WebView 导航。
