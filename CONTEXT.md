@@ -65,5 +65,5 @@ Windows 上常驻的个人 AI 助手，tebb 工作台与桌宠是入口，Atlas 
 - 终端采用紧凑工具栏、执行记录标签、主题化 xterm 与独立命令草稿，保留现有执行器和实际取消/退出回执；详见 [TERMINAL.md](docs/TERMINAL.md)。
 - 开发约定要求预留可调用接口及实质结果验收。统一入口 [EVALS.md](docs/EVALS.md) 区分模拟链路、真实模型小样本和未实现执行器；#173 完整跨能力评测仍在进行，不能据小样本声称一般任务均可完成。
 - 主窗渲染异常提供恢复界面和只读诊断，详见 [AGENT_DEBUG.md](docs/AGENT_DEBUG.md)。#193 原始冷启动纯黑尚未复现或定位根因，不能以错误边界交付代替修复结论。
-- 官方 Docker Sandboxes 已安装登录，但验证时启动报 console socket 错误，未替换产品后端；#191 GitHub 拉取、配置环境、运行 Web 项目的完整闭环仍待验收。全部未关闭 issue 的批次、清理依据和交付清单见 [路线图](docs/ISSUE_PLAN_2026-10-31.md)。
+- #190 官方Docker Sandboxes实机PoC已通过：用户原生daemon对照后，代理复用daemon；固定digest的官方v3 shell完成Express/Flask拉取、依赖、前台服务、HTTP与约67秒存活、撤销端口及停止，未授予宿主工作区/SSH/模型凭据能力。本机自定义kit builder失败原样保留，未自动重启或重试至成功。产品后端仍未默认切换，#191 Agent完整闭环待实现，详见 [SANDBOX_POC.md](docs/SANDBOX_POC.md)；全部issue安排见 [路线图](docs/ISSUE_PLAN_2026-10-31.md)。
 - #198 为伙伴增加显式“本地日程读取”权限，按北京时间日期读取本地保存事实与同步快照，返回范围和截断说明；旧配置不自动授予，不访问系统飞书或刷新远端。隔离真实模型已实际调用该工具通过，完整 #173 仍保持打开；接口、权限及验收命令见 [CALENDAR.md](docs/CALENDAR.md) 与 [EVALS.md](docs/EVALS.md)。
