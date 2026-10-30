@@ -279,7 +279,7 @@ class NewsTests(unittest.TestCase):
         records = []
         creates = []
         def cli(_cfg, args, **kwargs):
-            if args[1] == "+record-search":
+            if args[1] == "+record-list":
                 self.assertIn("--filter-json", args)
                 return {"records": records}
             creates.append(args)
@@ -312,6 +312,58 @@ class NewsTests(unittest.TestCase):
         self.assertEqual(cli.call_count, 3)
         self.assertEqual(list(run["receipts"]["records"].values()), ["rec_typed"])
         self.assertEqual(run["receipts"]["records_pending"], [])
+
+    def test_base_v3_create_id_list_is_saved_without_search_index_readback(self):
+        run = fixture()
+        run["doc_url"] = "https://example.feishu.cn/docx/doc"
+        responses = [json.dumps({"ok": True, "data": {"record_id_list": [], "has_more": False}}),
+                     json.dumps({"ok": True, "data": {"created": True, "record": {"record_id_list": ["rec_v3"]}}})]
+        with patch.object(news_publish, "_run_lark", side_effect=responses) as cli:
+            news_publish.ensure_record(run, run["report"]["items"][0], "base", lambda **kw: run.update(kw), lambda *_: None)
+            news_publish.ensure_record(run, run["report"]["items"][0], "base", lambda **kw: run.update(kw), lambda *_: None)
+        self.assertEqual(cli.call_count, 2)
+        self.assertEqual(list(run["receipts"]["records"].values()), ["rec_v3"])
+        self.assertEqual(run["receipts"]["records_pending"], [])
+
+    def test_pending_record_reconciliation_uses_exact_filter_without_keyword_search(self):
+        run = fixture()
+        item = run["report"]["items"][0]
+        key = news.digest([run["day"], item["url"]])
+        run["receipts"]["records_pending"] = [key]
+        with patch.object(news_publish, "cli", return_value={"record_id_list": ["rec_existing"], "has_more": False}) as cli:
+            news_publish.ensure_record(run, item, "base", lambda **kw: run.update(kw), lambda *_: None)
+        args = cli.call_args.args[1]
+        self.assertEqual(args[:2], ["base", "+record-list"])
+        self.assertNotIn("--keyword", args)
+        self.assertEqual(json.loads(args[args.index("--filter-json") + 1]),
+                         {"logic": "and", "conditions": [["资讯ID", "==", key]]})
+        self.assertEqual(run["receipts"]["records"], {key: "rec_existing"})
+        self.assertEqual(run["receipts"]["records_pending"], [])
+
+    def test_invalid_or_multiple_created_record_ids_keep_uncertain_receipt(self):
+        for ids in (["rec_one", "rec_two"], [None], [""], "rec_not_a_list"):
+            with self.subTest(ids=ids):
+                run = fixture()
+                run["doc_url"] = "https://example.feishu.cn/docx/doc"
+                with patch.object(news_publish, "cli", side_effect=[{"records": []},
+                        {"created": True, "record": {"record_id_list": ids}}]) as cli:
+                    with self.assertRaises(news_publish.PublishError):
+                        news_publish.ensure_record(run, run["report"]["items"][0], "base", lambda **kw: run.update(kw), lambda *_: None)
+                self.assertEqual(cli.call_count, 2)
+                self.assertEqual(run["receipts"]["records"], {})
+                self.assertEqual(len(run["receipts"]["records_pending"]), 1)
+
+    def test_unrecognized_record_lookup_response_cannot_authorize_creation(self):
+        for response in ({}, {"record_id_list": "rec_bad"}, {"record_id_list": [False]}, {"records": {}},
+                         {"record_id_list": ["rec_one", "rec_two"]},
+                         {"record_id_list": ["rec_one"], "has_more": True}):
+            with self.subTest(response=response):
+                run = fixture()
+                run["doc_url"] = "https://example.feishu.cn/docx/doc"
+                with patch.object(news_publish, "cli", return_value=response) as cli:
+                    with self.assertRaises(news_publish.PublishError):
+                        news_publish.ensure_record(run, run["report"]["items"][0], "base", lambda **kw: run.update(kw), lambda *_: None)
+                self.assertEqual(cli.call_count, 1)
 
     def test_group_send_expired_idempotency_window_requires_reconciliation(self):
         run = fixture()

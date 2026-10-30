@@ -72,6 +72,10 @@ Live2D Cubism Core 和形象包不在本仓库。源码运行的 Core 放到 `cl
 
 发布逐步保存文档、表格记录和消息回执，重试会先查重。写入结果不明确时停止重复创建；群消息采用一小时幂等窗口，超出窗口的未确认发送需要人工核实。设置保存在本机 `news_settings.json`，预览和回执位于 `memory/news/`，均不提交 Git。
 
+资讯记录兼容 Base v3 的 `record.record_id_list` 和旧单条 ID 回执；仅确认唯一有效 ID 后登记成功。业务键核对使用 `base +record-list` 的「资讯ID 等于业务键」筛选，不依赖关键词搜索索引。缺少 ID、返回多条或分页不完整时保留 `records_pending`，不再次创建；已有失败任务恢复时先核对原业务键，不能删除 pending 后盲目补跑。
+
+隔离验收：`python -m unittest tests.test_news -v`，使用临时数据和模拟 CLI，覆盖创建响应 ID 列表、丢回执恢复、精确筛选、无效/重复回执与不重复写入。只读排查先查看对应 `memory/news/<run_id>.json` 的 `error`、`receipts.records` 和 `receipts.records_pending`，不要公开其中的配置和正文。需要实表核对时使用该任务已确认的应用与数据表，以相同业务键做精确筛选；授权失败先保留原回执，不自动重登、重建或重发群消息。
+
 ## 仓库里有什么
 
 - `desk_companion/` Python 壳：宠物窗、看板、飞书、GitHub 状态

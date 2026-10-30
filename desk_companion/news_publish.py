@@ -193,19 +193,41 @@ def create_document(run, target, save, emit):
             shutil.rmtree(workspace)
 
 
+def single_record_id(value):
+    """Decode one Base v3 receipt, retaining legacy single-record responses."""
+    if not isinstance(value, dict):
+        raise PublishError("资讯表记录回执格式无效，未重复写入。")
+    if "record_id_list" in value:
+        ids = value["record_id_list"]
+        if not isinstance(ids, list) or any(not isinstance(rid, str) or not rid.strip() for rid in ids):
+            raise PublishError("资讯表记录 ID 列表无效，未重复写入。")
+        if len(ids) > 1:
+            raise PublishError("资讯表返回多条记录 ID，请先核实，未重复写入。")
+        return ids[0] if ids else ""
+    rid = value.get("id") or value.get("record_id") or ""
+    if not isinstance(rid, str) or (rid and not rid.strip()):
+        raise PublishError("资讯表记录 ID 无效，未重复写入。")
+    return rid
+
+
 def find_record(cfg, token, key):
-    args = ["base", "+record-search", "--base-token", token, "--table-id", cfg["table_id"], "--keyword", key,
-            "--search-field", "资讯ID", "--field-id", "资讯ID", "--filter-json", json.dumps({"logic": "and", "conditions": [["资讯ID", "==", key]]}), "--format", "json"]
+    # Business-key equality must not depend on keyword search index freshness.
+    args = ["base", "+record-list", "--base-token", token, "--table-id", cfg["table_id"],
+            "--field-id", "资讯ID", "--filter-json", json.dumps({"logic": "and", "conditions": [["资讯ID", "==", key]]}), "--format", "json"]
     result = cli(cfg, args)
-    rows = result.get("records", result.get("items", []))
-    if "record_id_list" in result:
-        rows = [{"record_id": rid} for rid in result["record_id_list"]]
+    if not isinstance(result, dict):
+        raise PublishError("资讯表查重回执格式无效，未重复写入。")
     if result.get("has_more"):
         raise PublishError("资讯表查重结果未完整返回，未重复写入。")
+    if "record_id_list" in result:
+        return single_record_id(result)
+    rows = result.get("records", result.get("items"))
+    if not isinstance(rows, list):
+        raise PublishError("资讯表查重回执缺少记录列表，未重复写入。")
     if len(rows) > 1:
         raise PublishError("资讯表存在重复资讯 ID，请先核实。")
     if rows:
-        rid = rows[0].get("id", rows[0].get("record_id"))
+        rid = single_record_id(rows[0])
         if not rid:
             raise PublishError("查重记录缺少记录 ID，未重复写入。")
         return rid
@@ -242,7 +264,7 @@ def ensure_record(run, item, token, save, emit):
             pending.remove(key)
             save()
         raise
-    rid = result.get("record", {}).get("id", result.get("record", {}).get("record_id"))
+    rid = single_record_id(result.get("record", {}))
     if not rid:
         # typed Base v3 创建回执可能只有写入字段；通过业务键回读确定记录 ID。
         rid = find_record(cfg, token, key)
