@@ -1,7 +1,9 @@
 """Isolated task-quality eval. Default fixture; --live calls the configured model."""
 import argparse
+from contextlib import ExitStack
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import threading
@@ -11,27 +13,70 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from desk_companion.agent_evals import CASES, CONTRACT_VERSION, CancellationNotSettled, aggregate_usage, call_evidence, evaluate, summarize, wait_task
+from desk_companion.agent_evals import CASES, CONTRACT_VERSION, CancellationNotSettled, aggregate_usage, call_evidence, evaluate, refresh_call_evidence, summarize, wait_task
 
 # Also cleaned if setup fails before TaskManager is available.
 CREDENTIAL_PATH=None
+NETWORK_PATH=None
+RESOURCES=ExitStack()
 
 
 def run_with_cleanup(operation):
+    keys=('DESK_COMPANION_DATA_DIR','DESK_TERMINAL_PORT','DESK_TERMINAL_TOKEN')
+    previous={key:os.environ.get(key) for key in keys}
     try: return operation()
     finally:
-        if CREDENTIAL_PATH is not None: CREDENTIAL_PATH.unlink(missing_ok=True)
+        try:RESOURCES.close()
+        finally:
+            with ExitStack() as cleanup:
+                for path in (CREDENTIAL_PATH,NETWORK_PATH):
+                    if path is not None:cleanup.callback(path.unlink,missing_ok=True)
+                for key,value in previous.items():
+                    if value is None:os.environ.pop(key,None)
+                    else:os.environ[key]=value
 
 
 class Fixture(BaseHTTPRequestHandler):
     spec=None
+    release=threading.Event()
     def log_message(self,*args): pass
     def do_POST(self):
         request=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        from desk_companion.agent_eval_tools import FIXTURE_URL
+        spec=self.spec;release=self.release
         value=self.spec['expected']
         if self.spec.get('kind')=='route':
             value={**value,'text':'请补充目标、日期和时间。' if value['mode']=='clarify' else '幂等表示重复执行产生相同效果。'}
         delta=dict(content=json.dumps(value,ensure_ascii=False))
+        def tool(name,arguments):
+            return dict(tool_calls=[dict(index=0,id=uuid.uuid4().hex,type='function',function=dict(name=name,arguments=json.dumps(arguments,ensure_ascii=False)))])
+        receipts=[m for m in request['messages'] if m.get('role')=='tool']
+        executor=spec.get('executor')
+        if executor=='lifecycle':
+            names={t['function']['name'] for t in request.get('tools',[])}
+            if 'request_clarification' in names:
+                if spec['scenario']=='clarify' and '用户补充目标' not in json.dumps(request['messages'],ensure_ascii=False):
+                    delta=tool('request_clarification',dict(question='请补充两个数值。'))
+                else:delta=tool('start_background_task',dict(instructions='将7与11相加，只返回JSON total和checked=true。',strategy='delegate' if spec['scenario']=='delegate' else 'direct'))
+            elif 'submit_plan' in names:
+                delta=tool('submit_plan',dict(tasks=[dict(agent_id='writer',title='核对求和',instructions='将7与11相加，只返回JSON total和checked=true。',depends_on=None,stage='collect',required_sources=[])]))
+            elif 'submit_deliverable' in names:
+                delta=tool('submit_deliverable',dict(report=json.dumps(value),complete=True,missing=[],limitations=[]))
+        elif executor=='public_source':
+            if not receipts:delta=tool('web_fetch',dict(url=FIXTURE_URL))
+            else:
+                actual=json.loads(receipts[-1]['content']);text=actual['text']
+                delta=dict(content=json.dumps(dict(tlds=re.findall(r'\.[a-z]+',text.split('2. 保留TLD\n')[1].split('3.')[0]),
+                    example_domains=re.findall(r'example\.(?:com|net|org)',text.split('3. 示例二级域名\n')[1]),citation='[合成来源]('+actual['url']+')')))
+        elif executor=='chart':
+            if not receipts:
+                source_id=re.search(r'source_id=([a-f0-9]{32})','\n'.join(str(m.get('content','')) for m in request['messages']))[1]
+                delta=tool('read_local_source',dict(source_id=source_id))
+            elif len(receipts)==1:
+                actual=json.loads(receipts[0]['content'])
+                nodes=actual['text'].split('：',1)[1].split('。',1)[0].split('→')
+                delta=tool('build_chart',dict(type='flow',title='交付流程',source_ids=[],nodes=nodes,edges=[[0,1],[1,2]],flow_style='steps'))
+            else:delta=dict(content=json.loads(receipts[-1]['content'])['markdown']+'\n关系示意。')
         if self.spec.get('executor')=='local_calendar':
             receipt=next((m for m in reversed(request['messages']) if m.get('role')=='tool'),None)
             if receipt:
@@ -40,21 +85,28 @@ class Fixture(BaseHTTPRequestHandler):
             else:
                 delta=dict(tool_calls=[dict(index=0,id='calendar-read',type='function',function=dict(name='read_local_calendar',arguments=json.dumps(dict(day='2040-01-02'))))])
         self.send_response(200);self.send_header('Content-Type','text/event-stream');self.end_headers()
+        if executor=='lifecycle' and spec['scenario']=='cancel':
+            try:
+                while not release.wait(.1):
+                    self.wfile.write(b'data: {"choices":[{"index":0,"delta":{"content":" "}}]}\n\n');self.wfile.flush()
+            except (BrokenPipeError,ConnectionResetError):pass
+            return
         frames=[dict(choices=[dict(index=0,delta=delta,finish_reason='tool_calls' if 'tool_calls' in delta else 'stop')]),dict(choices=[],usage=dict(prompt_tokens=20,completion_tokens=12))]
         for frame in frames:self.wfile.write(('data: '+json.dumps(frame)+'\n\n').encode())
         self.wfile.write(b'data: [DONE]\n\n');self.wfile.flush()
 
 
 def main():
-    global CREDENTIAL_PATH
+    global CREDENTIAL_PATH,NETWORK_PATH
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--live',action='store_true')
     parser.add_argument('--case',action='append',default=[])
-    parser.add_argument('--limit',type=int,default=20)
+    parser.add_argument('--limit',type=int,default=len(CASES))
+    parser.add_argument('--samples',type=int,default=1)
     parser.add_argument('--timeout',type=int,default=120)
     args=parser.parse_args()
-    if not 1<=args.limit<=20 or not 20<=args.timeout<=300:parser.error('limit 1..20, timeout 20..300')
+    if not 1<=args.limit<=len(CASES) or not 20<=args.timeout<=300 or not 1<=args.samples<=5:parser.error(f'limit 1..{len(CASES)}, timeout 20..300, samples 1..5')
     if args.output.exists():parser.error('--output must be a new directory; earlier failures are retained')
     selected=[s for s in CASES if not args.case or s['id'] in args.case][:args.limit]
     if not selected or set(args.case)-{s['id'] for s in CASES}:parser.error('unknown or empty case selection')
@@ -64,82 +116,112 @@ def main():
     server=None
     if not args.live:
         server=ThreadingHTTPServer(('127.0.0.1',0),Fixture)
+        server.daemon_threads=True
+        RESOURCES.callback(server.server_close)
         threading.Thread(target=server.serve_forever,daemon=True).start()
+        RESOURCES.callback(server.shutdown)
         model['base_url']=f'http://127.0.0.1:{server.server_port}/v1'
     output=args.output.resolve();output.mkdir(parents=True)
     profile=output/'private-profile';profile.mkdir()
     # This private profile contains a credential for the worker, never report it.
     CREDENTIAL_PATH=profile/'models.json'
     CREDENTIAL_PATH.write_text(json.dumps(dict(active=model['id'],items=[model])),'utf-8')
-    (profile/'model-network.json').write_text(json.dumps(policy),'utf-8')
+    NETWORK_PATH=profile/'model-network.json'
+    NETWORK_PATH.write_text(json.dumps(policy),'utf-8')
     previous=os.environ.get('DESK_COMPANION_DATA_DIR')
     os.environ['DESK_COMPANION_DATA_DIR']=str(profile)
+    for key in ('DESK_TERMINAL_PORT','DESK_TERMINAL_TOKEN'):os.environ.pop(key,None)
     report=dict(schema_version=1,contract_version=CONTRACT_VERSION,mode='live' if args.live else 'fixture',model=model['model'],cases=[],attempts=1,
-                network_mode=policy['mode'],budget=dict(max_cases=args.limit,case_timeout_seconds=args.timeout,collaboration_rounds=max(s.get('budget',2) for s in selected),transport_retries=0),
+                samples_per_case=args.samples,sampling_plan='independent; no retry or success selection',
+                network_mode=policy['mode'],budget=dict(max_cases=args.limit,max_samples=args.limit*args.samples,case_timeout_seconds=args.timeout,
+                    collaboration_rounds=max(s.get('phase_budget',s.get('budget',2)) for s in selected),max_case_model_calls=max(s.get('budget',2) for s in selected),transport_retries=0),
                 source_commit='',semantic_scope='machine-verifiable fixed tasks; not a general capability guarantee')
     import subprocess
     report['source_commit']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     import hashlib
-    report['source_snapshot']=dict(dirty=bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT,text=True).strip()),
-        sha256={name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in (
+    source_paths=(
             'scripts/eval_agent.py','desk_companion/agent_evals.py','desk_companion/tasks.py',
             'desk_companion/task_worker.py','desk_companion/collaboration_worker.py',
             'desk_companion/collaboration_llm.py','desk_companion/workflow_worker.py','desk_companion/workflow_nodes.py',
-            'desk_companion/local_calendar.py','desk_companion/tebb_tools.py')})
+            'desk_companion/local_calendar.py','desk_companion/tebb_tools.py','desk_companion/collaboration.py',
+            'desk_companion/agent_eval_tools.py','desk_companion/agent_eval_lifecycle.py','scripts/eval_fixture_worker.py')
+    hashes={}
+    for name in source_paths:
+        raw=(ROOT/name).read_bytes()
+        captured=output/'source_snapshot'/name;captured.parent.mkdir(parents=True,exist_ok=True);captured.write_bytes(raw)
+        hashes[name]=hashlib.sha256(raw).hexdigest()
+    report['source_snapshot']=dict(dirty=bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT,text=True).strip()),
+                                   directory='source_snapshot',capture='before_execution',sha256=hashes)
     from desk_companion.tasks import TaskManager
     from desk_companion.workflows import WorkflowService
     from desk_companion.agent_debug import listing, detail
-    manager=TaskManager(path=profile/'memory/tasks.sqlite3')
+    command=None if args.live else [sys.executable,'-u',str(ROOT/'scripts/eval_fixture_worker.py')]
+    manager=TaskManager(path=profile/'memory/tasks.sqlite3',command=command)
+    RESOURCES.callback(manager.shutdown)
     service=WorkflowService(lambda:manager)
-    workspace=profile/'workspace.sqlite3'
     from desk_companion.collaboration import initialize_workspace
-    initialize_workspace(workspace)
+    from desk_companion.agent_eval_tools import prepare,verify
     def save():
         report['summary'],report['totals']=summarize(report['cases'])
         (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),'utf-8')
     try:
-        for spec in selected:
+        for spec,sample in [(spec,sample) for spec in selected for sample in range(1,args.samples+1)]:
             row=dict(case_id=spec['id'],category=spec['category'],input=spec['prompt'],expected=spec['expected'],expected_state=spec['expected_state'],prerequisite=spec['prerequisite'] or ('configured_model' if args.live else 'local_fixture'),required_tools=spec.get('required_tools',[]),outcome='incomplete',task_id='',call_ids=[],calls=[],tools=[],artifacts=[],usage=None,usage_complete=False,cost=None,elapsed_ms=0)
             row['call_budget']=spec.get('budget',2)
+            row['sample']=sample
             report['cases'].append(row);save()
             if spec['prerequisite']:
                 row.update(outcome='incomplete',reason='executor_not_implemented:'+spec['prerequisite']);save();continue
             Fixture.spec=spec
+            Fixture.release=threading.Event()
             started=time.monotonic()
+            row['stage']='prepare'
             try:
-                calendar=None
-                if spec.get('executor')=='local_calendar':
-                    from desk_companion.scheduling import SchedulingService
-                    from desk_companion.work_board import WorkBoardService
-                    calendar=SchedulingService(WorkBoardService(path=workspace)).local
-                    for name,day,hour in [('验收事件B','2040-01-02',11),('验收事件A','2040-01-02',9),('其他日期','2040-01-03',9)]:
-                        result=calendar.change(dict(type='create',request_id='eval-'+uuid.uuid4().hex,
-                            summary=name,start=f'{day}T{hour:02}:00:00+08:00',end=f'{day}T{hour+1:02}:00:00+08:00',item_id=''))
-                        if not result['ok']:raise ValueError('synthetic local calendar setup failed')
-                    row['calendar_before_sha256']=hashlib.sha256(json.dumps(calendar.load()['events'],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
-                if spec['category']=='workflow':
-                    definition=service.operation('save',dict(name=spec['id'],graph=dict(nodes=[dict(id='trigger',kind='trigger',config={},position=dict(x=0,y=0)),dict(id='ai',kind='ai',config=dict(prompt=spec['prompt'],model_id=model['id']),position=dict(x=0,y=100))],edges=[dict(source='trigger',target='ai',branch='')])) )
-                    if not definition['ok']:raise ValueError('workflow definition rejected')
+                run_id=uuid.uuid4().hex
+                workspace=profile/'workspaces'/(run_id+'.sqlite3')
+                initialize_workspace(workspace)
+                context=prepare(spec,workspace,run_id,fixture=not args.live)
+                row.update(input=context['prompt'],selection=context['selection'],collab_run=run_id)
+                lifecycle=spec.get('executor')=='lifecycle'
+                verification=None;calls=None
+                if lifecycle:
+                    from desk_companion.agent_eval_lifecycle import execute
+                    def progress(value):row.update(value);save()
+                    task,verification,task_ids,calls=execute(spec,profile=profile,workspace=workspace,model_id=model['id'],timeout=args.timeout,command=command,progress=progress)
+                    row['task_ids']=task_ids;task_id=task_ids[0] if task_ids else ''
+                    expired=verification['deadline_exceeded']
+                elif spec['category']=='workflow':
+                    row['stage']='workflow_save'
+                    definition=service.operation('save',dict(name=spec['id']+'-s'+str(sample),graph=dict(nodes=[dict(id='trigger',kind='trigger',config={},position=dict(x=0,y=0)),dict(id='ai',kind='ai',config=dict(prompt=spec['prompt'],model_id=model['id']),position=dict(x=0,y=100))],edges=[dict(source='trigger',target='ai',branch='')])) )
+                    if not definition['ok']:
+                        row['error']=definition.get('error','workflow definition rejected');raise ValueError('workflow definition rejected')
                     definition=definition['definition']
-                    accepted=service.operation('start',dict(id=definition['id'],version=definition['version'],request_id='eval-'+spec['id'],mode='full',input={}))
-                    if not accepted['ok']:raise ValueError('workflow admission rejected')
+                    row['stage']='workflow_start'
+                    accepted=service.operation('start',dict(id=definition['id'],version=definition['version'],request_id=run_id,mode='full',input={}))
+                    if not accepted['ok']:
+                        row['error']=accepted.get('error','workflow admission rejected');raise ValueError('workflow admission rejected')
                     run=accepted['run'];task_id=run['task_id'];row['workflow_run']=run['id']
                 else:
-                    task_id=manager.submit(spec['prompt'],'eval-'+spec['id'],'collaboration',workflow='collaboration',kind=spec.get('kind','chat'),role=dict(id='research',name='验收助手',role='按实际输入完成可验证任务',tools=spec.get('tools',[])),context=[],members=[],model_id=model['id'],collab_run=spec['id'],collab_path=str(workspace),budget=spec.get('budget',2),search_budget=0,fetch_budget=0,task_limits=dict(call_timeout=min(args.timeout,90),task_timeout=args.timeout),sampling=dict(reasoning_effort='low',temperature=0.1,top_p=1))
+                    task_id=manager.submit(context['prompt'],'eval-'+run_id,'collaboration',workflow='collaboration',kind=spec.get('kind','chat'),role=dict(id='research',name='验收助手',role='按实际输入完成可验证任务',tools=spec.get('tools',[])),selection=context['selection'],context=[],members=[],model_id=model['id'],collab_run=run_id,collab_path=str(workspace),budget=spec.get('budget',2),search_budget=0,fetch_budget=spec.get('fetch_budget',0),task_limits=dict(call_timeout=min(args.timeout,90),task_timeout=args.timeout),sampling=dict(reasoning_effort='low',temperature=0.1,top_p=1))
                 row['task_id']=task_id;save()
-                task,expired=wait_task(manager,task_id,started+args.timeout)
+                if not lifecycle:row['task_ids']=[task_id]
+                row['stage']='wait'
+                if not lifecycle:task,expired=wait_task(manager,task_id,started+args.timeout)
                 row['deadline_exceeded']=expired
                 if spec['category']=='workflow':
                     observed=service.operation('get',dict(run_id=run['id']))['run']
                     row['node_states']={k:v['state'] for k,v in observed['receipts'].items()}
                     task={**task,'answer':observed['receipts'].get('ai',{}).get('output',{}).get('text','')}
-                outcome,evidence=evaluate(spec,task)
-                row.update(outcome=outcome,evidence=evidence,answer=task.get('answer','').replace(model['api_key'],'[redacted]'),termination=task['state'])
-                if calendar is not None:
-                    row['calendar_after_sha256']=hashlib.sha256(json.dumps(calendar.load()['events'],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
-                    if row['calendar_before_sha256']!=row['calendar_after_sha256']:
-                        row.update(outcome='false_success' if row['outcome']=='success' else row['outcome'],reason='readonly_calendar_changed')
-                calls=listing(task_id=task_id)['items']
+                if not lifecycle:verification=verify(spec,task,context)
+                row['stage']='verify'
+                outcome,evidence=evaluate(spec,task,verification=verification)
+                if expired:outcome='timed_out'
+                row.update(outcome=outcome,evidence=evidence,answer=task.get('answer','').replace(model['api_key'],'[redacted]'),termination=task['state'],error=task.get('error','').replace(model['api_key'],'[redacted]'))
+                if verification:
+                    row['artifacts']=verification.get('artifacts',[])
+                    if spec.get('executor')=='local_calendar':
+                        row.update(calendar_before_sha256=verification.get('before_sha256'),calendar_after_sha256=verification.get('after_sha256'))
+                if calls is None:calls=listing(task_id=task_id)['items']
                 row['call_ids']=[v['id'] for v in calls]
                 row['calls']=[call_evidence(v) for v in calls]
                 usages=[detail(v['id'])['response'].get('usage') for v in calls]
@@ -147,21 +229,36 @@ def main():
                 row['tools']=[dict(kind=e['kind'],**e['data']) for e in task['events'] if e['kind'] in {'tool_start','tool_end'} and isinstance(e['data'],dict)]
                 if row['outcome'] in {'success','needs_input'} and not calls:
                     row.update(outcome='false_success',reason='actual_model_call_not_recorded')
+                row['stage']='finished'
             except CancellationNotSettled as exc:
                 row.update(outcome='timed_out',termination=exc.task['state'],deadline_exceeded=True,cancellation_confirmed=False,error_type=type(exc).__name__)
             except Exception as exc:
                 row.update(outcome='failed',error_type=type(exc).__name__)
             finally:
+                Fixture.release.set()
+                complete=refresh_call_evidence(row,listing,detail)
+                if not complete and row['outcome'] in {'success','needs_input'}:
+                    row.update(outcome='failed',error_type='EvidenceCollectionFailed')
                 row['elapsed_ms']=round((time.monotonic()-started)*1000,2);save()
     finally:
-        manager.shutdown()
-        if server:server.shutdown();server.server_close()
+        RESOURCES.close()
         # Credentials must not survive the acceptance run.
         (profile/'models.json').unlink(missing_ok=True)
+        NETWORK_PATH.unlink(missing_ok=True)
+        from desk_companion.agent_eval_lifecycle import worker_alive
+        for row in report['cases']:
+            if not refresh_call_evidence(row,listing,detail) and row['outcome'] in {'success','needs_input'}:
+                row.update(outcome='failed',error_type='EvidenceCollectionFailed')
+        complete=all(row.get('call_evidence_complete',False) for row in report['cases'] if row.get('task_id'))
+        observed=[call for row in report['cases'] for call in row.get('calls',[]) if call.get('pid') and call.get('created')]
+        alive=[call['id'] for call in observed if worker_alive(call)]
+        report['cleanup']=dict(model_credential_removed=not CREDENTIAL_PATH.exists(),network_policy_removed=not NETWORK_PATH.exists(),
+                               observed_workers_exited=not alive if complete else None,call_evidence_complete=complete,still_alive_call_ids=alive)
+        save()
         if previous is None:os.environ.pop('DESK_COMPANION_DATA_DIR',None)
         else:os.environ['DESK_COMPANION_DATA_DIR']=previous
     print(json.dumps(dict(mode=report['mode'],summary=report['summary'],report=str(output/'report.json')),ensure_ascii=False))
-    return int(any(r['outcome'] in {'failed','false_success','timed_out','incomplete','cancelled'} for r in report['cases']))
+    return int(bool(alive) or not complete or any(r['outcome'] in {'failed','false_success','timed_out','incomplete','cancelled'} for r in report['cases']))
 
 
 if __name__=='__main__':raise SystemExit(run_with_cleanup(main))

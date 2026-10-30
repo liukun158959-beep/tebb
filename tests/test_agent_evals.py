@@ -27,9 +27,9 @@ class EvalVerdictTests(unittest.TestCase):
             def cancel(self,task_id): raise AssertionError('already complete')
         self.assertEqual(wait_task(Queue(),'task',0),(dict(state='succeeded'),False))
 
-    def test_twenty_named_cases_have_explicit_conditions(self):
-        self.assertEqual(len(CASES),20)
-        self.assertEqual(len({c['id'] for c in CASES}),20)
+    def test_named_cases_have_explicit_conditions_and_separate_cancellation_scopes(self):
+        self.assertEqual(len(CASES),23)
+        self.assertEqual(len({c['id'] for c in CASES}),23)
         self.assertTrue(all('expected_state' in c and 'prerequisite' in c for c in CASES))
 
     def test_queue_success_with_wrong_content_is_false_success(self):
