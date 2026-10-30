@@ -1,6 +1,7 @@
 import json
 import base64
 import hashlib
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -123,6 +124,31 @@ class ProjectEnvironmentTests(unittest.TestCase):
         self.assertTrue(result['ok'],result.get('error'));self.assertEqual(len(result['entries']),200)
         self.assertEqual(result['entries'][0],dict(name='README.rst',type='file'));self.assertTrue(result['truncated'])
         self.assertNotIn('text',result);self.assertNotIn('base64',result)
+
+    def test_file_read_write_and_listing_resolve_the_same_root_alias(self):
+        ident=self.prepared()['environment']['id']
+        project=Path(self.folder.name)/'LongDirectoryForCanonicalRead';project.mkdir()
+        if os.name=='nt':
+            import ctypes
+            buffer=ctypes.create_unicode_buffer(32768)
+            if not ctypes.windll.kernel32.GetShortPathNameW(str(project),buffer,len(buffer)):self.skipTest('8.3 path not available')
+            alias=buffer.value
+            if Path(alias)==project:self.skipTest('volume has no distinct 8.3 alias')
+        else:
+            link=Path(self.folder.name)/'alias';link.symlink_to(project,target_is_directory=True);alias=str(link)
+        def local_metadata(name,ident,argv):
+            script=argv[-1]
+            # The parent uses the patched root only inside its fixed Python utility.
+            if script.startswith('set -eu\nmkdir -p '):script=script.split('\n',3)[3]
+            command=shlex.split(script);self.assertEqual(command[:3],['python3','-I','-c'])
+            return [sys.executable,'-I','-c',command[3]]
+        with patch('desk_companion.project_environments.PROJECT',alias),patch.object(self.provider,'exec_command',side_effect=local_metadata,create=True):
+            written=self.service.write(ident,self.scope,uuid.uuid4().hex,'source.txt','actual source')
+            loaded=self.service.read(ident,self.scope,uuid.uuid4().hex,'source.txt')
+            listing=self.service.read(ident,self.scope,uuid.uuid4().hex,'.')
+        self.assertTrue(written['ok'],written.get('error'));self.assertTrue(loaded['ok'],loaded.get('error'))
+        self.assertEqual(loaded['text'],'actual source');self.assertTrue(listing['ok'],listing.get('error'))
+        self.assertIn(dict(name='source.txt',type='file'),listing['entries'])
 
     def test_repository_and_paths_reject_credentials_local_roots_and_traversal(self):
         for value in ['file:///home/project','https://token@github.com/a/b','https://github.com/a/b?token=x','https://github.com/a/..']:

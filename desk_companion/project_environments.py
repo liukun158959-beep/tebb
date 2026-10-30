@@ -283,7 +283,7 @@ class ProjectEnvironmentService:
         environment,operation,fresh=self.store.begin(ident,'read',request,dict(path=path),owner_task)
         if not fresh:return dict(ok=operation['state']=='succeeded',environment=environment,operation=operation,replayed=True)
         code=('from pathlib import Path\nimport json,base64,hashlib\n'
-              'root=Path('+repr(PROJECT)+');p=(root/'+repr(path)+').resolve()\n'
+              'root=Path('+repr(PROJECT)+').resolve();p=(root/'+repr(path)+').resolve()\n'
               'assert p.is_relative_to(root),"Path outside project"\n'
               'if p.is_dir():\n'
               '    children=sorted(p.iterdir(),key=lambda item:item.name)\n'
@@ -314,7 +314,7 @@ class ProjectEnvironmentService:
         if not isinstance(text,str) or len(text.encode('utf-8'))>8192:raise ValueError('单次文件写入最多8KiB，请分拆修改。')
         encoded=base64.b64encode(text.encode('utf-8')).decode()
         code=('from pathlib import Path;import base64,hashlib,json;'
-              'root=Path('+repr(PROJECT)+');p=(root/'+repr(path)+').resolve();'
+              'root=Path('+repr(PROJECT)+').resolve();p=(root/'+repr(path)+').resolve();'
               'assert p.is_relative_to(root),"Path outside project";'
               'p.parent.mkdir(parents=True,exist_ok=True);data=base64.b64decode('+repr(encoded)+');'
               'p.write_bytes(data);print(json.dumps(dict(path='+repr(path)+',bytes=len(data),sha256=hashlib.sha256(data).hexdigest())))')
