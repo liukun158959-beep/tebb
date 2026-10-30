@@ -8,7 +8,7 @@ ci.yml 在 main 提交、PR 或手动触发。Frontend、Python / Atlas、Rust �
 
 普通运行可被同分支新提交取消。日志和 backend.json 保留14天，每个用例记录耗时，失败、错误、跳过和预期失败分别统计，attempts=1，不自动重跑。最终 GitHub 结论仍由命令退出码决定。条件跳过不算通过；发布 gate 还会检查所有必要 job 都成功。
 
-Atlas 当前为私有仓库。可信 main/manual 的 Python job 需要仓库 Secret ATLAS_READ_TOKEN，仅授予 liukun158959-beep/Atlas 的 Contents read，不需要 tebb 写权限。读取固定提交后不持久化凭据。当前只有已有飞书通知 Secrets，本次没有创建或扩大凭据权限：缺少 Atlas 凭据时 Python job 明确失败，不假装通过。PR 不检出私有依赖、不获得此 Secret；PR 仅运行不需该凭据的前端和 Rust，合入 main 后再执行完整 Python 检查。
+Atlas 已于 2026-10-30 改为公开仓库。CI 和发布候选直接读取固定的公开提交，不需要配置 ATLAS_READ_TOKEN；Python 回归也在 PR 中执行。checkout 使用 Actions 默认的只读 GITHUB_TOKEN，且不持久化凭据；没有向 PR 注入个人 Secret 或扩大权限。若依赖以后重新变为私有，应单独确认最小授权与不受信任 PR 的执行边界，不能将读取失败默认为检查通过。
 
 ## 发布候选
 

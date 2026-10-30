@@ -45,8 +45,6 @@ jobs:
 
   python:
     name: Python / Atlas
-    # A private dependency is never checked out with secrets into PR code.
-    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     timeout-minutes: 35
     env:
@@ -60,12 +58,6 @@ jobs:
           python-version: '3.13.16'
           cache: pip
           cache-dependency-path: scripts/runtime-lock.txt
-      - name: Require read-only Atlas access
-        shell: pwsh
-        env:
-          ATLAS_READ_TOKEN: ${{ secrets.ATLAS_READ_TOKEN }}
-        run: |
-          if (-not $env:ATLAS_READ_TOKEN) { throw 'Missing ATLAS_READ_TOKEN: provide Contents read access to liukun158959-beep/Atlas. Python/Atlas checks have NOT passed.' }
       - name: Read pinned Atlas ref
         id: atlas
         shell: pwsh
@@ -77,7 +69,6 @@ jobs:
         with:
           repository: liukun158959-beep/Atlas
           ref: ${{ steps.atlas.outputs.sha }}
-          token: ${{ secrets.ATLAS_READ_TOKEN }}
           path: .ci-atlas
           persist-credentials: false
       - run: python -m pip install -r scripts/runtime-lock.txt

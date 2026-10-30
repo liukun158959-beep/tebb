@@ -42,12 +42,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git checkout --detach $env:CANDIDATE_SHA
           exit $LASTEXITCODE
-      - name: Require read-only Atlas access
-        shell: pwsh
-        env:
-          ATLAS_READ_TOKEN: ${{ secrets.ATLAS_READ_TOKEN }}
-        run: |
-          if (-not $env:ATLAS_READ_TOKEN) { throw 'Missing ATLAS_READ_TOKEN; candidate was not built.' }
       - name: Read pinned Atlas ref
         id: atlas
         shell: pwsh
@@ -59,7 +53,6 @@ jobs:
         with:
           repository: liukun158959-beep/Atlas
           ref: ${{ steps.atlas.outputs.sha }}
-          token: ${{ secrets.ATLAS_READ_TOKEN }}
           path: .ci-atlas
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
