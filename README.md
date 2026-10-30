@@ -14,7 +14,7 @@
 
 </div>
 
-> v0.4.1 发布候选准备中，正式下载以最新 Release 为准。
+> v0.4.1 已发布：[下载 Windows x64 便携版](https://github.com/liukun158959-beep/tebb/releases/tag/v0.4.1)。
 
 ![tebb v0.4.1：让对话，更清晰](desk_companion/ui/release-v0.4.1.png)
 
@@ -91,11 +91,11 @@ tebb 通用助手帮你梳理并执行目标，研究助手查资料、写作助
 3. 按首次引导填写模型 **API 地址、模型 ID、API Key**，保存并测试连接，然后开始聊天。
 4. 想操作本地项目时，在伙伴聊天侧栏的管理菜单选择 **打开文件夹**，按需设置编辑与命令权限。
 
-> 本文介绍 v0.4.1 候选工作区，新包入口为 `tebb.exe`。历史 v0.2.3 包使用 `ZhiXing.exe`；升级沿用原用户数据。
+> 本文介绍 v0.4.1 工作区，新包入口为 `tebb.exe`。历史 v0.2.3 包使用 `ZhiXing.exe`；升级沿用原用户数据。
 
 支持 Windows 10/11 x64，需要 WebView2 Runtime。便携版无需自行安装 Python、Node 或 Rust；模型服务需自行准备，API 调用可能产生费用。工具执行需要模型支持 tool calling。
 
-飞书、知识库、视频登录和 WSL 终端都可以后续按需配置，参见 [首次使用](docs/GETTING_STARTED.md)。从源码运行请看 [开发指南](docs/DEVELOPMENT.md)；完整源码启动依赖 Atlas，目前需要已有源码或访问权限。
+飞书、知识库、视频登录和 WSL 终端都可以后续按需配置，参见 [首次使用](docs/GETTING_STARTED.md)。从源码运行请看 [开发指南](docs/DEVELOPMENT.md)；完整源码启动依赖公开的 Atlas 源码，开发与发布使用固定正式提交。
 
 ## 项目状态
 
