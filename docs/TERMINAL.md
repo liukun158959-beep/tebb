@@ -2,6 +2,10 @@
 
 顶部文字菜单「终端」在对话侧栏打开命令工作区，和文件、网页共用侧栏。组件按需加载。
 
+终端采用 VS Code 式紧凑面板：顶部标题工具栏、最近执行记录标签、命令草稿、实时 xterm 输出和状态栏。`Alt+N` 打开命令草稿，标签支持方向键/Home/End 切换；“新命令”不会立即执行或创建后台 shell，切换记录保留输入草稿。执行记录按钮展开完整历史，最多显示既有后端返回的 100 条记录。
+
+清屏仅清空当前 xterm 视图，不删除后端命令或输出；复制优先取选中文字，否则复制当前已加载的终端缓冲区，不宣称包含全部历史输出。停止仍以原命令编号请求取消、等待实际状态回执。浅深色通过产品主题映射到 xterm，布局适配窄侧栏。每条命令的新 Bash 与时限边界仍按下述规则，不把记录标签视为持久 shell 会话。
+
 ## 使用
 
 1. 沙箱自检通过后，输入 Bash 命令，点击「执行」或按 Ctrl+Enter。可以使用 `python3 -c "print(1 + 1)"`；运行 `bash --noprofile --norc` 可启动交互 Shell，时限仍生效。
@@ -34,6 +38,10 @@ Windows 使用本机 WSL 发行版（默认 Ubuntu）中的 `/usr/bin/python3` �
 工作文件和记录位于用户数据目录 `memory/terminal/`，源码默认在仓库下，发布版在 `%LOCALAPPDATA%/DeskCompanion`。工作目录满时，停止命令后可在对应 `workspaces` 子目录清理结果。本次源码已验证开发机已有 Ubuntu 环境；公开安装包需另行安装这些可选依赖。
 
 ## 验证
+
+AI 可直接复用认证 RPC：`terminal_status`（自检）、`terminal_start`（明确 command/session/cwd/timeout/request_id）、`terminal_list`（按 request_id 查重）、`terminal_read`（按 job_id/offset 读实际输出）、`terminal_input`（输入/尺寸）和 `terminal_cancel`（按 job_id 停止）。模型使用现有 `execute_command` / `read_terminal_output`，将 task_id、job_id、输入命令、原始输出、退出码关联保存。验证真实模型任务时，必须确认它实际调用工具、取得真实执行结果并正确报告失败/超时，不能以页面演示或假 RPC 成功代替。
+
+UI 交互用例 `client/tests/terminal.test.cjs` 覆盖真实组件的输入队列、停止回执、沙箱拒绝、项目授权、只生成解读草稿，以及清屏/复制/新草稿不触发执行或取消。真实模型与真实沙箱专项应分别报告通过、失败、跳过或未执行。
 
 ```powershell
 $env:DESK_TEST_SANDBOX='1'

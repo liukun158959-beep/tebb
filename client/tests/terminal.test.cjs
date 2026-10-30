@@ -20,13 +20,13 @@ const text = node => typeof node === 'string' ? node : (node.children || []).map
 const button = (view, label) => view.root.findAllByType('button').find(b => text(b) === label);
 function fixture(rpc) {
   global.ResizeObserver = class { observe() {} disconnect() {} };
-  const writes = [], handlers = [];
+  const writes = [], handlers = [], clears = [];
   const { TerminalPane } = load('terminal', { './api': { rpc }, './loading-text': { LoadingText: ({ text }) => React.createElement('span', {}, text) },
     '@xterm/addon-fit': { FitAddon: class { fit() {} } }, '@xterm/xterm': { Terminal: class {
-      loadAddon() {} open() {} reset() {} dispose() {} write(data) { writes.push(new TextDecoder().decode(data)); }
+      options = {}; getSelection() { return 'copied output'; } buffer = {active:{length:0}}; clear() { clears.push(true); } loadAddon() {} open() {} reset() {} dispose() {} write(data) { writes.push(new TextDecoder().decode(data)); }
       onData(callback) { handlers.push(callback); return { dispose() {} }; }
     } } });
-  return { TerminalPane, writes, handlers };
+  return { TerminalPane, writes, handlers, clears };
 }
 const job = { id: 'job1', request_id: 'r', session: 's', command: 'echo hi', cwd: '/workspace', state: 'running',
   owner: 'agent', task_id: 'task1', created: 1, ended: null, exit_code: null, error: '', output_bytes: 3, timeout: 60 };
@@ -95,5 +95,27 @@ test('manual terminal binds the authorized project and sends its grant revision'
   const sent=calls.find(c=>c.method==='terminal_start').args;
   assert.equal(sent.session,'project:E:/fixture/project');assert.equal(sent.workspace_revision,'grant-one');
   assert(text(view.toJSON()).includes('项目主目录'));
+  await act(async()=>view.unmount());
+});
+
+
+test('VS Code panel tools preserve execution and draft while clearing or copying presentation', async () => {
+  const calls=[]; let copied='';
+  global.navigator={clipboard:{writeText:async value=>{copied=value;}}};
+  const data=fixture(async(_i,method,args)=>{calls.push({method,args});
+    if(method==='terminal_list')return {jobs:[{...job,state:'succeeded',exit_code:0}]};
+    if(method==='terminal_read')return {job:{...job,state:'succeeded',exit_code:0},data:btoa('hi'),offset:2};
+    return {ready:true,distro:'Ubuntu',error:''};
+  });
+  let view;await act(async()=>{view=create(React.createElement(data.TerminalPane,{info,session:'s',attachments:[],onDraft(){},onPreview(){}}),{createNodeMock:()=>({focus(){}})});});
+  await act(async()=>view.root.findByProps({'aria-label':'要执行的命令'}).props.onChange({target:{value:'keep my draft'}}));
+  await act(async()=>view.root.findByProps({'aria-label':'清屏'}).props.onClick());
+  assert.equal(data.clears.length,1);assert(!calls.some(c=>c.method==='terminal_cancel'));
+  await act(async()=>view.root.findByProps({'aria-label':'复制终端输出'}).props.onClick());assert.equal(copied,'copied output');
+  await act(async()=>view.root.findByProps({'aria-label':'新建命令草稿'}).props.onClick());
+  assert.equal(view.root.findByProps({'aria-label':'要执行的命令'}).props.value,'keep my draft');
+  assert(!calls.some(c=>c.method==='terminal_start'));
+  await act(async()=>view.root.findByProps({'aria-label':'显示执行记录'}).props.onClick());
+  assert.equal(view.root.findByProps({'aria-label':'显示执行记录'}).props['aria-pressed'],true);
   await act(async()=>view.unmount());
 });
