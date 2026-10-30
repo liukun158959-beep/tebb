@@ -410,16 +410,20 @@ mod menu_tests {
     #[test]
     fn exited_duplicate_backend_reports_ownership_conflict() {
         let mut command = Command::new("python");
-        command.args(["-c", "raise SystemExit(73)"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        command.args(["-I", "-S", "-c", "raise SystemExit(73)"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000);
         }
-        let process = Mutex::new(Some(command.spawn().unwrap()));
-        let started = std::time::Instant::now();
-        assert!(wait_healthy(pick_free_port(), &process).unwrap_err().contains("已有运行实例"));
-        assert!(started.elapsed() < Duration::from_secs(4));
+        let mut child = command.spawn().unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(73));
+        let process = Mutex::new(Some(child));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert!(wait_healthy(listener.local_addr().unwrap().port(), &process).unwrap_err().contains("已有运行实例"));
+        // An already-exited backend must be reported before any health request.
+        assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
         assert!(!backend_exit_error(Some(1)).contains("已有运行实例"));
     }
 
