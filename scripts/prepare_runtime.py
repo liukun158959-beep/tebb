@@ -12,7 +12,7 @@ from pathlib import Path
 
 VERSION = "3.13.16"
 SHA256 = "97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297"
-ATLAS_REF = "47cf8e60af0a08c1e5c6b5465f310fdddf3dd404"
+ATLAS_REF = "fdafaecab45303314829f4f5af4fee10365c6dc0"
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -22,9 +22,15 @@ def run(*args, **kwargs):
 
 def export_atlas(source, destination):
     """Export only the pinned, committed source; shared by build and offline QA."""
-    archive = subprocess.check_output(["git", "-C", str(source), "archive", "--format=zip", ATLAS_REF, "atlas"])
+    archive = subprocess.check_output(["git", "-C", str(source), "archive", "--format=zip", ATLAS_REF, "atlas", "LICENSE", "THIRD_PARTY_NOTICES.md"])
     with zipfile.ZipFile(io.BytesIO(archive)) as package:
-        package.extractall(destination)
+        for name in package.namelist():
+            if name.startswith('atlas/'):
+                package.extract(name, destination)
+        notices = Path(destination) / 'atlas/licenses'
+        notices.mkdir(parents=True, exist_ok=True)
+        (notices / 'Atlas-MIT.txt').write_bytes(package.read('LICENSE'))
+        (notices / 'THIRD_PARTY_NOTICES.md').write_bytes(package.read('THIRD_PARTY_NOTICES.md'))
     return subprocess.check_output(["git", "-C", str(source), "rev-parse", ATLAS_REF], text=True).strip()
 
 

@@ -75,7 +75,7 @@ def run_tests(output):
 
 def smoke_zip(archive,destination):
     from scripts.release_audit import audit
-    report=audit(archive)
+    report=audit(archive,require_licenses=True)
     if destination.exists():raise ValueError('迁移验证必须使用新目录')
     with zipfile.ZipFile(archive) as package:package.extractall(destination)
     roots=list(destination.glob('tebb-*'))

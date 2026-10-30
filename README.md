@@ -124,7 +124,7 @@ tebb 原名知行 · ZhiXing；仓库已更名为 `tebb`，旧仓库链接由 Gi
 
 ## 许可证与致谢
 
-本仓库目前尚未添加 `LICENSE`，暂不声明具体开源许可证。Atlas 和第三方依赖的授权以各自项目为准；模型权重与 Live2D 形象素材不随仓库提供。
+tebb 自有代码采用 [MIT License](LICENSE)，允许商业使用、修改和再分发，需保留版权与许可声明。Atlas 同样采用 MIT；第三方代码、依赖和字体保留各自授权，见 [第三方声明](THIRD_PARTY_NOTICES.md)。MIT 不代替品牌、第三方角色形象、模型权重或其他外部素材的授权；个人 Live2D／Core 和权重不随公开发布包提供。
 
 感谢 Atlas 及本项目使用的 Tauri、React、xterm.js、bubblewrap、yt-dlp 等项目。
 

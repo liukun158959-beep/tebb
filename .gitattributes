@@ -1,0 +1,3 @@
+# Retain reviewed upstream notice bytes and their SOURCES.json SHA256 on Windows.
+licenses/** -text -whitespace
+licenses/SOURCES.json text eol=lf

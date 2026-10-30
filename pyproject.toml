@@ -2,6 +2,7 @@
 name = "desk-companion"
 version = "0.4.1"
 description = "tebb 个人 Agent 工作台：对话、记忆、任务与协作"
+license = {file = "LICENSE"}
 requires-python = ">=3.11"
 dependencies = [
     "httpx[socks]>=0.27,<1",

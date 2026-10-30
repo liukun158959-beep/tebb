@@ -29,7 +29,9 @@ python scripts/bundle_release.py --runtime-package C:/Build/tebb-runtime --outpu
 
 运行时取 [Python 官方 3.13.16 x64 嵌入包](https://www.python.org/downloads/release/python-31316/)，校验官方 SHA256 后解压。依赖版本固定在 `scripts/runtime-lock.txt`，包内记录 `runtime-packages.txt` 和 `runtime-provenance.json`。
 
-Atlas 取源码库的固定正式提交 `47cf8e60af0a08c1e5c6b5465f310fdddf3dd404`，包含统一模型契约、采样与思考回调、严格完成校验、工具增量、客户端所有权与延迟加载模型 SDK 接口。直接归档提交源码，不附加开发机补丁；`runtime-provenance.json` 记录真实 Atlas commit。
+Atlas 取源码库的固定正式提交 `fdafaecab45303314829f4f5af4fee10365c6dc0`，包含统一模型契约、采样与思考回调、严格完成校验、工具增量、客户端所有权、延迟加载模型 SDK 接口及 MIT／HumanEval 许可。直接归档提交源码与同提交的许可，不附加开发机补丁；`runtime-provenance.json` 记录真实 Atlas commit。
+
+打包阶段从实际 pnpm 生产依赖、Windows Cargo 锁定图和随包 Python 元数据生成 licenses/dependencies.json，保留完整许可证与来源。已安装包漏带的原许可使用 licenses/SOURCES.json 中按版本记录的上游快照；缺失前端／Rust 许可文本直接阻止打包。包根带 LICENSE、THIRD_PARTY_NOTICES.md，Atlas 原许可位于随包 atlas/licenses/，Python／字体原许可继续保留。可单独执行 python scripts/release_audit.py --require-licenses path/to/package.zip 核对候选许可材料。
 
 修改 Atlas 固定提交后，先通过与构建脚本共用的归档入口，验证真实归档源码及协作适配器的同一套行为契约（不构建完整运行时、不调用真实模型）：
 

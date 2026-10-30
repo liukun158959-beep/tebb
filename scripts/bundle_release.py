@@ -7,6 +7,7 @@ import subprocess
 import zipfile
 from pathlib import Path
 from release_audit import audit
+from license_inventory import generate as generate_licenses
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = json.loads((ROOT / "client/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))["version"]
@@ -33,7 +34,8 @@ def main():
         "version": VERSION,
         "desk_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
     }, indent=2) + "\n", encoding="utf-8")
-    audit(package)
+    print('Dependency notices:', generate_licenses(package))
+    audit(package, require_licenses=True)
     args.output.mkdir(parents=True, exist_ok=True)
     output = args.output / f"tebb-{VERSION}-windows-x64.zip"
     if output.exists():

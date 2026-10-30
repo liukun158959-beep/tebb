@@ -92,6 +92,8 @@ class AtlasRuntimeTests(unittest.TestCase):
             self.assertEqual(workspace.parent, Path(tempfile.gettempdir()).resolve())
             commit = settings['export_atlas'](source, workspace)
             self.assertEqual(commit, settings['ATLAS_REF'])
+            self.assertIn('liukun158959-beep', (workspace/'atlas/licenses/Atlas-MIT.txt').read_text('utf-8'))
+            self.assertIn('Copyright (c) OpenAI', (workspace/'atlas/licenses/HumanEval-MIT.txt').read_text('utf-8'))
             result = subprocess.run([
                 sys.executable, "-c", VERIFY,
             ], cwd=workspace, env={**os.environ, "PYTHONPATH": os.pathsep.join((str(workspace), str(root))), "PYTHONUTF8": "1"},
