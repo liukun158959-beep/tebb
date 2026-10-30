@@ -158,6 +158,25 @@ class LocalCalendarService:
         except Exception as exc:
             return dict(ok=False, stage='read', error=f'本地日程读取失败：{exc}')
 
+    def query(self, day):
+        """Read saved local facts only; never refresh or authorize remote changes."""
+        scope = dict(scope='local_snapshot', remote_refreshed=False)
+        try:
+            start, end = day_range(day)
+            page = self.load()
+            if not page['ok']:
+                return {**page, **scope}
+            events = [event for event in page['events']
+                      if datetime.fromisoformat(event['start']) < end
+                      and datetime.fromisoformat(event['end']) > start]
+            events.sort(key=lambda event: (datetime.fromisoformat(event['start']), event['event_id']))
+            fields = ('event_id', 'summary', 'start', 'end', 'sync_state', 'verification', 'checked_at')
+            return dict(ok=True, day=start.date().isoformat(), **scope, total=len(events),
+                        truncated=len(events)>100,
+                        events=[{key:event[key] for key in fields} for event in events[:100]])
+        except (ValueError, TypeError, KeyError) as exc:
+            return dict(ok=False, stage='read', **scope, error=f'本地日程查询未完成：{exc}')
+
     def result(self, operation, event=None):
         successful = operation['state'] in {'saved', 'synced', 'resolved_absent', 'retimed', 'observed', 'deleted'}
         return dict(ok=successful, operation=self.public(operation), event=event,

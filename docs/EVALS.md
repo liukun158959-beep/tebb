@@ -14,11 +14,11 @@ python scripts/eval_agent.py --live --output ../output/eval-live-new --case extr
 
 默认使用本机 SSE 假模型，验证真实任务和工作流执行链及判定规则，不是模型质量成绩。`--live` 才读取当前已配置的模型和网络策略并产生模型用量。评测使用新数据目录，不读取历史会话或重放旧任务；当前可执行案例不给模型飞书工具，也没有外部写入节点。模型 Key 只供子进程读取，正常结束及初始化异常均删除临时目录中的 `models.json`，终端摘要与报告不输出 Key。输出目录保留合成任务、请求响应、工具回执与报告，供本地诊断。
 
-输出目录必须不存在；不覆盖旧失败、自动重试或为成功筛选样本。`--case` 可重复，`--limit` 是本次最多案例数（1–20），`--timeout` 是每案超时（默认120秒，上限300），取消后最多再等待8秒；若未结束则记录timed_out、实际终止前状态与cancellation_confirmed=false，不冒充已经停止。普通案例最多2轮，模型传输关闭自动重试；工作流每案只有一个 AI 节点。这里只限制轮次和时间，**没有金额或输出 token 硬上限**；费用无法可靠估算时保持 `null`。没有执行器的案例是 `incomplete`，不是 `skip`；整套清单现阶段因此返回非零退出码。
+输出目录必须不存在；不覆盖旧失败、自动重试或为成功筛选样本。`--case` 可重复，`--limit` 是本次最多案例数（1–20），`--timeout` 是每案超时（默认120秒，上限300），取消后最多再等待8秒；若未结束则记录timed_out、实际终止前状态与cancellation_confirmed=false，不冒充已经停止。普通文本/路由案例最多2轮，本地日程工具案例最多4轮，逐案写入call_budget，根报告记录本次最大值；模型传输关闭自动重试，工作流每案只有一个 AI 节点。这里只限制轮次和时间，**没有金额或输出 token 硬上限**；费用无法可靠估算时保持 `null`。没有执行器的案例是 `incomplete`，不是 `skip`；整套清单现阶段因此返回非零退出码。
 
 ## 清单与证据
 
-机器清单位于 `desk_companion/agent_evals.py`，当前契约版本为2。前14项已接入执行器，期望 JSON 不传给真实模型，只传输入题目。3个 `route_decision_contract` 案仅验证产品真实路由规则的 JSON 决策，要求非空 text；`mode=clarify` 不代表持久主任务已进入 needs_input，报告中的 `user_task_state` 明确为 null。完整主任务澄清生命周期仍需后续执行器。工作流必须有 `workflow_ai` 成功回执并核对节点输出。
+机器清单位于 `desk_companion/agent_evals.py`，当前契约版本为3。前14项及 calendar_read_only 共15项已接入执行器，期望 JSON 不传给真实模型，只传输入题目。3个 `route_decision_contract` 案仅验证产品真实路由规则的 JSON 决策，要求非空 text；`mode=clarify` 不代表持久主任务已进入 needs_input，报告中的 `user_task_state` 明确为 null。完整主任务澄清生命周期仍需后续执行器。工作流必须有 `workflow_ai` 成功回执并核对节点输出。
 
 | 案例 | 固定任务/前置 | 机器核对证据 |
 | --- | --- | --- |
@@ -40,10 +40,21 @@ python scripts/eval_agent.py --live --output ../output/eval-live-new --case extr
 | chart_from_evidence | 尚需固定证据与图表执行器 | 未实现：需build_chart回执及可加载资产 |
 | coder_read_modify_test | 尚需隔离代码项目执行器 | 未实现：需read/write/run及原测试结果 |
 | clone_install_run | 尚需联网项目沙箱执行器 | 未实现：需拉取/依赖/HTTP健康/停止进程证据 |
-| calendar_read_only | 尚需隔离日程适配器 | 未实现：需结构化只读工具回执 |
+| calendar_read_only | 公开本地日历服务创建合成事件，仅授予本地日程读取 | 实际read_local_calendar成功回执、count/titles、读取前后快照SHA256相同；不代表飞书远端日程验收 |
 | cancel_active_tool | 尚需可取消工具执行器 | 未实现：需取消状态与实际进程结束证据 |
 
-后6项是明确保留的缺口，当前不调用、不宣称完成。已有 `scripts/probe_report.py` 提供专用研究/图表探针，`scripts/verify_workflow.py` 提供认证 WebSocket 工作流链验证；尚未将两者的前置、证据与统一质量判定整合，因此 #173 保持打开。未来只有真实探测到环境前置缺失才可记 `skip`，不能用环境标签掩盖执行器缺失。
+研究、图表、编码、clone/run、活动工具取消共5项仍为明确缺口，当前不调用、不宣称完成。已有 `scripts/probe_report.py` 提供专用研究/图表探针，`scripts/verify_workflow.py` 提供认证 WebSocket 工作流链验证；尚未将两者的前置、证据与统一质量判定整合，因此 #173 保持打开。未来只有真实探测到环境前置缺失才可记 `skip`，不能用环境标签掩盖执行器缺失。
+
+## 本地日程工具验收（#198）
+
+```powershell
+python scripts/eval_agent.py --output ../output/calendar-fixture-new --case calendar_read_only --limit 1
+python scripts/eval_agent.py --live --output ../output/calendar-live-new --case calendar_read_only --limit 1
+```
+
+通过公开 LocalCalendarService 在新工作区保存三条合成事件（两条目标日、一条其他日期），非tebb伙伴仅有“本地日程读取”权限。真实 TaskManager/worker 调用正常产品工具 read_local_calendar，并核对结果及全部本地事件读取前后哈希；旧版最小占位工作区已改用正常初始化入口。默认SSE替身会先请求该工具，再根据实际返回内容回答，不直接以期望答案代替工具回执。
+
+2026-10-31 单例真实模型验收通过：实际2次模型调用，read_local_calendar成功，返回目标日2项且顺序正确，前后日历快照相同；原报告保存在本地 `output/local-calendar-198-live/report.json`。该案例只核对本地保存事实/同步快照，未读取系统飞书日历。当前tebb角色仍自动拥有广泛业务工具，不能用tebb自由执行代替无外部写入的隔离验收；不授予“扩展只读工具”或继承旧业务任务来冒充合成日历。
 
 ## 报告契约 v1
 

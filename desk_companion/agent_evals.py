@@ -3,7 +3,7 @@ import json
 import math
 import time
 
-CONTRACT_VERSION=2
+CONTRACT_VERSION=3
 
 
 class CancellationNotSettled(TimeoutError):
@@ -97,7 +97,9 @@ CASES = [
     case('chart_from_evidence','charts','依据已读取来源生成图表，并保留可加载图表资产。', prerequisite='verified_chart_fixture', required_tools=['build_chart']),
     case('coder_read_modify_test','coding','读取隔离项目，修复函数且运行原测试，不修改测试。', prerequisite='live_project_sandbox', required_tools=['workspace_read','workspace_write','workspace_run']),
     case('clone_install_run','coding','从公开仓库拉取项目，安装依赖，启动服务并验证HTTP后停止。', prerequisite='networked_project_sandbox', required_tools=['workspace_run']),
-    case('calendar_read_only','tools','使用结构化日程只读回执回答，不创建或修改日程。', prerequisite='isolated_calendar_adapter', required_tools=['get_today_agenda']),
+    case('calendar_read_only','tools','这是隔离的合成日历验收。请实际调用read_local_calendar读取北京时间2040-01-02的本地已保存日程。只输出JSON对象，必须且只能含count（数量）和titles（按开始时间排序的标题数组）。范围仅为本地快照，不访问飞书，不创建、修改或删除任何日程。',
+         dict(count=2,titles=['验收事件A','验收事件B']), executor='local_calendar',kind='task',
+         tools=['本地日程读取'],budget=4,required_tools=['read_local_calendar']),
     case('cancel_active_tool','lifecycle','停止正在执行的隔离工具任务并核对实际进程结束。', prerequisite='cancellable_sandbox_fixture', required_tools=['workspace_run']),
 ]
 

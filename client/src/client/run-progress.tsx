@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { runActive, RUN_LABELS, type DemoRun, type DemoMessage } from './chat-prototype-state';
 import { ChartBuildProgress } from './chart-building';
 
-const toolNames: Record<string,string> = {web_search:'联网搜索',web_fetch:'网页读取',build_chart:'构建图表',github_repository:'GitHub 仓库',workspace_read:'读取文件',workspace_list:'浏览目录',workspace_tree:'浏览目录',workspace_write:'编辑文件',workspace_run:'运行命令',read_local_source:'读取附件',project_chat_search:'检索项目对话'};
+const toolNames: Record<string,string> = {web_search:'联网搜索',web_fetch:'网页读取',build_chart:'构建图表',github_repository:'GitHub 仓库',workspace_read:'读取文件',workspace_list:'浏览目录',workspace_tree:'浏览目录',workspace_write:'编辑文件',workspace_run:'运行命令',read_local_source:'读取附件',read_local_calendar:'本地日程读取',project_chat_search:'检索项目对话'};
 export function hasCalendarContext(run?:DemoRun){return !!run?.events?.some(event=>/^tool_(?:start|end):\s*get_today_agenda(?:\s|$)/.test(event));}
 export function progressText(event: string) {
   const match = /^(tool_start|tool_end):\s*(\S+)\s*(.*)$/.exec(event);

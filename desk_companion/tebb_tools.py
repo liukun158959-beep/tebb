@@ -2,6 +2,18 @@
 from .worker_rpc import call
 
 
+def local_calendar_spec(workspace_path):
+    """A separate local-only capability, independent of OS Feishu credentials."""
+    def query(arguments):
+        from .work_board import WorkBoardService
+        from .scheduling import SchedulingService
+        return SchedulingService(WorkBoardService(path=workspace_path)).local.query(arguments.get('day'))
+    return dict(type='function', function=dict(name='read_local_calendar',
+        description='按北京时间日期读取已保存的本地日程及同步快照。不会读取飞书实时日历、刷新远端或修改日程。最多返回100项，truncated为true时不能称列出全部。',
+        parameters=dict(type='object', properties={'day':dict(type='string',description='明确日期 YYYY-MM-DD')},
+                        required=['day'], additionalProperties=False)), implementation=query, read_only=True)
+
+
 def specs(request):
     run_id=request['collab_run']
     def spec(name,description,properties,required,implementation,readonly=True):

@@ -159,6 +159,9 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     from . import project_workspace as project
     from .local_sources import get as get_source, read_page
     extra = {}
+    if kind=='task' and '本地日程读取' in role.get('tools',[]):
+        from .tebb_tools import local_calendar_spec
+        extra['read_local_calendar'] = local_calendar_spec(request['collab_path'])
     if kind=='task' and '构建图表' in role.get('tools',[]):
         from .chart_building import SPEC as CHART_SPEC,build as build_chart
         extra['build_chart']={**CHART_SPEC,'read_only':False}

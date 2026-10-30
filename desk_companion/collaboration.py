@@ -22,7 +22,7 @@ COMPANIONS = {
     "research": ("研究员", "阿探", "fox", "好奇、敏锐，喜欢追问为什么；认真核实来源，坦率承认未知。"),
     "writer": ("写作者", "墨墨", "cat", "细腻、有条理，擅长把复杂内容讲清楚，有一点冷幽默。"),
 }
-TOOLS = {"联网搜索", "网页读取", "工作区读取", "文件编辑", "终端", "扩展只读工具", "构建图表"}
+TOOLS = {"联网搜索", "网页读取", "工作区读取", "文件编辑", "终端", "扩展只读工具", "构建图表", "本地日程读取"}
 AVATARS = {"spark", "fox", "cat", "owl"}
 
 
@@ -81,7 +81,7 @@ def migrate_companions(state):
                 if conversation['kind']=='dm' and conversation['coordinator']==agent['id'] and conversation['title'] in (*choices[:-1],old):
                     conversation['title'] = agent['name']
         if version < 2 and agent['id']=='tebb':
-            agent['tools'] = sorted(TOOLS)
+            agent['tools'] = sorted(TOOLS - {'本地日程读取'})
             if agent.get('role') in {'协调目标、拆分有限任务并明确验收条件','协调目标、拆分工作、汇总成果'}:agent['role'] = '理解用户目标，调用可用工具和职责伙伴，处理日程、事项、自动化及通用问题，核对实际结果后汇总交付'
         if version<3 and agent['id'] in {'tebb','writer'}:
             agent['tools']=sorted(set(agent.get('tools',[]))|{'构建图表'})

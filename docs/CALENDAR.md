@@ -107,3 +107,11 @@ pnpm --dir client build
 用户确认开放已结束普通个人日程的标题和时间编辑。身份、组织者与完整参与人仍须核实；多人、全天、重复、跨日和归档事项等现行限制继续。未同步本地编辑不触碰飞书，已同步或原生飞书编辑核对原值后更新同一事件；历史编辑仍适用短时长、冲突及未知结果核对规则。新建/首次同步过去日程仍拒绝；本轮不开放已结束日程删除。
 
 #152 验证：日程/本地保存/删除完整相关48项通过；真实浏览器经认证RPC修改2026-10-23的历史日程标题，保持原时间并确认删除仍禁用。完整前端172项、类型及生产构建通过。复制验收入口：`python -m unittest tests.test_schedule_week tests.test_local_calendar tests.test_calendar_writes -v`。本轮无真实飞书写入，浏览器远端为隔离TimeCalendar。
+
+## 伙伴的本地日程只读能力（#198）
+
+桌面伙伴设置可显式勾选“本地日程读取”；现有配置和默认伙伴不会因此自动获得该权限。普通伙伴只有该权限时，模型工具只有 `read_local_calendar({day:'YYYY-MM-DD'})`，没有创建、改期、删除或远端刷新。tebb现有业务工具保持原有范围，不把此细粒度权限当作对tebb全部业务权限的限制。
+
+该工具复用 `LocalCalendarService.query(day)`，以北京时间筛选跨日重叠事件并排序，返回 `scope:'local_snapshot'`、`remote_refreshed:false`、`events/total/truncated`。最多100条；截断时不能声称列出全部。数据包括本地保存事实及最后同步快照，不代表飞书实时状态；空列表是合法结果，无效日期或读取失败保留结构化错误。工具不接收工作区路径，不能越过当前任务所属工作区。
+
+可直接在既有服务调用 `local.query('2040-01-02')`；认证UI读取仍沿用 `load_local_calendar`。行为回归：`python -m unittest discover -s tests -p test_local_calendar_tools.py -v`。模型验收见 [EVALS.md](EVALS.md#本地日程工具验收198)：合成数据、真实任务进程、真实工具回执、读取前后快照，显式 `--live` 才消耗模型用量。
