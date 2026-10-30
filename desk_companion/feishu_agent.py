@@ -508,6 +508,8 @@ class FeishuAgent:
             self._menu_thread.join(timeout=1)
         if self._identity_retry and self._identity_retry is not threading.current_thread():
             self._identity_retry.join(timeout=1)
+        if self._worker and self._worker is not threading.current_thread():
+            self._worker.join(timeout=1)
         return self.status()
 
     def _consume_menu(self):

@@ -30,6 +30,27 @@ def event(message="om_1", text="打个招呼", **changes):
 
 
 class FeishuAgentTests(unittest.TestCase):
+    def test_stop_waits_for_inflight_worker_database_cleanup(self):
+        entered, release, stopped = threading.Event(), threading.Event(), threading.Event()
+        def work():
+            with self.gateway._inbox.connect() as db:
+                entered.set()
+                release.wait(3)
+                db.execute('SELECT 1')
+        self.gateway._worker = threading.Thread(target=work)
+        self.gateway._worker.start()
+        self.assertTrue(entered.wait(2))
+        closing = threading.Thread(target=lambda: (self.gateway.stop(False), stopped.set()))
+        closing.start()
+        try:
+            self.assertFalse(stopped.wait(.1), 'stop returned with the database still in use')
+        finally:
+            release.set()
+            closing.join(2)
+            self.gateway._worker.join(2)
+        self.assertTrue(stopped.is_set())
+        self.assertFalse(self.gateway._worker.is_alive())
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
