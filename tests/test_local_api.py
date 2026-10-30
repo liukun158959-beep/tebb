@@ -1065,10 +1065,10 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             return dict(message=dict(role='assistant', content='RPC summary'),
                         usage=dict(prompt_tokens=10, completion_tokens=5))
 
-        async def rpc(method, **args):
+        async def rpc(method, _timeout=5, **args):
             async with connect(self.url, proxy=None) as ws:
                 await ws.send(json.dumps(dict(type='rpc', id=method, method=method, args=args)))
-                envelope = json.loads(await asyncio.wait_for(ws.recv(), 30 if method == 'compress_context' else 5))['result']
+                envelope = json.loads(await asyncio.wait_for(ws.recv(), _timeout))['result']
             self.assertTrue(envelope['ok'], envelope)
             return envelope['result']
 
@@ -1077,7 +1077,9 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             stack.enter_context(patch.object(self.host.agent.llm, 'chat', side_effect=model))
             for method in ('board_compress_context', 'prepare_context', 'board_memory'):
                 stack.enter_context(patch.object(self.host, method, side_effect=AssertionError('inherited method'), create=True))
-            pending = asyncio.create_task(rpc('compress_context'))
+            # The test deliberately holds this model while checking other RPCs
+            # and a real worker. Measure the reply deadline only after release.
+            pending = asyncio.create_task(rpc('compress_context', _timeout=None))
             try:
                 self.assertTrue(await asyncio.to_thread(entered.wait, 5))
                 self.assertTrue((await rpc('load_memory'))['ok'])
@@ -1112,7 +1114,7 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(memory.list_chat(sid), before)
             finally:
                 release.set()
-            result = await pending
+            result = await asyncio.wait_for(pending, 5)
         self.assertTrue(result['ok'], result)
         self.assertEqual(result['context']['summary'], 'RPC summary')
         self.assertFalse(self.host.conversation.running)
