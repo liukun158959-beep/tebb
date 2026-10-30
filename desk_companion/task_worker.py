@@ -49,6 +49,10 @@ def main():
             from .news import execute
             execute(request, emit)
             return
+        if request.get("workflow") == "automation_graph":
+            from .workflow_worker import execute
+            execute(request, emit)
+            return
         if request.get("workflow") == "video_note":
             from .video_analysis import execute, failure_details
             try:

@@ -27,6 +27,15 @@ class AutomationService:
         self._last_tick = 0
         self._booted = False
         self._stopping = threading.Event()
+        self._workflows = None
+
+    @property
+    def workflows(self):
+        with self._lock:
+            if self._workflows is None:
+                from .workflows import WorkflowService
+                self._workflows = WorkflowService(self.tasks)
+            return self._workflows
 
     def _call(self, action, job_id=''):
         try:
@@ -44,6 +53,11 @@ class AutomationService:
             with self._lock:
                 self._admit()
                 self._idle(str(payload.get('id') or '') if isinstance(payload, dict) else '')
+                if isinstance(payload, dict) and payload.get('action') == 'workflow':
+                    from .workflow_graph import WRITES
+                    definition = self.workflows.store.definition(payload.get('workflow_id', ''), payload.get('workflow_version', ''))
+                    if payload.get('enabled') and any(n['kind'] in WRITES for n in definition['graph']['nodes']) and payload.get('workflow_write_version') != definition['version']:
+                        raise RuntimeError('启用定时发布前须确认该版本的飞书目标。')
                 if isinstance(payload,dict) and payload.get('action')=='tebb_task':
                     if not self.execution:raise RuntimeError('通用AI执行服务未连接。')
                     collaboration=self.execution()
@@ -97,6 +111,8 @@ class AutomationService:
         execution = dict(id=uuid.uuid4().hex, action=job['action'], doc=job['doc'], phase='queued',
                          accepted_at=a._now().isoformat(timespec='seconds'),
                          **({k:job.get(k,'') for k in ('goal','project_id','agent_id')} if job['action']=='tebb_task' else {}))
+        if job['action'] == 'workflow':
+            execution.update({k: job.get(k, '') for k in ('workflow_id', 'workflow_version', 'workflow_write_version')})
         job.update(last_result='queued', last_error='', alert_seen=True, execution=execution)
         return deepcopy(execution)
 
@@ -190,7 +206,7 @@ class AutomationService:
         with self._lock:
             if self._stopping.is_set() or not self._queued or self._worker is not None:
                 return
-            if self.busy() and not {'ai_news','tebb_task'}.intersection(self._queued):
+            if self.busy() and not {'ai_news','tebb_task','workflow'}.intersection(self._queued):
                 return
             self._worker = threading.Thread(target=self._loop, daemon=True, name='automation')
             self._worker.start()
@@ -201,7 +217,7 @@ class AutomationService:
             while not self._stopping.is_set():
                 busy = self.busy() or deferred
                 with self._lock:
-                    action = next((k for k in a.ACTION_ORDER if k in self._queued and (not busy or k in {'ai_news','tebb_task'})), '')
+                    action = next((k for k in a.ACTION_ORDER if k in self._queued and (not busy or k in {'ai_news','tebb_task','workflow'})), '')
                     if not action:
                         return
                     job_id = self._queued.pop(action)
@@ -246,6 +262,9 @@ class AutomationService:
                 return
         try:
             action = execution['action']
+            if action == 'workflow':
+                self._start_workflow(job_id, execution)
+                return
             if action == 'tebb_task':
                 self._start_agent(job_id,execution)
                 return
@@ -269,6 +288,39 @@ class AutomationService:
             result = dict(ok=False, stage='execution', change_state='unconfirmed',
                           error=f'执行结果未确认：{exc}。请核对记录和远端目标，不要直接重发。')
         self._finish(job_id, result, phase='unconfirmed' if action=='tebb_task' and result.get('change_state')=='unconfirmed' else 'completed')
+
+    def _start_workflow(self, job_id, execution):
+        result = self.workflows.operation('start', dict(id=execution['workflow_id'], version=execution['workflow_version'],
+            request_id='scheduled:' + execution['id'], mode='full', confirm_writes=execution['workflow_write_version'] == execution['workflow_version']))
+        if not result.get('ok'):
+            self._finish(job_id, dict(ok=False, error=result.get('error', '工作流未启动。')))
+            return
+        run = result['run']
+        with self._lock, a.transaction():
+            store = a.load_store()
+            job = a._find(store, job_id)
+            execution.update(workflow_run=run['id'], task_id=run['task_id'])
+            job['execution'] = deepcopy(execution)
+            a.save_store(store)
+        def watch():
+            try:
+                while not self._stopping.wait(.5):
+                    current = self.workflows.observe(run['id'])
+                    if current['state'] in {'queued', 'running', 'waiting_approval', 'paused'}:
+                        continue
+                    self._finish(job_id, dict(ok=current['state'] == 'completed', workflow_run=run['id'], error=current['error']),
+                                 phase='unconfirmed' if current['state'] == 'unknown' else 'completed', task_id=current['task_id'])
+                    return
+            except Exception:
+                self._finish(job_id, dict(ok=False, workflow_run=run['id'], error='工作流观察中断，请按原执行编号核对，不要重发。'), phase='unconfirmed')
+            finally:
+                with self._lock:
+                    self._monitors.discard(threading.current_thread())
+                self._notify()
+        thread = threading.Thread(target=watch, daemon=True, name='automation-workflow')
+        with self._lock:
+            self._monitors.add(thread)
+        thread.start()
 
     def _start_agent(self,job_id,execution):
         if not self.execution:raise RuntimeError('通用AI执行服务未连接。')

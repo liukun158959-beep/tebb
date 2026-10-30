@@ -15,9 +15,10 @@ from .memory import TZ
 from .resource_lock import ResourceLock
 
 CONFIG_NAME = "automation_jobs.json"
-ACTIONS = ("retro_gen", "retro_write", "ai_news", "tebb_task")
+ACTIONS = ("retro_gen", "retro_write", "ai_news", "tebb_task", "workflow")
 ACTION_ORDER = ACTIONS
 ACTION_LABELS = {
+    "workflow": "执行工作流",
     "tebb_task": "交给 tebb 执行目标",
     "retro_gen": "生成本周复盘",
     "retro_write": "覆盖写入飞书",
@@ -205,9 +206,9 @@ def upsert_job(payload: dict) -> dict:
                 raise RuntimeError("定时写入飞书必须绑一篇文档的 url 或 token。")
         elif doc:
             raise RuntimeError("只有覆盖写入飞书才能填文档。")
-        fields = _goal_fields(payload) if action=='tebb_task' else {}
+        fields = _goal_fields(payload) if action=='tebb_task' else _workflow_fields(payload) if action == 'workflow' else {}
         if cadence=='once':
-            if action!='tebb_task':raise RuntimeError('一次性仅支持通用AI目标。')
+            if action not in {'tebb_task', 'workflow'}:raise RuntimeError('一次性仅支持通用AI目标或工作流。')
             if datetime.fromisoformat(fields['date']+'T%02d:%02d'%(hour,minute)).replace(tzinfo=TZ)<=_now() and enabled:
                 raise RuntimeError('一次性执行时间须晚于当前时间。')
         now = _now()
@@ -294,7 +295,7 @@ def has_alert() -> bool:
 
 def _job_payload(job: dict) -> dict:
     return {**{key: job[key] for key in JOB_KEYS}, "last_task_id": job.get("last_task_id", ""),
-            **{k:job[k] for k in ("goal","project_id","agent_id","date","operation_id","operation_fingerprint") if k in job},
+            **{k:job[k] for k in ("goal","project_id","agent_id","date","operation_id","operation_fingerprint","workflow_id","workflow_version","workflow_write_version") if k in job},
             **({"execution": job["execution"]} if "execution" in job else {})}
 
 
@@ -329,7 +330,7 @@ def _parse_job(item, path: Path, index: int) -> dict:
         raise RuntimeError(f"{path} 的 jobs[{index}].enabled 必须是 true/false。")
     if cadence not in {"once", "daily", "weekly"}:
         raise RuntimeError(f"{path} 的 jobs[{index}].cadence 只能是 daily 或 weekly。")
-    if cadence=='once' and action!='tebb_task':raise RuntimeError('一次性仅支持通用AI目标。')
+    if cadence=='once' and action not in {'tebb_task', 'workflow'}:raise RuntimeError('一次性仅支持通用AI目标或工作流。')
     weekdays = _parse_weekdays(item["weekdays"], cadence, where=f"{path} 的 jobs[{index}]")
     if type(hour) is not int or hour < 0 or hour > 23:
         raise RuntimeError(f"{path} 的 jobs[{index}].hour 必须是 0 到 23 的整数。")
@@ -370,9 +371,26 @@ def _parse_job(item, path: Path, index: int) -> dict:
         "alert_seen": alert_seen,
         "last_task_id": str(item.get("last_task_id", "")),
         **(_goal_fields(item) if action=="tebb_task" else {}),
+        **(_workflow_fields(item) if action=="workflow" else {}),
         **({k:item.get(k,"") for k in ("operation_id","operation_fingerprint")} if item.get("operation_id") else {}),
         **({"execution": _parse_execution(item["execution"])} if "execution" in item else {}),
     }
+
+
+def _workflow_fields(payload):
+    import re
+    result = {k: payload.get(k, '') for k in ('workflow_id', 'workflow_version', 'workflow_write_version', 'date')}
+    if any(not isinstance(v, str) for v in result.values()) or not result['workflow_id']:
+        raise RuntimeError('请选择已保存的工作流。')
+    if not re.fullmatch(r'[0-9a-f]{64}', result['workflow_version']):
+        raise RuntimeError('工作流须绑定明确版本。')
+    if result['workflow_write_version'] and result['workflow_write_version'] != result['workflow_version']:
+        raise RuntimeError('发布目标的确认版本与工作流不同，请重新确认。')
+    if payload.get('cadence') == 'once':
+        from datetime import date
+        if date.fromisoformat(result['date']).isoformat() != result['date']:
+            raise RuntimeError('一次性日期格式无效。')
+    return result
 
 
 def _goal_fields(payload):

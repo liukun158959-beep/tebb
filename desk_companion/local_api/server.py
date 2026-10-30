@@ -62,7 +62,7 @@ RPC_METHODS = frozenset({
     "export_notebook_markdown", "export_notebook_feishu", "summarize_notebook",
     "open_notebook_file", "reveal_notebook_file", "delete_notebook_file",
     "new_chat_session", "switch_chat_session", "clear_chat",
-    "list_automation_jobs", "save_automation_job",
+    "list_automation_jobs", "save_automation_job", "automation_workflow",
     "delete_automation_job", "run_automation_job",
     "load_news", "save_news_settings", "check_news_targets", "run_news",
 })
@@ -186,7 +186,7 @@ def _dispatch(method: str, args: dict, preview=False) -> dict:
                       "add_knowledge", "delete_knowledge", "rebuild_knowledge", "ask_knowledge",
                       "load_board", "create_agenda", "delete_agenda", "delete_task",
                       "generate_week_review", "write_today_summary_doc", "write_week_review_doc",
-                      "list_automation_jobs", "save_automation_job", "delete_automation_job", "run_automation_job",
+                      "list_automation_jobs", "save_automation_job", "delete_automation_job", "run_automation_job", "automation_workflow",
                       "load_collaboration", "collaboration_action", "get_report_chart", "project_workspace", "check_updates", "list_agent_tasks", "get_agent_task", "cancel_agent_task", "continue_agent_task", "save_agent_task_settings", "load_task_progress",
                       "list_debug_calls", "get_debug_call", "set_debug_recording", "explain_debug_call", "load_context_debug", "save_context_capacity",
                       "load_model_network", "save_model_network", "load_search_settings", "save_search_settings", "test_search",

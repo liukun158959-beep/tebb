@@ -1,7 +1,8 @@
 import { usePageActive } from "./page-stack";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { rpc, type BackendInfo } from "./api";
 import { Markdown } from "./Markdown";
+const WorkflowPane = lazy(() => import('./workflow-editor').then(module => ({default:module.WorkflowPane})));
 
 type Settings = { profile: string; wiki_url: string; chat_id: string; base_url: string; base_token: string; table_id: string;
   topics: string[]; lookback_days: number; highlights: number };
@@ -19,6 +20,7 @@ const active = (task?: Task) => task && ["queued", "running", "cancelling"].incl
 const jobActive = (job: Job) => job.active || ['queued', 'running','needs_input'].includes(job.last_result || '');
 
 export function AutomationPane({ info, debug = false, onOpenExecution }: { info: BackendInfo | null; debug?: boolean; onOpenExecution?:(conversation:string)=>void }) {
+  const [workflowView,setWorkflowView]=useState(false);
   const pageActive = usePageActive();
   const [form, setForm] = useState<Settings | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
@@ -86,6 +88,8 @@ export function AutomationPane({ info, debug = false, onOpenExecution }: { info:
   const inputClass = "mt-1 block w-full rounded-lg bg-secondary px-3 py-2 text-sm text-foreground";
   const buttonClass = "rounded-lg border border-border px-3 py-2 text-sm hover:bg-secondary disabled:opacity-40";
   return <section className="mt-8 rounded-xl border border-border bg-card/60 p-5" data-testid="automation-pane">
+    <nav className="mb-5 flex gap-2" aria-label="自动化方式"><button className={buttonClass} aria-pressed={!workflowView} onClick={()=>setWorkflowView(false)}>已有自动化</button><button className={buttonClass} aria-pressed={workflowView} onClick={()=>setWorkflowView(true)}>可视化工作流</button></nav>
+    {workflowView?<Suspense fallback={<p>正在打开工作流画布…</p>}><WorkflowPane info={info} debug={debug}/></Suspense>:<>
     <h2 className="text-lg font-semibold">大厂开源与技术动向</h2>
     <p className="mt-2 text-sm text-muted-foreground">每天精选 5 条国内外大厂的 AI 开源项目与技术动向。群卡片简述，知识库文档展开技术要点、实践价值和局限，英文标题附中文译名。tebb 需保持运行。</p>
     {form && <details className="mt-4" open={!form.wiki_url || !form.base_url}>
@@ -131,7 +135,8 @@ export function AutomationPane({ info, debug = false, onOpenExecution }: { info:
       <p className="mt-2 text-xs text-muted-foreground">先检查首轮预览，再开启自动推送。排队、执行和收尾期间不能修改、启停或删除该定时；正在运行的资讯任务可单独停止。</p>
       <div className="mt-3 space-y-2">{jobs.map(j => <div key={j.id} className="flex flex-wrap items-center gap-2 rounded-lg bg-secondary/60 p-3 text-sm">
         <span className="flex-1">{j.name} · {j.schedule_text} · {j.enabled ? '已启用' : '已停用'} · {states[j.last_result || ''] || '尚未执行'}</span>
-        <button className={buttonClass} disabled={busy || debug || jobActive(j)} onClick={() => setJob(j)}>修改</button>
+        <button className={buttonClass} disabled={busy || debug || jobActive(j) || j.action==='workflow'} onClick={() => setJob(j)}>修改</button>
+        {j.action==='workflow'&&<button className={buttonClass} disabled={busy||debug||jobActive(j)} onClick={()=>void call('save_automation_job',{payload:{...j,enabled:!j.enabled}})}>{j.enabled?'停用工作流定时':'启用工作流定时'}</button>}
         <button className={buttonClass} disabled={busy || debug || jobActive(j)} onClick={() => void call("run_automation_job", { job_id: j.id })}>{j.action === 'ai_news' ? '立即发布' : '立即执行'}</button>
         <button className={buttonClass} disabled={busy || debug || jobActive(j)} onClick={() => void call("delete_automation_job", { job_id: j.id })}>删除定时</button>
         {j.action==='tebb_task'&&j.execution?.phase==='unconfirmed'&&<button className={buttonClass} disabled={busy||jobActive(j)} onClick={()=>void call('check_automation_execution',{job_id:j.id})}>核对原AI执行</button>}{j.execution?.run_id&&<button className={buttonClass} onClick={()=>j.execution?.conversation&&onOpenExecution?.(j.execution.conversation)}>查看 AI 执行</button>}{j.last_error && <p className="w-full text-xs text-red-500">{j.last_error}</p>}
@@ -149,5 +154,6 @@ export function AutomationPane({ info, debug = false, onOpenExecution }: { info:
       <div className="mt-3 flex gap-2"><button className={buttonClass} disabled={busy || debug || jobs.some(j => j.id === job.id && jobActive(j))} onClick={() => void call("save_automation_job", { payload: job })}>保存定时任务</button><button className={buttonClass} onClick={() => setJob(blankJob())}>新增定时任务</button></div>
     </details>
     {notice && <p className="mt-3 text-sm text-green-500">{notice}</p>}{error && <p className="mt-3 text-sm text-red-500" role="alert">{error}</p>}
+    </>}
   </section>;
 }

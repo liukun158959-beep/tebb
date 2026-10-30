@@ -24,6 +24,9 @@ class Bridge:
     def check_automation_execution(self, job_id):
         return self._host.automation.check_agent_execution(job_id)
 
+    def automation_workflow(self, operation, payload=None):
+        return self._host.automation.workflows.operation(operation, payload)
+
     def tebb_operation(self, run_id, tool, args):
         from .tebb_operations import execute
         return execute(self._host, run_id, tool, args)

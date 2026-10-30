@@ -195,19 +195,11 @@ def create_document(run, target, save, emit):
 
 def single_record_id(value):
     """Decode one Base v3 receipt, retaining legacy single-record responses."""
-    if not isinstance(value, dict):
-        raise PublishError("资讯表记录回执格式无效，未重复写入。")
-    if "record_id_list" in value:
-        ids = value["record_id_list"]
-        if not isinstance(ids, list) or any(not isinstance(rid, str) or not rid.strip() for rid in ids):
-            raise PublishError("资讯表记录 ID 列表无效，未重复写入。")
-        if len(ids) > 1:
-            raise PublishError("资讯表返回多条记录 ID，请先核实，未重复写入。")
-        return ids[0] if ids else ""
-    rid = value.get("id") or value.get("record_id") or ""
-    if not isinstance(rid, str) or (rid and not rid.strip()):
-        raise PublishError("资讯表记录 ID 无效，未重复写入。")
-    return rid
+    from .lark_receipts import single_record_id as decode
+    try:
+        return decode(value)
+    except ValueError as exc:
+        raise PublishError('资讯表' + str(exc) + '未重复写入。') from None
 
 
 def find_record(cfg, token, key):
