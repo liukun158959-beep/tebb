@@ -34,7 +34,8 @@ export function TerminalPane(props: { info: BackendInfo | null; session: string;
   const [showHistory, setShowHistory] = useState(false);
   const editor = useRef<HTMLTextAreaElement>(null);
   const [status, setStatus] = useState<Status | null>(null), [distro, setDistro] = useState("Ubuntu");
-  const [jobs, setJobs] = useState<TerminalJob[]>([]), [selected, setSelected] = useState("");
+  // null permits initial history selection; an empty string is an explicit command draft.
+  const [jobs, setJobs] = useState<TerminalJob[]>([]), [selected, setSelected] = useState<string | null>(null);
   const [command, setCommand] = useState(""), [cwd, setCwd] = useState("/workspace"), [limit, setLimit] = useState(60);
   const [busy, setBusy] = useState(""), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [all, setAll] = useState(false), [files, setFiles] = useState<{ name: string; bytes: number }[]>([]), [showFiles, setShowFiles] = useState(false);
@@ -48,7 +49,7 @@ export function TerminalPane(props: { info: BackendInfo | null; session: string;
   }
   async function refreshJobs() {
     const value = await call<{ jobs: TerminalJob[] }>("list");
-    if (alive.current) { setJobs(value.jobs); setSelected(id => id || value.jobs.find(j => j.session === sessionRef.current)?.id || ""); }
+    if (alive.current) { setJobs(value.jobs); setSelected(id => id ?? value.jobs.find(j => j.session === sessionRef.current)?.id ?? ""); }
     return value.jobs;
   }
   async function action(label: string, operation: () => Promise<void>) {
@@ -111,7 +112,7 @@ export function TerminalPane(props: { info: BackendInfo | null; session: string;
     if (selected && info && !debug) void poll();
     return () => { stopped = true; clearTimeout(timer); };
   }, [selected, info?.port, info?.token, debug]);
-  useEffect(() => { setFiles([]); setShowFiles(false); setSelected(""); }, [session]);
+  useEffect(() => { setFiles([]); setShowFiles(false); setSelected(null); }, [session]);
   async function start() {
     if (busy || !command.trim()) return;
     setBusy("正在提交命令…"); setError(""); setNotice("正在等待沙箱启动回执。"); const id = requestId();
@@ -164,7 +165,7 @@ export function TerminalPane(props: { info: BackendInfo | null; session: string;
     <div className="terminal-command"><textarea ref={editor} aria-label="要执行的命令" value={command} spellCheck={false} rows={2} placeholder={'输入 Bash 命令，例如 python3 -c "print(1 + 1)"'} onChange={e => setCommand(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.nativeEvent.isComposing) { e.preventDefault(); if (status?.ready && !ownRunning) void start(); } }} />
       <div className="terminal-command-meta"><label>目录<input aria-label="命令工作目录" value={cwd} onChange={e => setCwd(e.target.value)} /></label><label>时限<select aria-label="命令时限" value={limit} onChange={e => setLimit(Number(e.target.value))}>{[15, 30, 60, 120, 300].map(n => <option key={n} value={n}>{n} 秒</option>)}</select></label><button className="desk-menu-item terminal-run" disabled={!!busy || !status?.ready || !command.trim() || ownRunning} onClick={() => void start()}>执行</button></div>
     </div>
-    <div className="terminal-history" hidden={!showHistory}><select aria-label="命令执行记录" value={selected} onChange={e => setSelected(e.target.value)}><option value="">选择执行记录</option>{jobs.filter(j => all || j.session === session).map(j => <option key={j.id} value={j.id}>{j.owner === "agent" ? "Agent" : "手动"} · {labels[j.state] || j.state} · {j.command.slice(0, 55)}</option>)}</select><label><input type="checkbox" checked={all} onChange={e => { setAll(e.target.checked); if (!e.target.checked && job?.session !== session) setSelected(""); }} />全部会话</label></div>
+    <div className="terminal-history" hidden={!showHistory}><select aria-label="命令执行记录" value={selected ?? ""} onChange={e => setSelected(e.target.value)}><option value="">选择执行记录</option>{jobs.filter(j => all || j.session === session).map(j => <option key={j.id} value={j.id}>{j.owner === "agent" ? "Agent" : "手动"} · {labels[j.state] || j.state} · {j.command.slice(0, 55)}</option>)}</select><label><input type="checkbox" checked={all} onChange={e => { setAll(e.target.checked); if (!e.target.checked && job?.session !== session) setSelected(""); }} />全部会话</label></div>
     <div className="terminal-job-meta" role="status">{job ? <><span>{runningJob(job) ? <LoadingText text={labels[job.state]} /> : labels[job.state]}</span><span>{job.owner === "agent" ? `Agent · ${job.task_id.slice(0, 8) || "直接调用"}` : "手动命令"}</span><span>{job.exit_code === null ? `${job.timeout} 秒上限` : `退出码 ${job.exit_code}`}</span>{runningJob(job) && <button className="desk-menu-item" disabled={!!busy || job.state === "stopping"} onClick={() => void action("正在停止命令…", async () => { await call("cancel", { job_id: job.id }); const observed=(await refreshJobs()).find(item => item.id === job.id); setNotice(observed && !runningJob(observed) ? `命令已结束，退出码：${observed.exit_code ?? "未返回"}。` : "已请求停止，正在等待进程退出回执。"); })}>停止命令</button>}</> : "Ctrl+Enter 执行；运行后可点击终端输入。"}</div>
     <div ref={box} className="terminal-screen" data-terminal-screen />
     {job?.error && <p className="terminal-error" role="alert">{job.error}</p>}

@@ -119,3 +119,44 @@ test('VS Code panel tools preserve execution and draft while clearing or copying
   assert.equal(view.root.findByProps({'aria-label':'显示执行记录'}).props['aria-pressed'],true);
   await act(async()=>view.unmount());
 });
+
+
+test('explicit command draft remains selected across periodic history polling', async () => {
+  let lists=0; const data=fixture(async(_info,method,args)=>{
+    if(method==='terminal_list'){lists++;return{jobs:[{...job,state:'succeeded',exit_code:0}]};}
+    if(method==='terminal_read')return{job:{...job,state:'succeeded',exit_code:0},data:'',offset:0};
+    return{ready:true,distro:'Ubuntu',error:''};
+  });
+  let view;
+  try {
+    await act(async()=>{view=create(React.createElement(data.TerminalPane,{info,session:'s',attachments:[],onDraft(){},onPreview(){}}),{createNodeMock:()=>({focus(){}})});});
+    assert.equal(view.root.findByProps({'aria-label':'命令执行记录'}).props.value,'job1');
+    await act(async()=>view.root.findByProps({'aria-label':'新建命令草稿'}).props.onClick());
+    await act(async()=>new Promise(resolve=>setTimeout(resolve,1100)));
+    assert(lists>=2,'periodic refresh must have occurred');
+    assert.equal(view.root.findByProps({'aria-label':'命令执行记录'}).props.value,'');
+    const draft=view.root.findAllByProps({role:'tab'}).find(tab=>text(tab).includes('新命令'));
+    assert.equal(draft.props['aria-selected'],true);
+  } finally { if(view)await act(async()=>view.unmount()); }
+});
+
+
+test('session change selects only the new session history after refresh', async () => {
+  const history=[{...job,state:'succeeded',exit_code:0},{...job,id:'job2',session:'t',state:'succeeded',exit_code:0}];
+  const data=fixture(async(_info,method,args)=>{
+    if(method==='project_workspace')return{workspace:null};
+    if(method==='terminal_list')return{jobs:history};
+    if(method==='terminal_read')return{job:history.find(j=>j.id===args.job_id),data:'',offset:0};
+    return{ready:true,distro:'Ubuntu',error:''};
+  });
+  const props={info,session:'s',attachments:[],onDraft(){},onPreview(){}};
+  let view;
+  try {
+    await act(async()=>{view=create(React.createElement(data.TerminalPane,props));});
+    assert.equal(view.root.findByProps({'aria-label':'命令执行记录'}).props.value,'job1');
+    await act(async()=>view.update(React.createElement(data.TerminalPane,{...props,session:'t'})));
+    assert.equal(view.root.findByProps({'aria-label':'命令执行记录'}).props.value,'');
+    await act(async()=>new Promise(resolve=>setTimeout(resolve,1100)));
+    assert.equal(view.root.findByProps({'aria-label':'命令执行记录'}).props.value,'job2');
+  } finally {if(view)await act(async()=>view.unmount());}
+});
