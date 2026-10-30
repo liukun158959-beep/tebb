@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -70,6 +71,57 @@ emit('result',r['text'])
 
 
 class TaskTests(unittest.TestCase):
+    def test_shutdown_reports_pending_reader_without_releasing_session(self):
+        entered, release = threading.Event(), threading.Event()
+        original = self.manager.event
+        def event(task, kind, data, **kwargs):
+            if kind == 'token' and not entered.is_set():
+                with self.manager.db() as connection:
+                    connection.execute('SELECT id FROM tasks').fetchall()
+                    entered.set()
+                    if not release.wait(15): raise TimeoutError('reader barrier not released')
+            return original(task, kind, data, **kwargs)
+        self.manager.event = event
+        self.manager.settings.update(call_timeout=.2, task_timeout=.3)
+        try:
+            ident = self.manager.submit('stream', 'pending-reader-database')
+            self.assertTrue(entered.wait(5))
+            self.assertEqual(self.manager.wait(ident)['state'], 'timed_out')
+            started = time.monotonic()
+            result = self.manager.shutdown()
+            self.assertLess(time.monotonic() - started, 6)
+            self.assertFalse(result['complete'])
+            self.assertEqual(result['pending_task_ids'], [ident])
+            self.assertIn(ident, self.manager.active)
+        finally:
+            release.set()
+            self.assertTrue(self.manager.shutdown()['complete'])
+
+    def test_shutdown_waits_for_reader_database_io_after_terminal_task_state(self):
+        entered,release,returned=threading.Event(),threading.Event(),threading.Event()
+        original=self.manager.event;results=[];closer=None
+        def event(task,kind,data,**kwargs):
+            if kind=='token'and not entered.is_set():
+                with self.manager.db()as connection:
+                    connection.execute('SELECT id FROM tasks').fetchall();entered.set()
+                    if not release.wait(12):raise TimeoutError('reader barrier not released')
+            return original(task,kind,data,**kwargs)
+        self.manager.event=event;self.manager.settings.update(call_timeout=.2,task_timeout=.3)
+        try:
+            ident=self.manager.submit('stream','reader-database-barrier')
+            self.assertTrue(entered.wait(5))
+            self.assertEqual(self.manager.wait(ident)['state'],'timed_out')
+            self.assertIn(ident,self.manager.active)
+            def shutdown():results.append(self.manager.shutdown());returned.set()
+            closer=threading.Thread(target=shutdown);closer.start()
+            self.assertFalse(returned.wait(.2),'shutdown returned while reader still held SQLite')
+            release.set();closer.join(5)
+            self.assertFalse(closer.is_alive());self.assertTrue(results[0]['complete'],results)
+            self.assertEqual(results[0]['pending_task_ids'],[]);self.assertEqual(self.manager.active,{})
+        finally:
+            release.set()
+            if closer:closer.join(5)
+
     def test_replacement_keeps_visible_text_until_atomic_first_new_token(self):
         task_id=self.manager.submit('replace_reply','replacement','collaboration')
         deadline=time.monotonic()+5

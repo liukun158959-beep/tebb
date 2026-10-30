@@ -242,12 +242,22 @@ class TaskManager:
                         break
                     if row["session"] in busy:
                         continue
-                    control = {"session": row["session"], "cancel": threading.Event()}
+                    control = {"session": row["session"], "cancel": threading.Event(),
+                               "execution_done": False, "reader_done": True}
                     self.active[row["id"]] = control
                     busy.add(row["session"])
                     self.update(row["id"], state="running", started=time.time())
                     threading.Thread(target=self._execute, args=(row, control), daemon=True).start()
                 self.cv.wait(.2)
+
+    def _settled(self, task_id, control, phase):
+        """Keep the scheduling/resource slot until both owners finish their IO."""
+        with self.cv:
+            control[phase] = True
+            if control.get('execution_done') and control.get('reader_done', True):
+                if self.active.get(task_id) is control:
+                    self.active.pop(task_id, None)
+            self.cv.notify_all()
 
     def _execute(self, row, control):
         task_id = row["id"]
@@ -316,9 +326,14 @@ class TaskManager:
                     outcome["error"] = "任务通信中断，工具可能已经执行，请查看时间线。"
                 finally:
                     ended.set()
+                    self._settled(task_id, control, 'reader_done')
 
             reader = threading.Thread(target=read, daemon=True)
-            reader.start()
+            with self.cv: control['reader_done'] = False
+            try: reader.start()
+            except Exception:
+                self._settled(task_id, control, 'reader_done')
+                raise
             deadline = time.monotonic() + request["limits"]["task_timeout"]
             reason = ""
             while not ended.wait(.05):
@@ -362,18 +377,18 @@ class TaskManager:
         except Exception:
             self.finish(task_id, "failed", "无法启动独立任务，请检查后端日志或重启桌宠。")
         finally:
-            if row["channel"] != "collaboration":
-                from .terminal import manager
-                manager().cancel_task(task_id)
-            if tree:
-                tree.close()
-            if process:
-                for pipe in (process.stdin, process.stdout):
-                    if pipe:
-                        pipe.close()
-            with self.cv:
-                self.active.pop(task_id, None)
-                self.cv.notify_all()
+            try:
+                if row["channel"] != "collaboration":
+                    from .terminal import manager
+                    manager().cancel_task(task_id)
+                if tree:
+                    tree.close()
+                if process:
+                    for pipe in (process.stdin, process.stdout):
+                        if pipe:
+                            pipe.close()
+            finally:
+                self._settled(task_id, control, 'execution_done')
 
     def _save_partial(self, row, reason):
         if row["channel"] == "collaboration":
@@ -426,3 +441,6 @@ class TaskManager:
                 self.cv.wait(.05)
         self.scheduler.join(1)
         if self.standby:self.standby.shutdown()
+        with self.cv:
+            pending = list(self.active)
+        return dict(complete=not pending and not self.scheduler.is_alive(), pending_task_ids=pending)

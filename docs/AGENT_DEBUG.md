@@ -1,5 +1,15 @@
 # Agent 调试窗口
 
+## 任务终态与资源收尾（#199）
+
+`TaskManager.get(id)` 的终态表示执行结果；超时后输出线程仍可能写入最后的事件，不能据终态直接删除数据库。TaskManager 同时等待执行清理和输出线程结束，才释放活动任务与同会话调度位置。`shutdown()` 保持原有约4秒资源等待和1秒调度线程等待，返回 `{complete: bool, pending_task_ids: [...]}`；超时仍有资源时返回未完成，不伪报已释放。现有关闭调用可忽略返回值，调试/临时目录调用者应检查它。
+
+```powershell
+python -m unittest tests.test_tasks -v
+```
+
+两个 reader 屏障用例在真实 SQLite 连接持有期间触发任务超时：检查 shutdown 不提前成功，以及等待上限后明确报告 pending，释放屏障后真正收尾。它们不访问模型、飞书或 Docker。修复前独立复现记录在工作区 `output/task-reader-shutdown-repro/report.json`；主线 CI 41144139310 的原始 WinError32 保留，验证分支单次通过不抹去该失败。
+
 连续点击左侧 tebb. 下方的版本号5次切换开发者模式，再从「设置 → 版本与诊断 → 调用调试」打开 Agent 调试。Esc、关闭按钮或点击遮罩可关闭。关闭窗口不会取消后台任务。导航、日程和笔记的界面验收入口见 [工作区布局](WORKSPACE_UI.md)。
 
 ## 能查看什么
