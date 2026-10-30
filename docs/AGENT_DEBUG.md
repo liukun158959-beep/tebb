@@ -481,6 +481,17 @@ pnpm --dir client build
 本机材料在 `output/calendar-stability-2026-10-28/`：`repeat-before.log/repeat-root-cause.log` 为失败复现，`repeat-final.log/layout-final.log` 为修复后认证组件验收，`frontend-final.log/types-final.log/build-final.log` 为前端检查；`embedded-light.png/embedded-dark.png/embedded-narrow.png` 展示当前布局。页面滚动应由工作区拥有，`.fc-scroller` 不产生独立纵向溢出；窄屏仅保留七列横向查看。浏览器远端注入 TimeCalendar，正式同步仍由真实 CalendarAdapter 执行；本轮未写真实飞书或构建发布包。
 
 #142 验证：前端完整 172 项通过，类型检查及生产构建通过（既有分包体积提示保留）。认证 WebSocket 浏览器验证同一新建同步记录连续三次改期、慢回执、页面滚动中的预览与落点一致，以及无内部纵向滚动/网格线、凌晨锚点、760/390/320px 周/单日。后端与原生壳代码未改，本轮不重复声明后端全量或发布包验收。
+
+## 主窗渲染诊断（#196）
+
+主窗 React 根节点增加错误边界：启动完成后的渲染异常也显示恢复界面和 `render_failed` 编号。重新加载仅刷新界面，不会由错误边界重新发送消息或重跑任务；持续存在的源码异常仍需修复。
+
+在主窗开发者工具或已授权的隔离 WebView 调试连接中，可只读调用 `window.__DESK_UI_DIAGNOSTICS__()`，返回 `{state:'healthy',failure:null}` 或 `{state:'failed',failure:{code:'render_failed',errorType:'Error'|'TypeError'|'ReferenceError'}}`。此快照仅反映已挂载根组件的渲染状态，不代表后台、模型和第三方服务健康；不包含原始异常消息、会话、配置或凭据，也不提供任意执行或故障注入接口。HTML/主脚本尚未载入时该入口尚不存在，应继续核对 dev server 请求与 WebView 导航。
+
+`pnpm --dir client test` 包含 `tests/render-boundary.test.cjs`：实际 React 子组件先成功渲染，再抛错，验证恢复按钮、诊断编号和敏感原文不进入展示/快照。原始纯黑问题 #193 尚未稳定复现，不能用错误边界代替根因结论或关闭原问题。
+
+2026-10-31 本机验收材料在工作区 `output/cold-start-193/`：`render-failure.json` 验证实际主入口首次渲染异常；`render-after-ready.json` 验证启动页移除后，合成组件抛错显示恢复界面，快照从 healthy 变为 failed，手动刷新后回到 healthy。探针只在隔离浏览器拦截 App 模块，没有后台、真实模型或外部写入。`frontend-raw-final.log` 为当前工作树 205 项、204 通过、1 失败；失败来自既有未提交桌宠修改与旧测试 mock 的 dataset 不兼容。`frontend-isolated.log` 仅在只读加载时将该桌宠文件替换为 HEAD 基线，其余当前源码 205 项全过，未覆盖或提交用户文件。`types-final.log`、`build-final.log` 均成功，保留既有分包体积提示。
+
 ## 回复短暂出现后消失（#177）
 
 路由/规划的最终结果是内部控制数据，不是聊天正文。此前阶段交接会把控制 JSON 短暂写入消息，下一轮又清空；工具调用和修订的 answer_reset 也会立即删除已经收到的片段，实际记录中后续正文需等待约4–33秒。
