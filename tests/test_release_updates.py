@@ -202,7 +202,7 @@ class NotificationTests(unittest.TestCase):
             "data": {"has_more": True, "items": [], "page_token": "same"}}
         with self.assertRaises(notices.RemoteError): self.notify.verify_pending(self.release, 1)
 
-    def test_card_has_image_five_updates_one_focal_title_and_download_links(self):
+    def test_card_has_image_all_updates_one_focal_title_and_download_links(self):
         card=notices.release_card(self.manifest,"image",self.release["html_url"])
         self.assertEqual(card["header"]["title"]["content"], self.manifest.get("product_name", "知行 · ZhiXing") + " " + self.manifest["tag"])
         historical = {k:v for k,v in self.manifest.items() if k != "product_name"}
@@ -213,8 +213,11 @@ class NotificationTests(unittest.TestCase):
         blocks=card["body"]["elements"]
         self.assertEqual(len(blocks),3)
         self.assertEqual(blocks[0]["columns"][0]["elements"][0]["tag"],"img")
-        self.assertEqual(len(blocks[1]["columns"][0]["elements"]),5)
+        self.assertEqual(len(blocks[1]["columns"][0]["elements"]),len(self.manifest["highlights"]))
         raw=json.dumps(card,ensure_ascii=False)
+        for highlight in self.manifest["highlights"]:
+            self.assertIn(highlight["title"],raw)
+            self.assertIn(highlight["description"],raw)
         self.assertEqual(raw.count('"heading-3"'),1)
         self.assertNotIn('"font_color"',raw)
         self.assertIn("下载新版",raw)

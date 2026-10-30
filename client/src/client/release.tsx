@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import manifest from "../../../desk_companion/ui/release.json";
-import poster from "../../../desk_companion/ui/release-v0.4.0.png";
+import poster from "../../../desk_companion/ui/release-v0.4.1.png";
 import { rpc, type BackendInfo } from "./api";
 import { MdLink, Markdown } from "./Markdown";
 import { localDay, readReleasePreferences, saveReleasePreferences, shouldShowRelease, type ReleasePreferences } from "./release-preferences";

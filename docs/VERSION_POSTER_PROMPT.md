@@ -1,5 +1,9 @@
 # 知行版本主题图生成记录
 
+## tebb v0.4.1：让对话，更清晰
+
+使用内置 imagegen 生成并检查文字与范围。暖白纸张、低饱和铅笔漫画延续圆形 tebb 与狐狸、猫、猫头鹰伙伴；三个场景对应统一新对话入口、连续回复与明确连接飞书。图中树与气泡是功能概念插画，不代替实际界面截图，不承诺模型性能。原始提示词见 [v0.4.1-poster-prompt.txt](releases/v0.4.1-poster-prompt.txt)，素材为 desk_companion/ui/release-v0.4.1.png，用于候选版本介绍和通知卡片无副作用预览；生成图片不代表已经正式发布或发送通知。
+
 ## tebb v0.4.0：把计划，变成成果
 
 使用内置 imagegen 生成并检查文字、功能范围与构图。低饱和铅笔漫画延续圆形 tebb、狐狸、猫和猫头鹰伙伴，四个场景对应事项日程、伙伴自动化、搜索图表与上下文记忆。主题插画不作为实际界面截图或性能承诺。原始提示词见 [v0.4.0-poster-prompt.txt](releases/v0.4.0-poster-prompt.txt)，正式素材为 `desk_companion/ui/release-v0.4.0.png`，用于 README、版本介绍和发布卡片。

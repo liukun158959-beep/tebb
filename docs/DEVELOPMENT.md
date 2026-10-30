@@ -6,7 +6,7 @@
 
 ## 从源码运行
 
-需要 Python 3.11+、Node / pnpm、Rust、Tauri 的 Windows 构建依赖和 Atlas 源码。Atlas 仓库目前非公开，需要已有源码或访问权限；普通体验可使用 Windows 便携版。
+需要 Python 3.11+、Node / pnpm、Rust、Tauri 的 Windows 构建依赖和 Atlas 源码。Atlas 仓库已公开，开发与发布仍固定到正式提交；CI 不需要额外 Atlas 读取凭据。普通体验可使用 Windows 便携版。
 
 ```powershell
 git clone https://github.com/liukun158959-beep/tebb.git
