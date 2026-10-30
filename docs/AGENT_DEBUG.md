@@ -18,6 +18,8 @@
 
 ## 无 GUI 的对话服务验收
 
+统一任务质量入口见 [EVALS.md](EVALS.md)：`python scripts/eval_agent.py --output ../output/eval-new` 使用隔离假模型验证任务链；显式 `--live` 才调用当前真实模型。报告关联实际 task_id/call_ids、工具回执、产物、严格结果判定、耗时与可取得的用量；失败不自动重跑。后续功能要提供可复用的业务/认证接口和隔离验收样本，供开发者直接核对真实模型是否完成任务，不能只靠界面观察。
+
 可供 AI 直接调用的离线入口，在仓库根目录执行：
 
 ```powershell
