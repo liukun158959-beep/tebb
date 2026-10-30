@@ -13,6 +13,16 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = json.loads((ROOT / "client/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))["version"]
 
 
+def write_archive(package, output, prefix):
+    # Upstream notices may intentionally use the Unix epoch. Clamp only ZIP's
+    # representable date fields; preserve every byte of the original notice.
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, compresslevel=6, strict_timestamps=False) as archive:
+        for file in sorted(package.rglob("*")):
+            if not file.is_file() or "__pycache__" in file.parts or file.suffix == ".pyc":
+                continue
+            archive.write(file, f"{prefix}/{file.relative_to(package).as_posix()}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--runtime-package", type=Path, required=True)
@@ -41,11 +51,7 @@ def main():
     if output.exists():
         raise RuntimeError(f"目标文件已存在：{output}")
     prefix = f"tebb-{VERSION}"
-    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-        for file in sorted(package.rglob("*")):
-            if not file.is_file() or "__pycache__" in file.parts or file.suffix == ".pyc":
-                continue
-            archive.write(file, f"{prefix}/{file.relative_to(package).as_posix()}")
+    write_archive(package, output, prefix)
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
     (args.output / "SHA256SUMS.txt").write_text(f"{digest}  {output.name}\n", encoding="ascii")
     print(f"{output} ({output.stat().st_size / 1024 / 1024:.1f} MiB)")
