@@ -32,7 +32,7 @@ const job = { id: 'job1', request_id: 'r', session: 's', command: 'echo hi', cwd
   owner: 'agent', task_id: 'task1', created: 1, ended: null, exit_code: null, error: '', output_bytes: 3, timeout: 60 };
 const info = { port: 1, token: 'test' };
 
-test('sandbox terminal shows start/stop feedback, streams PTY bytes, queues input and never stops on collapse', async () => {
+test('sandbox terminal shows start/stop feedback, streams PTY bytes, queues input and never stops on collapse', async (t) => {
   const calls = []; let finish, stopped = false;
   const fixtureData = fixture(async (_info, method, args) => {
     calls.push({ method, args });
@@ -43,7 +43,8 @@ test('sandbox terminal shows start/stop feedback, streams PTY bytes, queues inpu
     if (method === 'terminal_cancel') { stopped = true; return { ok: true }; }
     return { ok: true };
   });
-  let view; await act(async () => { view = create(React.createElement(fixtureData.TerminalPane, { info, session: 's', attachments: [], onDraft() {}, onPreview() {} }), { createNodeMock: () => ({}) }); });
+  let view; t.after(async () => { if (view) await act(async () => view.unmount()); });
+  await act(async () => { view = create(React.createElement(fixtureData.TerminalPane, { info, session: 's', attachments: [], onDraft() {}, onPreview() {} }), { createNodeMock: () => ({}) }); });
   await act(async () => view.root.findByProps({ 'aria-label': '要执行的命令' }).props.onChange({ target: { value: 'echo hi' } }));
   await act(async () => button(view, '执行').props.onClick());
   assert(text(view.toJSON()).includes('正在提交命令')); assert(button(view, '执行').props.disabled);
@@ -53,32 +54,33 @@ test('sandbox terminal shows start/stop feedback, streams PTY bytes, queues inpu
   await act(async () => button(view, '停止命令').props.onClick()); assert(text(view.toJSON()).includes('已停止'));
   assert(calls.some(c => c.method === 'terminal_cancel' && c.args.job_id === job.id));
   const cancelCount = calls.filter(c => c.method === 'terminal_cancel').length;
-  await act(async () => view.unmount()); assert.equal(calls.filter(c => c.method === 'terminal_cancel').length, cancelCount);
+  await act(async () => view.unmount()); view = null;
+  assert.equal(calls.filter(c => c.method === 'terminal_cancel').length, cancelCount);
 });
 
-test('failed sandbox check prevents execution and explains the problem without host fallback', async () => {
+test('failed sandbox check prevents execution and explains the problem without host fallback', async (t) => {
   const calls = [];
   const { TerminalPane } = fixture(async (_i, method) => { calls.push(method); return method === 'terminal_list' ? { jobs: [] } : { ready: false, distro: 'Missing', error: '找不到发行版' }; });
-  let view; await act(async () => { view = create(React.createElement(TerminalPane, { info, session: 's', attachments: [], onDraft() {}, onPreview() {} })); });
+  let view; t.after(async () => { if (view) await act(async () => view.unmount()); });
+  await act(async () => { view = create(React.createElement(TerminalPane, { info, session: 's', attachments: [], onDraft() {}, onPreview() {} })); });
   assert(text(view.toJSON()).includes('找不到发行版')); assert(button(view, '执行').props.disabled); assert(!calls.includes('terminal_start'));
-  await act(async () => view.unmount());
 });
 
-test('interpretation only creates a draft and output is never submitted automatically', async () => {
+test('interpretation only creates a draft and output is never submitted automatically', async (t) => {
   let draft = ''; const calls = [];
   const { TerminalPane } = fixture(async (_i, method) => { calls.push(method);
     if (method === 'terminal_list') return { jobs: [{ ...job, state: 'succeeded', exit_code: 0 }] };
     if (method === 'terminal_read') return { job: { ...job, state: 'succeeded', exit_code: 0 }, data: btoa('hi\n'), offset: 3 };
     return { ready: true, distro: 'Ubuntu', error: '' };
   });
-  let view; await act(async () => { view = create(React.createElement(TerminalPane, { info, session: 's', attachments: [], onDraft: s => draft = s, onPreview() {} })); });
+  let view; t.after(async () => { if (view) await act(async () => view.unmount()); });
+  await act(async () => { view = create(React.createElement(TerminalPane, { info, session: 's', attachments: [], onDraft: s => draft = s, onPreview() {} })); });
   assert.equal(draft, ''); await act(async () => button(view, '解读输出').props.onClick());
   assert(draft.includes('echo hi')); assert(draft.includes('hi')); assert(draft.includes('退出码：0')); assert(!calls.includes('chat'));
-  await act(async () => view.unmount());
 });
 
 
-test('manual terminal binds the authorized project and sends its grant revision', async () => {
+test('manual terminal binds the authorized project and sends its grant revision', async (t) => {
   const calls=[];const project={primary:'E:/fixture/project',revision:'grant-one',commands:true};
   const {TerminalPane}=fixture(async(_info,method,args)=>{
     calls.push({method,args});
@@ -89,25 +91,34 @@ test('manual terminal binds the authorized project and sends its grant revision'
     if(method==='terminal_read')return {job:{...job,state:'succeeded'},data:'',offset:0};
     return {ok:true};
   });
-  let view;await act(async()=>{view=create(React.createElement(TerminalPane,{info,session:'old-session',attachments:[],onDraft(){},onPreview(){}}));});
+  let view; t.after(async () => { if (view) await act(async () => view.unmount()); });
+  await act(async()=>{view=create(React.createElement(TerminalPane,{info,session:'old-session',attachments:[],onDraft(){},onPreview(){}}));});
   await act(async()=>view.root.findByProps({'aria-label':'要执行的命令'}).props.onChange({target:{value:'python3 -m unittest'}}));
   await act(async()=>button(view,'执行').props.onClick());
   const sent=calls.find(c=>c.method==='terminal_start').args;
   assert.equal(sent.session,'project:E:/fixture/project');assert.equal(sent.workspace_revision,'grant-one');
   assert(text(view.toJSON()).includes('项目主目录'));
-  await act(async()=>view.unmount());
 });
 
 
-test('VS Code panel tools preserve execution and draft while clearing or copying presentation', async () => {
+test('VS Code panel tools preserve execution and draft while clearing or copying presentation', async (t) => {
   const calls=[]; let copied='';
-  global.navigator={clipboard:{writeText:async value=>{copied=value;}}};
+  const originalNavigator=Object.getOwnPropertyDescriptor(globalThis,'navigator');
+  let view;
+  t.after(async()=>{
+    try { if(view)await act(async()=>view.unmount()); }
+    finally {
+      if(originalNavigator)Object.defineProperty(globalThis,'navigator',originalNavigator);
+      else delete globalThis.navigator;
+    }
+  });
+  Object.defineProperty(globalThis,'navigator',{configurable:true,value:{clipboard:{writeText:async value=>{copied=value;}}}});
   const data=fixture(async(_i,method,args)=>{calls.push({method,args});
     if(method==='terminal_list')return {jobs:[{...job,state:'succeeded',exit_code:0}]};
     if(method==='terminal_read')return {job:{...job,state:'succeeded',exit_code:0},data:btoa('hi'),offset:2};
     return {ready:true,distro:'Ubuntu',error:''};
   });
-  let view;await act(async()=>{view=create(React.createElement(data.TerminalPane,{info,session:'s',attachments:[],onDraft(){},onPreview(){}}),{createNodeMock:()=>({focus(){}})});});
+  await act(async()=>{view=create(React.createElement(data.TerminalPane,{info,session:'s',attachments:[],onDraft(){},onPreview(){}}),{createNodeMock:()=>({focus(){}})});});
   await act(async()=>view.root.findByProps({'aria-label':'要执行的命令'}).props.onChange({target:{value:'keep my draft'}}));
   await act(async()=>view.root.findByProps({'aria-label':'清屏'}).props.onClick());
   assert.equal(data.clears.length,1);assert(!calls.some(c=>c.method==='terminal_cancel'));
@@ -117,7 +128,6 @@ test('VS Code panel tools preserve execution and draft while clearing or copying
   assert(!calls.some(c=>c.method==='terminal_start'));
   await act(async()=>view.root.findByProps({'aria-label':'显示执行记录'}).props.onClick());
   assert.equal(view.root.findByProps({'aria-label':'显示执行记录'}).props['aria-pressed'],true);
-  await act(async()=>view.unmount());
 });
 
 
