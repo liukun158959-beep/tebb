@@ -32,7 +32,7 @@ class OnboardingTests(unittest.TestCase):
         self.assertFalse(result["show"])
         self.assertTrue(result["configured"])
         self.assertNotIn("api_key", json.dumps(result))
-        self.assertEqual(result["data_dir"], str(self.root))
+        self.assertEqual(Path(result["data_dir"]), self.root.resolve())
         self.assertTrue(result["checks"]["pet"])
         self.assertFalse(result["checks"]["live2d"])
 

@@ -13,6 +13,7 @@ class NoProviderSDK(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, NoProviderSDK())
 from unittest.mock import patch
+from types import SimpleNamespace
 from atlas.testing import FakeLLM
 from desk_companion import assistant, model_catalog, video
 from desk_companion.task_worker import main
@@ -63,7 +64,10 @@ def extract_video(*args, **kwargs):
     return {"url": "https://www.youtube.com/watch?v=abcdefghijk", "title": "视频归档测试", "author": "离线作者", "chapters": [],
             "segments": [{"start": 0, "text": "Agent 决定下一步"}], "subtitle_status": "available", "subtitle_notice": "已取得测试字幕", "truncated": False}
 
-with patch.object(assistant, "require_llm_env", return_value={"ATLAS_API_KEY":"test-only",
+# Standby preloads the adapter; keep this fixture on FakeLLM while the SDK
+# import guard still rejects accidental provider imports in the tool loop.
+with patch.dict(sys.modules, {"desk_companion.collaboration_llm": SimpleNamespace(CollaborationLLM=FakeLLM)}), \
+     patch.object(assistant, "require_llm_env", return_value={"ATLAS_API_KEY":"test-only",
         "ATLAS_BASE_URL":"http://example.invalid/v1", "ATLAS_MODEL":"fake"}), \
      patch.object(assistant, "build_agent", build), patch.object(model_catalog, "bind_llm"), \
      patch.object(model_catalog, "require_active", return_value={"model":"fake", "api_key":"test-only", "base_url":"http://example.invalid/v1"}), \

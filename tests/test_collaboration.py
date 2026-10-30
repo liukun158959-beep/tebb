@@ -359,7 +359,7 @@ class CollaborationTests(unittest.TestCase):
             with self.assertRaises(ValueError):self.action(type='migrate_projects',ids=ids,token=token)
         state=self.action(type='migrate_projects',ids=['dm-research'],token=result['token'])
         pid=next(c for c in state['conversations'] if c['id']=='dm-research')['project_id']
-        self.assertEqual(project.load(pid)['primary'],str(folder));self.assertFalse(project.load(pid)['edit'])
+        self.assertEqual(Path(project.load(pid)['primary']),folder.resolve());self.assertFalse(project.load(pid)['edit'])
         self.assertEqual((folder/'keep.txt').read_text(),'unchanged')
         self.assertNotIn('project_id',next(c for c in state['conversations'] if c['id']=='dm-writer'))
         with self.assertRaisesRegex(ValueError,'重新预览'):self.action(type='migrate_projects',ids=['dm-research'],token=result['token'])

@@ -75,8 +75,8 @@ jobs:
       - name: Versions and complete regression (one attempt)
         shell: pwsh
         run: |
-          $env:PYTHONPATH = Join-Path $env:GITHUB_WORKSPACE '.ci-atlas'
-          $env:DESK_TEST_ATLAS_SOURCE = $env:PYTHONPATH
+          $env:DESK_TEST_ATLAS_SOURCE = Join-Path $env:GITHUB_WORKSPACE '.ci-atlas'
+          $env:PYTHONPATH = $env:GITHUB_WORKSPACE + [IO.Path]::PathSeparator + $env:DESK_TEST_ATLAS_SOURCE
           $env:DESK_COMPANION_DATA_DIR = Join-Path $env:RUNNER_TEMP 'tebb-ci-profile'
           python scripts/ci_checks.py version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -86,7 +86,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.diagnostics
         shell: pwsh
         run: |
-          $env:PYTHONPATH = Join-Path $env:GITHUB_WORKSPACE '.ci-atlas'
+          $env:PYTHONPATH = $env:GITHUB_WORKSPACE + [IO.Path]::PathSeparator + (Join-Path $env:GITHUB_WORKSPACE '.ci-atlas')
           python scripts/benchmark_agent.py --samples 20 --parallel 1 --prewarm --think-time 2 --output .ci-output/local-sse-diagnostics.json
           exit $LASTEXITCODE
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
