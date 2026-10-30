@@ -1,4 +1,6 @@
+import io
 import json
+from contextlib import redirect_stderr
 import os
 from pathlib import Path
 import tempfile
@@ -21,7 +23,10 @@ class CIChecksTests(unittest.TestCase):
             def test_skip(self):pass
             def test_failure(self):self.fail('fixture failure')
         with tempfile.TemporaryDirectory() as directory,patch.dict(os.environ,DESK_TEST_ATLAS_SOURCE='fixture'),patch.object(checks.unittest.defaultTestLoader,'discover',return_value=unittest.defaultTestLoader.loadTestsFromTestCase(Cases)):
-            with self.assertRaises(SystemExit):checks.run_tests(Path(directory))
+            with redirect_stderr(io.StringIO()) as errors:
+                with self.assertRaises(SystemExit):checks.run_tests(Path(directory))
+            self.assertIn('test_failure',errors.getvalue())
+            self.assertIn('fixture failure',errors.getvalue())
             report=json.loads((Path(directory)/'backend.json').read_text('utf-8'))
             self.assertEqual(report['tests'],3);self.assertEqual(report['attempts'],1)
             self.assertEqual(len(report['failures']),1);self.assertEqual(len(report['skipped']),1)

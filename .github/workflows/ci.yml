@@ -94,6 +94,7 @@ jobs:
         with:
           name: python-results-${{ github.sha }}
           path: .ci-output/
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
 

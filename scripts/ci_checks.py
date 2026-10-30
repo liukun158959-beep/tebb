@@ -66,7 +66,11 @@ def run_tests(output):
     (output/'backend.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),'utf-8')
     summary={k:len(v) if isinstance(v,list) else v for k,v in report.items()}
     print(json.dumps(summary,ensure_ascii=False))
-    if not outcome.wasSuccessful():raise SystemExit(1)
+    if not outcome.wasSuccessful():
+        # Keep the failure actionable even when artifact transport itself fails.
+        for test,trace in outcome.failures+outcome.errors:
+            print(f'\n{test.id()}\n{trace}',file=sys.stderr)
+        raise SystemExit(1)
 
 
 def smoke_zip(archive,destination):
