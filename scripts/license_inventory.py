@@ -11,6 +11,15 @@ ROOT = Path(__file__).resolve().parents[1]
 PREFIXES = ('license', 'licence', 'copying', 'copyright', 'notice')
 
 
+def is_python_notice(path):
+    path=Path(str(path))
+    if '__pycache__' in path.parts or path.suffix.lower() in {'.py','.pyc','.pyo','.pyd','.so'}:
+        return False
+    return (path.name.lower().startswith(PREFIXES) or
+            any(part.lower().endswith('.dist-info') for part in path.parts) and
+            any(part.lower() in {'licenses','license'} for part in path.parts))
+
+
 def license_files(root):
     result = []
     for path in root.iterdir():
@@ -88,7 +97,7 @@ def generate(package):
     for dist in distributions(path=[str(site)]):
         info=dist.metadata
         files=[Path(dist.locate_file(p)).resolve().relative_to(package.resolve()).as_posix() for p in dist.files or []
-               if any(part.lower().startswith(PREFIXES) for part in Path(str(p)).parts) and Path(dist.locate_file(p)).is_file()]
+               if is_python_notice(p) and Path(dist.locate_file(p)).is_file()]
         if not files:
             extra=collect_package('python',info['Name'],dist.version,ROOT/'licenses/supplemental/python'/info['Name']/dist.version,output,
                                   info.get('License-Expression') or info.get('License'))

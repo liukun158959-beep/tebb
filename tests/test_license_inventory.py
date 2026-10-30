@@ -7,6 +7,14 @@ from scripts.release_audit import audit, audit_licenses
 
 
 class LicenseInventoryTests(unittest.TestCase):
+    def test_python_notice_paths_distinguish_license_text_from_parser_modules_and_cache(self):
+        for path in ('packaging-26.dist-info/licenses/LICENSE.APACHE', 'package/NOTICE', 'package/COPYING.txt'):
+            self.assertTrue(inventory.is_python_notice(path),path)
+        for path in ('packaging/licenses/__init__.py','packaging/licenses/_spdx.py',
+                     'packaging/licenses/__pycache__/__init__.cpython-313.pyc',
+                     'package.dist-info/licenses/__pycache__/license.pyc'):
+            self.assertFalse(inventory.is_python_notice(path),path)
+
     def test_preserves_all_parts_of_installed_notices_without_absolute_paths(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);source=root/'source';source.mkdir()
