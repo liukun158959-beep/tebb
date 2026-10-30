@@ -21,7 +21,7 @@ const button = (view, label) => view.root.findAllByType('button').find(b => text
 function fixture(rpc) {
   global.ResizeObserver = class { observe() {} disconnect() {} };
   const writes = [], handlers = [], clears = [];
-  const { TerminalPane } = load('terminal', { './api': { rpc }, './loading-text': { LoadingText: ({ text }) => React.createElement('span', {}, text) },
+  const { TerminalPane } = load('terminal', { './api': { rpc }, './project-runtime-events': { openProjectRuntime() {} }, './loading-text': { LoadingText: ({ text }) => React.createElement('span', {}, text) },
     '@xterm/addon-fit': { FitAddon: class { fit() {} } }, '@xterm/xterm': { Terminal: class {
       options = {}; getSelection() { return 'copied output'; } buffer = {active:{length:0}}; clear() { clears.push(true); } loadAddon() {} open() {} reset() {} dispose() {} write(data) { writes.push(new TextDecoder().decode(data)); }
       onData(callback) { handlers.push(callback); return { dispose() {} }; }

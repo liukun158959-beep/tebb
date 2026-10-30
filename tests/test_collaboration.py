@@ -452,12 +452,21 @@ class CollaborationTests(unittest.TestCase):
         folder=Path(self.temp.name)/'memory';folder.mkdir(exist_ok=True)
         path=folder/'task_settings.json';path.write_text(json.dumps(dict(call_timeout=150,task_timeout=900)))
         self.assertEqual(execution_limits('coder'),dict(call_timeout=150,task_timeout=900))
+        self.assertEqual(execution_limits('research',['项目环境']),dict(call_timeout=150,task_timeout=900))
         self.action(type='send',text='写代码',mode='task',target='research');self.service.tick()
         saved=next(iter(self.work.requests.values()))['task_limits']
         self.assertEqual(saved,dict(call_timeout=150,task_timeout=900))
         path.write_text(json.dumps(dict(call_timeout=20,task_timeout=40)))
         self.assertEqual(saved,dict(call_timeout=150,task_timeout=900))
         self.assertEqual(execution_limits('research'),dict(call_timeout=20,task_timeout=40))
+
+    def test_explicit_project_capability_uses_existing_coding_default_without_changing_other_roles(self):
+        from desk_companion.collaboration import execution_limits,call_budget
+        self.assertEqual(execution_limits('research')['task_timeout'],300)
+        self.assertEqual(execution_limits('research',['项目环境'])['task_timeout'],600)
+        self.assertEqual(call_budget('research'),8)
+        self.assertEqual(call_budget('research',tools=['项目环境']),12)
+        self.assertEqual(call_budget('research','route',['项目环境']),2)
 
     def test_route_function_requests_one_background_task_without_running_it(self):
         request=self.request();request['kind']='route';events=[]
@@ -563,6 +572,27 @@ class CollaborationTests(unittest.TestCase):
         self.assertEqual([e[1]['exit_code'] for e in events if e[0]=='verification'],[1,1,0])
         self.assertIn('实际验证回执',events[-1][1])
         self.assertNotIn('fixture-key',json.dumps(events))
+
+    def test_project_loop_retains_physical_call_receipt_and_verified_preview_without_host_directory(self):
+        request=self.request(role=dict(id='research',name='项目助手',role='运行项目',tools=['项目环境']))
+        request.update(task_id='actual-physical-task',workspace={},budget=3)
+        events=[];calls=[]
+        class LLM:
+            def chat(_,messages,tools,on_delta):
+                calls.append(messages)
+                if len(calls)>1:return dict(message=dict(content='已启动，[打开预览](http://127.0.0.1:12345/)。'),usage={})
+                self.assertIn('project_start',{value['function']['name'] for value in tools})
+                self.assertNotIn('workspace_run',{value['function']['name'] for value in tools})
+                return dict(message=dict(role='assistant',tool_calls=[dict(id='actual-tool-call',type='function',function=dict(name='project_start',arguments=json.dumps(dict(environment='env',command='npm start',port=3000,_call_id='forged'))))]),usage={})
+        result=dict(ok=True,service_ready=True,environment=dict(id='env'),service=dict(id='service',url='http://127.0.0.1:12345/',host_port=12345,health=dict(ok=True,status=200)))
+        with patch('desk_companion.project_tools.call',return_value=result) as rpc:
+            execute(request,lambda kind,data:events.append((kind,data)),llm=LLM())
+        self.assertEqual(rpc.call_args.args[1]['task_id'],'actual-physical-task')
+        self.assertEqual(rpc.call_args.args[1]['args']['_call_id'],'actual-tool-call')
+        receipt=next(data for kind,data in events if kind=='project_receipt')
+        self.assertEqual(receipt['environment']['id'],'env')
+        audit=next(data for kind,data in events if kind=='citation_check')
+        self.assertTrue(audit['ok']);self.assertEqual(audit['pages_read'],0)
 
     def test_coder_without_directory_can_generate_code_but_has_no_file_tools(self):
         request = self.request(role=dict(id='coder',name='码可',role='编程伙伴',tools=['工作区读取','文件编辑','终端']))

@@ -10,6 +10,8 @@ export type DemoRun = { id: string; conversation: string; agent: string; title: 
   step: number; dependency?: string; dependencies?: string[]; delivery_state?: "running" | "succeeded" | "failed"; delivery_check?: { ok: boolean; missing?: string[]; missing_sources?: string[] }; updates: string[]; applied: number; events: string[]; artifact?: string;
   kind?: string; parent?: string; answer?: string; answer_pending?: boolean; error?: string; status?: string; calls?: number; model?: string; input_tokens?: number; output_tokens?: number;
   chart_builds?:Record<string,ChartDraftView>;
+  project_receipts?: {tool:string;call_id:string;ok:boolean;error?:string;log_id?:string;service_ready?:boolean;
+    environment:{id?:string;repository?:string;state?:string};operation:{id?:string;kind?:string;state?:string;stage?:string};service:{id?:string;state?:string;url?:string;log_id?:string}}[];
   changes?: { path: string; diff: string }[]; checks?: { command: string; state: string; exit_code: number | null; output: string; stale?: boolean; diff_limited?: boolean }[];
   citation_check?: { ok: boolean; pages_read: number; matched: { url: string; level: string; truncated: boolean;read_ranges?:number[][];characters?:number }[]; unverified: string[] } };
 export type DemoRequest = { id: string; conversation: string; run: string; state: "pending" | "approved" | "rejected" };

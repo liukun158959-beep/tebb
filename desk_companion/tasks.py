@@ -290,9 +290,11 @@ class TaskManager:
                         else:
                             if kind in ("llm_start", "tool_start"):
                                 wait = request['limits']['call_timeout']
-                                if kind == 'tool_start' and isinstance(data,dict) and data.get('tool') == 'workspace_run':
+                                if kind == 'tool_start' and isinstance(data,dict):
                                     command_wait = data.get('phase_timeout')
-                                    if type(command_wait) in (int,float) and 1 <= command_wait <= 140:
+                                    # Trusted workers may declare a bounded tool wait;
+                                    # the task's immutable total deadline still wins.
+                                    if type(command_wait) in (int,float) and 1 <= command_wait <= 360:
                                         wait = max(wait,command_wait)
                                 phase["deadline"] = time.monotonic() + wait
                                 phase["kind"] = kind

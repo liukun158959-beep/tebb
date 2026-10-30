@@ -6,6 +6,7 @@ import { rpc, type BackendInfo } from "./api";
 import "./terminal.css";
 import { Plus, Eraser, Copy, History, TerminalSquare } from "lucide-react";
 import { LoadingText } from "./loading-text";
+import { openProjectRuntime } from "./project-runtime-events";
 import type { LocalSource } from "./local-sources";
 
 export type TerminalJob = { id: string; request_id: string; session: string; command: string; cwd: string; state: string;
@@ -152,6 +153,7 @@ export function TerminalPane(props: { info: BackendInfo | null; session: string;
   const ownRunning = jobs.some(j => j.session === session && runningJob(j));
   return <section className="terminal-pane terminal-integrated" aria-label="沙箱终端" onKeyDown={event => { if (event.altKey && event.key.toLowerCase() === 'n') {event.preventDefault();newCommand();} }}>
     <header className="terminal-panel-header"><strong><TerminalSquare size={14} aria-hidden="true"/>终端</strong><div className="terminal-panel-tools">
+      <button type="button" aria-label="打开项目运行" title="项目运行与日志" onClick={()=>openProjectRuntime()}><TerminalSquare size={15}/></button>
       <button type="button" aria-label="新建命令草稿" title="新建命令草稿 · Alt+N" onClick={newCommand}><Plus size={15}/></button>
       <button type="button" aria-label="清屏" title="清屏，保留完整执行记录" onClick={() => {terminal.current?.clear();setNotice('已清空当前屏幕，后端输出和命令记录保留。');}}><Eraser size={15}/></button>
       <button type="button" aria-label="复制终端输出" title="复制选中或已加载输出" disabled={!job} onClick={() => void action('正在复制输出…',copyOutput)}><Copy size={15}/></button>

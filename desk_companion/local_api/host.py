@@ -58,6 +58,27 @@ class HeadlessApp:
         self.feishu_agent = FeishuAgent(self, task_backed=True)
         self._collaboration = None
         self._collaboration_lock = threading.Lock()
+        self._project_environments = None
+        self._project_environments_lock = threading.Lock()
+
+    @property
+    def project_environments(self):
+        with self._project_environments_lock:
+            if self._project_environments is None:
+                from ..project_environments import ProjectEnvironmentService
+                from ..paths import data_root
+                self._project_environments=ProjectEnvironmentService(data_root()/'memory'/'project-environments',
+                                                                    owner_active=self._project_task_active)
+            return self._project_environments
+
+    def _project_task_active(self,task_id):
+        if self._collaboration is None:return False
+        for manager in self._collaboration.managers.values():
+            try:
+                task=manager.get(task_id)
+                if task:return task['state'] in {'queued','running'}
+            except (ValueError,KeyError):continue
+        return False
 
     @property
     def tasks(self):

@@ -31,6 +31,22 @@ class Bridge:
         from .tebb_operations import execute
         return execute(self._host, run_id, tool, args)
 
+    def project_operation(self, run_id, task_id, operation, args):
+        from .project_operations import execute
+        return execute(self._host,run_id,task_id,operation,args)
+
+    def project_environments_ui(self, operation, payload=None):
+        """Desktop-token API. Model tools use the separate run-authorized dispatcher."""
+        service=self._host.project_environments;payload=payload or {}
+        if operation=='probe':return service.client.probe()
+        if operation=='list':return dict(ok=True,environments=service.store.list())
+        ident=payload.get('environment','');environment=service.store.get(ident)
+        if operation=='status':return service.status(ident,environment['scope'])
+        if operation=='stop':return service.stop(ident,environment['scope'])
+        if operation=='reconcile':return service.reconcile(ident,environment['scope'],verify=payload.get('verify',False))
+        if operation=='log':return service.log(ident,environment['scope'],payload.get('operation',''),payload.get('offset',0))
+        raise ValueError('不支持的项目环境界面操作。')
+
     def load_onboarding(self) -> dict:
         from .onboarding import status
         return status()

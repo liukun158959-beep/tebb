@@ -63,6 +63,20 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse((await self.notebook_rpc('load_onboarding'))['show'])
         self.assertNotIn('api_key', (Path(self.temp.name) / 'onboarding.json').read_text('utf-8'))
 
+    async def test_project_worker_rpc_checks_parent_task_and_scope_without_global_turn_lock(self):
+        from tests.test_project_operations import ProjectAuthorizationTests
+        fixture=ProjectAuthorizationTests('test_authorized_custom_partner_uses_parent_scope_and_stable_request')
+        fixture.setUp();self.addCleanup(fixture.doCleanups)
+        self.host._collaboration=fixture.host.collaboration;self.host._project_environments=fixture.projects
+        arguments=dict(run_id='run',task_id='physical-task',operation='prepare',
+                       args=dict(repository='https://github.com/example/demo',_call_id='real-tool-call'))
+        with self.host.turn_lock:
+            result=await self.notebook_rpc('project_operation',**arguments)
+        self.assertTrue(result['ok']);self.assertEqual(result['received']['scope'],'project:real-project')
+        arguments['task_id']='stale-task'
+        denied=await self.notebook_rpc('project_operation',**arguments)
+        self.assertFalse(denied['ok']);self.assertEqual(len(fixture.projects.calls),1)
+
     async def notebook_rpc(self, method, _timeout=5, **args):
         async with connect(self.url, proxy=None) as ws:
             await ws.send(json.dumps(dict(type='rpc', id=method, method=method, args=args)))

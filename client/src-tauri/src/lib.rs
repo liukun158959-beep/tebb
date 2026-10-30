@@ -394,7 +394,8 @@ fn stop_backend(child: &mut Child, info: &BackendInfo) {
         .set("Authorization", &format!("Bearer {}", info.token))
         .timeout(Duration::from_secs(2))
         .call();
-    for _ in 0..60 {
+    // 官方 VM 需要停止回执；给并行项目清理与既有任务收尾留出总窗口。
+    for _ in 0..1000 {
         if matches!(child.try_wait(), Ok(Some(_))) { return; }
         std::thread::sleep(Duration::from_millis(100));
     }

@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-2026-10-31 已通过 Windows 11 / sbx 0.50.1 的真实 Node/Python 项目验证。先在 built-in shell 验证，再在固定 digest 的官方预发布 v3 shell 重做：实际拉取 Express/Flask 固定提交、安装依赖、启动Web服务、宿主loopback访问、日志/进程检查、撤销端口、停止环境及确认会话退出。环境磁盘保留；产品默认执行后端仍未切换，Agent闭环由 #191 继续实现。
+2026-10-31 已通过 Windows 11 / sbx 0.50.1 的真实 Node/Python 项目验证。先在 built-in shell 验证，再在固定 digest 的官方预发布 v3 shell 重做：实际拉取 Express/Flask 固定提交、安装依赖、启动Web服务、宿主loopback访问、日志/进程检查、撤销端口、停止环境及确认会话退出。环境磁盘保留；这是当时的PoC范围，后续#191产品通道和独立Agent验收见[PROJECT_RUNTIME.md](PROJECT_RUNTIME.md)，原离线终端保留。
 
 最初代理启动daemon时，官方shim连接console socket报 `An invalid argument was supplied`。用户在普通PowerShell启动daemon的受控对照通过，之后代理复用该daemon完成上述验证；启动上下文有影响，底层根因尚未确定。[Docker #719](https://github.com/docker/sbx-releases/issues/719)只保留为相同表象线索。未自动重启Windows、reset或清理缓存。
 
@@ -49,4 +49,4 @@ sbx stop tebb-poc-example
 
 本地材料位于工作区上级output：`sbx-native-190/`（用户启动上下文对照）、`sbx-node-python-190-attempt1/`（built-in完整链）、`sbx-v3-190-attempt1/`（builder失败）、`sbx-v3-prebuilt-190-attempt1/`（官方v3创建及白名单绑定核对）、`sbx-v3-foreground-190-attempt1/`（完整前台服务与停止证明）。官方registry元数据/digest及session/策略资料在 `sbx-v3-builder-facts-190/`。原失败与后续通过分开保留，临时环境均已停止。
 
-#190到此完成可用性验证；#191仍需将项目授权、状态、日志、创建/继续/停止及真实模型验收接到产品。一次性命令与常驻服务分别持久化，任务完成不能隐式重复启动服务，后端失联先观察原环境。`sbx`及kit接口属于官方Early Access/experimental能力，当前固定已验版本与镜像；不据PoC宣称任意GitHub项目均可运行。普通文档/源码提交不自动进入已冻结0.4.1。
+#190到此完成可用性验证；后续#191的产品授权、状态、日志、创建/继续/停止及真实模型结果独立记录在[PROJECT_RUNTIME.md](PROJECT_RUNTIME.md)，不能用PoC代替Agent验收。一次性命令与常驻服务分别持久化，任务完成不能隐式重复启动服务，后端失联先观察原环境。`sbx`及kit接口属于官方Early Access/experimental能力，当前固定已验版本与镜像；不据PoC宣称任意GitHub项目均可运行。普通文档/源码提交不自动进入已冻结0.4.1。

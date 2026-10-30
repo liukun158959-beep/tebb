@@ -41,6 +41,10 @@ elif r['text']=='command_wait':
  emit('tool_start',dict(tool='workspace_run',phase_timeout=1))
  time.sleep(.5)
  emit('tool_end',dict(tool='workspace_run',status='success'))
+elif r['text'] in ('project_wait','invalid_project_wait'):
+ emit('tool_start',dict(tool='project_prepare',phase_timeout=300 if r['text']=='project_wait' else 361))
+ time.sleep(.5)
+ emit('tool_end',dict(tool='project_prepare',status='success'))
 elif r['text']=='video_failure':
  emit('failure',dict(type='APIConnectionError',message='片段 3/8 连接中断，已完成2/8',phase='片段3',completed=2,total=8))
  sys.exit(0)
@@ -183,6 +187,16 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(task['state'],'succeeded')
         self.manager.settings['task_timeout']=.25
         limited=self.manager.wait(self.manager.submit('command_wait','total-limit'))
+        self.assertEqual(limited['state'],'timed_out')
+
+    def test_project_tool_wait_is_honored_but_bounded_by_total_and_valid_range(self):
+        self.manager.settings.update(call_timeout=.15,task_timeout=3)
+        task=self.manager.wait(self.manager.submit('project_wait','project'))
+        self.assertEqual(task['state'],'succeeded')
+        invalid=self.manager.wait(self.manager.submit('invalid_project_wait','invalid-project'))
+        self.assertEqual(invalid['state'],'timed_out')
+        self.manager.settings['task_timeout']=.25
+        limited=self.manager.wait(self.manager.submit('project_wait','total-project'))
         self.assertEqual(limited['state'],'timed_out')
 
     def test_video_failure_preserves_phase_and_coverage_in_timeline(self):

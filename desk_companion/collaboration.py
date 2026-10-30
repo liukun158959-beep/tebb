@@ -22,7 +22,7 @@ COMPANIONS = {
     "research": ("研究员", "阿探", "fox", "好奇、敏锐，喜欢追问为什么；认真核实来源，坦率承认未知。"),
     "writer": ("写作者", "墨墨", "cat", "细腻、有条理，擅长把复杂内容讲清楚，有一点冷幽默。"),
 }
-TOOLS = {"联网搜索", "网页读取", "工作区读取", "文件编辑", "终端", "扩展只读工具", "构建图表", "本地日程读取"}
+TOOLS = {"联网搜索", "网页读取", "工作区读取", "文件编辑", "终端", "扩展只读工具", "构建图表", "本地日程读取", "项目环境"}
 AVATARS = {"spark", "fox", "cat", "owl"}
 
 
@@ -50,8 +50,8 @@ def parse_route(text):
     return decision
 
 
-def execution_limits(agent_id):
-    defaults = dict(call_timeout=90, task_timeout=600 if agent_id == 'coder' else 300)
+def execution_limits(agent_id, tools=()):
+    defaults = dict(call_timeout=90, task_timeout=600 if agent_id == 'coder' or '项目环境' in tools else 300)
     path = data_root() / 'memory' / 'task_settings.json'
     if not path.exists(): return defaults
     try:
@@ -81,7 +81,7 @@ def migrate_companions(state):
                 if conversation['kind']=='dm' and conversation['coordinator']==agent['id'] and conversation['title'] in (*choices[:-1],old):
                     conversation['title'] = agent['name']
         if version < 2 and agent['id']=='tebb':
-            agent['tools'] = sorted(TOOLS - {'本地日程读取'})
+            agent['tools'] = sorted(TOOLS - {'本地日程读取','项目环境'})
             if agent.get('role') in {'协调目标、拆分有限任务并明确验收条件','协调目标、拆分工作、汇总成果'}:agent['role'] = '理解用户目标，调用可用工具和职责伙伴，处理日程、事项、自动化及通用问题，核对实际结果后汇总交付'
         if version<3 and agent['id'] in {'tebb','writer'}:
             agent['tools']=sorted(set(agent.get('tools',[]))|{'构建图表'})
@@ -170,8 +170,8 @@ def dependencies(run):
     return run.get('dependencies') or ([run['dependency']] if run.get('dependency') else [])
 
 
-def call_budget(agent_id, kind='task'):
-    return 2 if kind in {'plan','route','chat','compress','clarify_options'} else 12 if agent_id == 'coder' else 8
+def call_budget(agent_id, kind='task', tools=()):
+    return 2 if kind in {'plan','route','chat','compress','clarify_options'} else 12 if agent_id == 'coder' or '项目环境' in tools else 8
 
 
 def parse_plan(text, members):
@@ -723,13 +723,13 @@ class Collaboration:
                         run['status'] = '等待工作目录的编码任务完成'; continue
                     request = dict(workflow="collaboration", collab_path=str(self.path), collab_run=run["id"],conversation=run['conversation'],source_scope=run.get('parent') or run['id'],
                         role=run["agent_config"], kind=run["kind"], model_id=run["model_id"], context=run["context"], workspace=run.get("workspace"), selection=run.get("selection", {}),
-                        reference_time=run.get("created",0), supplemented_at=run.get("supplemented_at"), members=run.get("members", []), require_execution=run.get('require_execution',False), applied=run["applied"], draft=run.get("parent_draft", ""), budget=max(0, call_budget(run['agent'],run['kind'])-phase_calls(run)),
+                        reference_time=run.get("created",0), supplemented_at=run.get("supplemented_at"), members=run.get("members", []), require_execution=run.get('require_execution',False), applied=run["applied"], draft=run.get("parent_draft", ""), budget=max(0, call_budget(run['agent'],run['kind'],run.get('agent_config',{}).get('tools',()))-phase_calls(run)),
                         objective=run.get('objective',run['input']),stage=run.get('stage','collect'),required_sources=run.get('required_sources',[]),requires_charts=run.get('requires_charts',False),
                         search_budget=max(0, run.get('search_limit',2)-run.get("search_calls",0)),fetch_budget=max(0,run.get('fetch_limit',4)-run.get("fetch_calls",0)),
                         source_topics=run.get('source_topics',[]),
                         source_evidence=run.get("source_evidence",[]),evidence=run.get("evidence",[]))
                     run["task"] = manager.submit(run["input"], "collab-"+run["id"], "collaboration", submission_key=f"collab:{run['id']}:{run['attempt']}",
-                        task_limits=execution_limits(run['agent']), **({**request, **({"sampling":run["sampling"]} if run.get("sampling") else {})}))
+                        task_limits=execution_limits(run['agent'],run.get('agent_config',{}).get('tools',())), **({**request, **({"sampling":run["sampling"]} if run.get("sampling") else {})}))
                     run["state"] = "queued"
                 task = manager.get(run["task"])
                 for event in task["events"]:
@@ -753,6 +753,10 @@ class Collaboration:
                     elif kind == "verification": run.setdefault("checks", []).append(data)
                     elif kind == "citation_check": run["citation_check"]=data
                     elif kind == "delivery_check": run['delivery_check']=data
+                    elif kind == 'project_receipt':
+                        receipts=run.setdefault('project_receipts',[])
+                        receipts.append(data)
+                        del receipts[:-40]
                     elif kind == 'chart_build':
                         builds=run.setdefault('chart_builds',{})
                         old=builds.get(data['draft_id'],{})
@@ -782,7 +786,7 @@ class Collaboration:
                     self._finish(state, run, task["state"], task["error"])
                     continue
                 if run["applied"] < len(run["updates"]):
-                    if phase_calls(run) >= call_budget(run['agent'],run['kind']):
+                    if phase_calls(run) >= call_budget(run['agent'],run['kind'],run.get('agent_config',{}).get('tools',())):
                         self._finish(state, run, "failed", "调用预算已用完，最新补充尚未应用；请参考部分结果新建任务")
                     else:
                         run.update(state="pending", attempt=run["attempt"]+1, cursor=0, parent_draft=task['answer'])
