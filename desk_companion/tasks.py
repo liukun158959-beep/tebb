@@ -496,7 +496,7 @@ class TaskManager:
             while self.active and time.monotonic() < deadline:
                 self.cv.wait(.05)
         self.scheduler.join(1)
-        if self.standby:self.standby.shutdown()
+        standby=self.standby.shutdown()if self.standby else None
         with self.cv:
             pending = list(self.active)
-        return dict(complete=not pending and not self.scheduler.is_alive(), pending_task_ids=pending)
+        return dict(complete=not pending and not self.scheduler.is_alive()and(standby is None or standby.get('complete',False)), pending_task_ids=pending,standby=standby)

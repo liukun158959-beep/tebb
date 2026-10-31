@@ -234,8 +234,11 @@ class TaskTests(unittest.TestCase):
         self.manager.cancel(task);self.assertEqual(self.manager.wait(task)['state'],'cancelled')
         self.assertTrue(self.manager.standby.wait_ready(5))
         workers=[item[0] for item in self.manager.standby.owned.values() if item]
-        self.manager.shutdown()
+        result=self.manager.shutdown()
         self.assertTrue(all(p.poll() is not None for p in workers))
+        self.assertTrue(result['complete']);self.assertTrue(result['standby']['complete'])
+        self.assertEqual({item['pid']for item in result['standby']['workers']},{p.pid for p in workers})
+        self.assertTrue(all(item['exited']for item in result['standby']['workers']))
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

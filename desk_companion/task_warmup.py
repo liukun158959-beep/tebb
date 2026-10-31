@@ -88,3 +88,11 @@ class WorkerStandby:
         # Closing the process tree unblocks the readiness reader before joining.
         for process,tree in items:tree.close()
         for thread in self.threads:thread.join(3)
+        with self.cv:
+            remaining=[item for item in self.owned.values()if item]
+            pending_slots=len(self.owned)
+        processes={id(process):process for process,_ in items+remaining}
+        workers=[dict(pid=process.pid,exited=process.poll()is not None,returncode=process.returncode)for process in processes.values()]
+        threads_alive=sum(thread.is_alive()for thread in self.threads)
+        return dict(complete=not pending_slots and not threads_alive and all(worker['exited']for worker in workers),
+                    workers=workers,pending_slots=pending_slots,threads_alive=threads_alive,scope='owned_idle_standbys')
