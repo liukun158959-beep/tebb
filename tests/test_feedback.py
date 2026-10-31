@@ -206,5 +206,28 @@ class FeedbackTests(unittest.TestCase):
             self.assertEqual(invalid[0]['status'],'unknown');self.assertFalse(feedback.report(invalid)['ok'])
         self.assertEqual(interpret(dict(requirements=[item]),rows,verified_checks=[{**known[0],'status':'unknown'}])[0]['status'],'unknown')
 
+    def test_explicit_required_json_prefix_is_not_a_quoted_example(self):
+        goal='用户目标：计算7与11。完成条件：你必须只返回一个 JSON 对象，包含total与checked。'
+        self.assertEqual(feedback.output_contract(goal),dict(format='json',schema=dict(type='object')))
+        self.assertEqual(feedback.check_output('说明 {"total":18}',goal)[0]['status'],'fail')
+        self.assertEqual(feedback.check_output('{"total":18}',goal)[0]['status'],'pass')
+        for text in ['解释“你必须只返回一个 JSON 对象”的含义。','示例：`你必须只返回JSON`。解释即可。','如果只返回JSON会怎样？']:
+            self.assertIsNone(feedback.output_contract(text))
+
+    def test_missing_rule_id_only_binds_one_passed_actual_rule_of_same_dimension(self):
+        from desk_companion.feedback_review import interpret,material
+        rows=material('JSON only','{"n":18}',[],[])
+        item=dict(requirement='JSON shape',dimension='format',status='supported',reason='valid JSON',evidence=[])
+        known=[feedback.check('output_format','format','pass','完整JSON格式已核对。')]
+        value=interpret(dict(requirements=[item]),rows,verified_checks=known)
+        self.assertEqual(value[0]['verified_by'],'output_format');self.assertEqual(value[0]['rule_binding'],'unique_actual_rule')
+        self.assertFalse(feedback.report(value)['ok']) # No substantive goal assessment.
+        for candidates in [[],[{**known[0],'status':'unknown'}],known+[feedback.check('another','format','pass','other')]]:
+            self.assertEqual(interpret(dict(requirements=[item]),rows,verified_checks=candidates)[0]['status'],'unknown')
+        self.assertEqual(interpret(dict(requirements=[{**item,'rule_id':'invented'}]),rows,verified_checks=known)[0]['status'],'unknown')
+        world={**item,'dimension':'claim_support','evidence':[dict(source_id='draft',quote='{"n":18}')]}
+        check=interpret(dict(requirements=[world]),rows,verified_checks=known)[0]
+        self.assertEqual(check['status'],'unknown');self.assertNotEqual(check['message'],check['model_reason'])
+
 
 if __name__=='__main__':unittest.main()

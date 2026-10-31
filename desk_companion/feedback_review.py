@@ -82,11 +82,15 @@ def interpret(value,materials,*,verified_checks=()):
     for index,item in enumerate(value['requirements']):
         if item['dimension']in RULE_DIMENSIONS or 'rule_id'in item:
             rule=verified.get(item.get('rule_id'))
+            if 'rule_id'not in item and item['dimension']in RULE_DIMENSIONS:
+                matches=[c for c in verified.values()if c['dimension']==item['dimension']]
+                if len(matches)==1:rule=matches[0]
             valid=item['dimension']in RULE_DIMENSIONS and rule is not None and rule['dimension']==item['dimension']
             out.append(check('review_'+str(index+1),item['dimension'],'pass'if valid else'unknown',
                 rule['message']if valid else'规则引用未对应同类型、实际已通过的确定性检查。',
                 basis='deterministic'if valid else'model_assessment',requirement=rule['message']if valid else item['requirement'],
                 verified_by=rule['id']if valid else None,invalid_rule_reference=not valid,
+                rule_binding=('explicit'if 'rule_id'in item else'unique_actual_rule')if valid else None,
                 scope='仅复用该实际规则的原范围，不证明其他断言或全部目标。',evidence=[]))
             continue
         grounded=[];invalid=[]
@@ -100,11 +104,15 @@ def interpret(value,materials,*,verified_checks=()):
             if match:
                 grounded.append(dict(**evidence,level=source['level'],match_kind=match))
             else:invalid.append(evidence['source_id'])
-        status={'supported':'pass','contradicted':'fail','unverified':'unknown'}[item['status']]
-        if invalid or status!='unknown'and not grounded:status='unknown'
-        if status=='pass'and item['dimension']=='claim_support'and not any(e['level']in{'body','actual_receipt','service_preview','checkout'}for e in grounded):status='unknown'
-        out.append(check('review_'+str(index+1),item['dimension'],status,item['reason'],basis='model_assessment',
-                         requirement=item['requirement'],evidence=grounded,invalid_evidence_ids=invalid))
+        status={'supported':'pass','contradicted':'fail','unverified':'unknown'}[item['status']];message=item['reason']
+        if invalid:
+            status='unknown';message='评审引句未匹配实际材料，该项待核验。'
+        elif status!='unknown'and not grounded:
+            status='unknown';message='评审没有提供可核对的依据，该项待核验。'
+        if status=='pass'and item['dimension']=='claim_support'and not any(e['level']in{'body','actual_receipt','service_preview','checkout'}for e in grounded):
+            status='unknown';message='评审将该项归为外部断言，但未引用正文或实际操作观察，该项待核验。'
+        out.append(check('review_'+str(index+1),item['dimension'],status,message,basis='model_assessment',
+                         model_reason=item['reason'],requirement=item['requirement'],evidence=grounded,invalid_evidence_ids=invalid))
     if not any(c['basis']=='model_assessment'and not c.get('invalid_rule_reference')for c in out):
         out.append(check('review_semantic_missing','task_acceptance','unknown','审阅只复用了规则，未核对候选的实质目标。',basis='model_assessment'))
     if normalizations:out[0]['protocol_normalizations']=normalizations

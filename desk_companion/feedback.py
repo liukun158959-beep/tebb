@@ -34,7 +34,7 @@ def output_contract(goal,declared=None):
     # Conservative standalone instruction only; quoted examples/explanations do
     # not become requirements. More complex goals need an explicit contract.
     instructions=re.sub(r'```[\s\S]*?```|`[^`\n]*`|“[^”]*”|‘[^’]*’|"[^"\n]*"', ' ',goal)
-    matches=list(re.finditer(r'(?:^|[。；;，,：:】\n])\s*(?:最终)?(?:只|仅)(?:能)?(?:输出|返回)(?:相同|同样|一个)?\s*(?:合法|有效|标准)?\s*(JSON|Markdown)\s*(对象)?(?=$|[。；;：:，,\n])',instructions,re.I))
+    matches=list(re.finditer(r'(?:^|[。；;，,：:】\n])\s*(?:最终)?(?:你|请)?\s*(?:必须|务必)?\s*(?:只|仅)(?:能)?(?:输出|返回)(?:相同|同样|一个)?\s*(?:合法|有效|标准)?\s*(JSON|Markdown)\s*(对象)?(?=$|[。；;：:，,\n])',instructions,re.I))
     formats=[(m.start(),m[1],bool(m[2]))for m in matches]
     english=r'(?:^|[.;\n])\s*(?:(?:return|output)\s+(?:only|just)|only\s+(?:return|output))\s+(JSON|Markdown)(\s+object)?(?=$|[.,:;\n])'
     formats.extend((m.start(),m[1],bool(m[2]))for m in re.finditer(english,instructions,re.I))
