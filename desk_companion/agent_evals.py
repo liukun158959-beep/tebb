@@ -3,7 +3,7 @@ import json
 import math
 import time
 
-CONTRACT_VERSION=6
+CONTRACT_VERSION=8
 
 
 class CancellationNotSettled(TimeoutError):
@@ -118,12 +118,12 @@ CASES = [
     case('chart_from_evidence','charts','先实际调用read_local_source读取本轮附件，再调用build_chart生成流程示意。标题“交付流程”，按附件三个节点原顺序连接；type=flow，flow_style=steps，source_ids=[]（本地附件不能伪造网页来源编号）。最终原样插入工具返回的tebb-chart围栏，说明是关系示意，不输出JSON，不编数值或增加分支。',
          dict(type='flow',nodes=['接收','核对','交付'],edges=[[0,1],[1,2]],source_ids=[],flow_style='steps'),
          executor='chart',kind='task',tools=['构建图表'],budget=5,required_tools=['read_local_source','build_chart']),
-    case('coder_read_modify_test','coding','读取隔离项目，修复函数且运行原测试，不修改测试。', prerequisite='live_project_sandbox', required_tools=['workspace_read','workspace_write','workspace_run']),
-    case('clone_install_run','coding','从公开仓库拉取项目，安装依赖，启动服务并验证HTTP后停止。', prerequisite='networked_project_sandbox', required_tools=['workspace_run']),
+    case('coder_read_modify_test','coding','读取隔离项目，修复函数且运行原测试，不修改测试。', executor='project',scenario='coding',budget=16,tools=['项目环境'],required_tools=['project_read','project_write','project_execute']),
+    case('clone_install_run','coding','从固定公开仓库配置原应用，验证HTTP/状态/日志后停止同一环境。', executor='project',scenario='clone',budget=16,tools=['项目环境'],required_tools=['project_prepare','project_read','project_start','project_status','project_log','project_stop']),
     case('calendar_read_only','tools','这是隔离的合成日历验收。请实际调用read_local_calendar读取北京时间2040-01-02的本地已保存日程。只输出JSON对象，必须且只能含count（数量）和titles（按开始时间排序的标题数组）。范围仅为本地快照，不访问飞书，不创建、修改或删除任何日程。',
          dict(count=2,titles=['验收事件A','验收事件B']), executor='local_calendar',kind='task',
          tools=['本地日程读取'],budget=4,required_tools=['read_local_calendar']),
-    case('cancel_active_tool','lifecycle','停止正在执行的隔离工具任务并核对实际进程结束。', prerequisite='cancellable_sandbox_fixture', required_tools=['workspace_run']),
+    case('cancel_active_tool','lifecycle','停止实际活动的隔离工具任务，分别核对模型worker与原SDK实例停止。', executor='project',scenario='cancel',budget=16,tools=['项目环境'],required_tools=['project_execute']),
     case('clarify_resume_root','lifecycle','请把两个数值相加，但两个数值尚未提供。请先追问缺少的数值，不要猜测。补齐后只返回JSON对象total（总和）和checked=true。',
          dict(total=18,checked=True),executor='lifecycle',scenario='clarify',budget=12,phase_budget=8),
     case('delegate_deliver','lifecycle','请委派本群写作者核对7与11的总和，写作者也必须只返回JSON对象total（总和）和checked=true；研究员负责人依据其实际结果完成最终汇总。必须实际分工，最终只返回相同JSON，不能由负责人直接省略委派或替代错误的子任务答案。',
@@ -138,6 +138,11 @@ def evaluate(spec, task, *, verification=None):
     events=task.get('events',[])
     tools=[e['data'].get('tool') for e in events if e.get('kind')=='tool_end' and isinstance(e.get('data'),dict) and e['data'].get('status')=='success']
     evidence=dict(task_state=task.get('state'), tools=tools, model_calls=sum(e.get('kind')=='llm_start' for e in events))
+    if spec.get('executor')=='project':
+        evidence['verification']=verification
+        expected='cancelled'if spec['scenario']=='cancel'else'succeeded'
+        if task.get('state')==expected and verification and verification.get('verified'):return 'success',evidence
+        return ('timed_out'if task.get('state')=='timed_out'else'false_success'if task.get('state')in{'succeeded','cancelled'}else'failed'),evidence
     if spec.get('executor')=='lifecycle':
         evidence['verification']=verification
         state=task.get('state')

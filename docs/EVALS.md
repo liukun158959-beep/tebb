@@ -11,8 +11,8 @@ python -m unittest discover -s tests -p 'test_agent_eval*.py' -v
 python scripts/eval_agent.py --output ../output/eval-fixture-new
 python scripts/eval_agent.py --samples 3 --output ../output/eval-fixture-samples-new
 python scripts/eval_agent.py --live --output ../output/eval-live-new --case extract_record --case filter_rows --case unit_conversion --case invoice_total --case preserve_unknown
-# 完整清单的预定独立采样；会消耗已配置模型用量，未实现案使退出码非零
-python scripts/eval_agent.py --live --samples 3 --output ../output/eval-live-samples-new
+# 完整清单的预定独立采样；消耗模型用量并创建官方沙箱
+python scripts/eval_agent.py --live --project-sdk official --samples 3 --output ../output/eval-live-samples-new
 ```
 
 默认使用本机 SSE 假模型，验证真实任务和工作流执行链及判定规则，不是模型质量成绩。默认的显式 `eval_fixture_worker.py` 通过 TaskManager 已有 command 接口调用正常 task_worker.main，仅将固定合成URL的外部下载替换为模拟服务；真实 PageReader 仍保存/加载按根任务隔离的快照。`--live` 使用默认生产worker、实际公开资料HTTP和当前配置模型/网络，产生模型用量。
@@ -21,11 +21,20 @@ python scripts/eval_agent.py --live --samples 3 --output ../output/eval-live-sam
 
 输出目录必须不存在；不覆盖旧失败、自动重试或为成功筛选样本。`--case` 可重复选择多个案例，`--limit` 是最多不同案例数（1–23），`--samples` 是每案预定独立样本数（1–5，质量采样推荐3）。每样本新工作区、会话和请求编号；日程不会跨样本累加，工作流不会命中上个样本的去重回执。
 
-`--timeout` 默认120秒、上限300秒，超时取消后最多再观察8秒，实际终态和超时判定分别保留。文本/路由最多2轮、日程/研究4轮、图表5轮；多阶段澄清恢复最多12次、单writer委派20次、活跃模型取消观察最多10次（路由与任务阶段合计）。逐案记录 call_budget；根 budget 的 collaboration_rounds 是单阶段最大值，max_case_model_calls 是跨阶段上限。传输关闭自动重试，工作流每案只有一个AI节点。这里只限制轮次和时间，**没有金额或输出token硬上限**；费用保持 `null`。没有执行器的案为 `incomplete`，整套清单当前因此返回非零退出码。
+`--timeout` 默认120秒、上限300秒，超时取消后最多再观察8秒，实际终态和超时判定分别保留。文本/路由最多2轮、日程/研究4轮、图表5轮；多阶段澄清恢复最多12次、单writer委派20次、活跃模型取消观察最多10次（路由与任务阶段合计）。项目案最多16次，另用 `--project-timeout`（默认600秒、20–1200秒），结果核对最多90秒、模型worker退出观察8秒、父后台退出110秒；各窗口和实际阶段写入报告。逐案记录 call_budget；根 budget 的 collaboration_rounds 是单阶段最大值，max_case_model_calls 是跨阶段上限。传输关闭自动重试，工作流每案只有一个AI节点。这里只限制轮次和时间，**没有金额或输出token硬上限**；费用保持 `null`。失败/假成功/超时/未实现返回非零；有前置skip时必须查看报告，退出码零不等于所有功能已验收。
+
+只运行项目组：
+
+```powershell
+python scripts/eval_agent.py --case coder_read_modify_test --case clone_install_run --case cancel_active_tool --samples 3 --output ../output/project-fixture-new
+python scripts/eval_agent.py --live --project-sdk official --case coder_read_modify_test --case clone_install_run --case cancel_active_tool --samples 3 --output ../output/project-live-new
+```
+
+每个项目样本有独立认证父宿主、工作区/会话/请求编号、项目store和操作日志；共同继承显式复制的隔离模型配置及统一调用观测目录。准备合成错误/原测试的操作与模型实际工具调用分开记录。Node样本1/3、Flask样本2；编码固定Flask环境附加合成文件，活动工具取消固定Node环境。报告的 `project_case` 包含实际任务、环境、SDK身份、阶段、核对及清理；错误保留failure_stage和脱敏OS错误编号/文件名。读写进度的Windows短暂占用最多等待1秒，只重试文件交接，不重试模型、VM创建或业务操作。
 
 ## 清单与证据
 
-机器清单位于 `desk_companion/agent_evals.py`，契约版本6，共23案、20个可执行案。判定器的期望对象不传给真实模型。3个 `route_decision_contract` 仅验证路由JSON，要求非空text；`mode=clarify`不代表持久主任务已进入needs_input，user_task_state仍为null。新增生命周期案例单独核对真实持久状态。工作流必须有 workflow_ai 成功回执并核对节点输出。
+机器清单位于 `desk_companion/agent_evals.py`，契约版本8，共23案、23个执行器。判定器的期望对象不传给真实模型。3个 `route_decision_contract` 仅验证路由JSON，要求非空text；`mode=clarify`不代表持久主任务已进入needs_input，user_task_state仍为null。新增生命周期案例单独核对真实持久状态。工作流必须有 workflow_ai 成功回执并核对节点输出。
 
 | 案例 | 固定任务/前置 | 机器核对证据 |
 | --- | --- | --- |
@@ -45,15 +54,15 @@ python scripts/eval_agent.py --live --samples 3 --output ../output/eval-live-sam
 | workflow_evidence | trigger→ai，仅验证2例 | verified_samples=2、universal_guarantee=false |
 | research_public_source | live读取RFC2606；fixture读取明确标记的模拟资料 | 实际web_fetch、同根完整快照/hash、四TLD与三示例域的区分、已读URL引用 |
 | chart_from_evidence | 读取合成附件“接收→核对→交付”，生成流程示意 | read_local_source/build_chart成功、实际围栏引用、可解码PNG/hash/root归属、节点/连线/spec符合输入 |
-| coder_read_modify_test | 尚需隔离代码项目执行器 | 未实现：需read/write/run及原测试结果 |
-| clone_install_run | 尚需联网项目沙箱执行器 | 未实现：需拉取/依赖/HTTP健康/停止进程证据 |
+| coder_read_modify_test | SDK内固定项目附加合成加法错误及原测试 | 实际project_read/write/execute；原测试SHA不变，最终写入后的最后一次原测试及独立复核均exit=0，停止原VM |
+| clone_install_run | 固定公开Node/Flask提交，按样本号交替 | 实际拉取/依赖、原命令SHA及原应用HTTP200/日志、跟踪源码无改动，查询及停止收据同环境，预览不可达与原SDK实例停止 |
 | calendar_read_only | 公开本地日历服务创建合成事件，仅授予本地日程读取 | 实际read_local_calendar成功回执、count/titles、读取前后快照SHA256相同；不代表飞书远端日程验收 |
-| cancel_active_tool | 尚需可取消工具执行器 | 未实现：需取消状态与实际进程结束证据 |
+| cancel_active_tool | 实际执行带活动标记的90秒命令，再公开取消主任务 | 活动日志及任务归属，模型worker退出、命令cancelled和原SDK实例stopped分别核对；兜底清理不能替代目标成功 |
 | clarify_resume_root | 数值缺失先追问，再公开send补充7和11 | 持久needs_input、同根恢复、最终total=18/checked=true、全部阶段任务/调用 |
 | delegate_deliver | research/writer群中明确要求写作者与负责人均交付求和JSON | 实际writer子任务成功且答案正确、同根deliver阶段、生产submit_deliverable接受及最终JSON |
 | cancel_active_model | 模型请求活跃时公开取消根任务 | 实际sending/receiving与匹配创建时间的活PID，取消后任务终态，外围shutdown前PID退出 |
 
-编码、clone/run、活动沙箱工具取消三案仍未实现，依赖 #191 产品接入，标incomplete而非skip；#190官方沙箱实机PoC已通过，不能据此声称这三个Agent执行器已完成，#173保持打开。只有真实探测到前置缺失才可标skip；已实现工具的实际HTTP/模型错误保留失败与诊断。模型取消仅证明本地worker终止，不保证供应商服务端推理停止，也不能代替沙箱内工具取消。
+三个项目案复用 #191 的正常父后台、Collaboration、TaskManager、worker、认证RPC和官方SDK适配。默认仅在SDK边界注入合成替身，固定脚本在本机私有目录模拟文件及HTTP；它拒绝执行模型生成的任意宿主命令，模拟测试退出码不是真实Linux测试成绩。真实项目案必须同时指定 `--live --project-sdk official`，否则在模型请求前拒绝；SDK探测确缺前置可标skip，后续创建/安装/运行错误保留失败。模型取消仅证明本地worker终止，不保证供应商服务端推理停止，也不能代替SDK实例停止。#191的16次调用是既有功能样本，不转算为本单新增质量样本。
 
 流程图的本地附件编号目前不能放入图表网页source_ids，案例使用合法的空source_ids关系示意；输入读取与资产语义另外核对，不声称资产元数据已有本地来源绑定。来源引用检查只核对来源归属，固定领域答案用于该案语义核验，不代表一般事实蕴含证明。
 

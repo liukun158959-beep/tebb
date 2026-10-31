@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from desk_companion.agent_evals import CASES, CONTRACT_VERSION, CancellationNotSettled, aggregate_usage, call_evidence, evaluate, refresh_call_evidence, summarize, wait_task
+from desk_companion.agent_eval_projects import ProjectPrerequisiteMissing
 
 # Also cleaned if setup fails before TaskManager is available.
 CREDENTIAL_PATH=None
@@ -52,7 +53,44 @@ class Fixture(BaseHTTPRequestHandler):
             return dict(tool_calls=[dict(index=0,id=uuid.uuid4().hex,type='function',function=dict(name=name,arguments=json.dumps(arguments,ensure_ascii=False)))])
         receipts=[m for m in request['messages'] if m.get('role')=='tool']
         executor=spec.get('executor')
-        if executor=='lifecycle':
+        available={v.get('function',{}).get('name')for v in request.get('tools',[])}
+        if executor=='project'and 'start_background_task' in available:
+            goal=next(m['content']for m in reversed(request['messages'])if m.get('role')=='user')
+            delta=tool('start_background_task',dict(instructions=goal,strategy='direct'))
+        elif executor=='project':
+            from desk_companion.agent_eval_projects import FIX,TEST_COMMAND,HOLD_COMMAND,PYTHON_SETUP,PYTHON_START,REPOSITORIES
+            scenario=spec['scenario'];text=json.dumps(request['messages'],ensure_ascii=False)
+            # Tool messages do not carry names in every compatible provider.
+            called=[call['function']['name']for m in request['messages']if m.get('role')=='assistant'for call in m.get('tool_calls',[])]
+            def done(name):return name in called
+            ident_match=re.search(r'environment_id=([a-f0-9]{32})',text)
+            if scenario in{'coding','cancel'}:
+                ident=ident_match[1]
+                if scenario=='cancel':delta=tool('project_execute',dict(environment=ident,command=HOLD_COMMAND,timeout=120))
+                elif not receipts:delta=tool('project_read',dict(environment=ident,path='eval_math.py'))
+                elif len(receipts)==1:delta=tool('project_read',dict(environment=ident,path='test_eval_math.py'))
+                elif not done('project_write'):delta=tool('project_write',dict(environment=ident,path='eval_math.py',text=FIX))
+                elif not done('project_execute'):delta=tool('project_execute',dict(environment=ident,command=TEST_COMMAND,timeout=30))
+                else:delta=dict(content='已按原测试验证合成实现。')
+            else:
+                variant='python'if 'pallets/flask' in text else'node';repository,ref=REPOSITORIES[variant]
+                if not done('project_prepare'):delta=tool('project_prepare',dict(repository=repository,ref=ref))
+                else:
+                    prepared=next(json.loads(m['content'])for m in receipts if 'environment' in json.loads(m['content']))
+                    ident=prepared['environment']['id']
+                    if not done('project_read'):delta=tool('project_read',dict(environment=ident,path='README.md'))
+                    elif variant=='python'and not done('project_execute'):delta=tool('project_execute',dict(environment=ident,command=PYTHON_SETUP,timeout=120))
+                    elif not done('project_start'):delta=tool('project_start',dict(environment=ident,command=PYTHON_START if variant=='python'else'npm start',port=5000 if variant=='python'else 3000))
+                    elif not done('project_status'):delta=tool('project_status',dict(environment=ident))
+                    elif not done('project_log'):
+                        started=next(json.loads(m['content'])for m in receipts if json.loads(m['content']).get('service_ready'))
+                        delta=tool('project_log',dict(environment=ident,operation=started['service']['operation']))
+                    elif not done('project_stop'):delta=tool('project_stop',dict(environment=ident))
+                    else:
+                        started=next(json.loads(m['content'])for m in receipts if json.loads(m['content']).get('service_ready'))
+                        delta=dict(content='合成SDK服务已核对并停止。实际回执中的[仓库]('+repository+'/tree/'+ref+')；'
+                                   '[验证预览（已停止）]('+started['service']['url']+')。')
+        elif executor=='lifecycle':
             names={t['function']['name'] for t in request.get('tools',[])}
             if 'request_clarification' in names:
                 if spec['scenario']=='clarify' and '用户补充目标' not in json.dumps(request['messages'],ensure_ascii=False):
@@ -104,12 +142,18 @@ def main():
     parser.add_argument('--case',action='append',default=[])
     parser.add_argument('--limit',type=int,default=len(CASES))
     parser.add_argument('--samples',type=int,default=1)
+    parser.add_argument('--project-sdk',choices=['disabled','official'],default='disabled')
+    parser.add_argument('--project-timeout',type=int,default=600)
     parser.add_argument('--timeout',type=int,default=120)
     args=parser.parse_args()
     if not 1<=args.limit<=len(CASES) or not 20<=args.timeout<=300 or not 1<=args.samples<=5:parser.error(f'limit 1..{len(CASES)}, timeout 20..300, samples 1..5')
     if args.output.exists():parser.error('--output must be a new directory; earlier failures are retained')
     selected=[s for s in CASES if not args.case or s['id'] in args.case][:args.limit]
     if not selected or set(args.case)-{s['id'] for s in CASES}:parser.error('unknown or empty case selection')
+    projects=any(s.get('executor')=='project'for s in selected)
+    if args.project_sdk=='official'and not args.live:parser.error('official SDK requires --live')
+    if args.live and projects and args.project_sdk!='official':parser.error('live project cases require explicit --project-sdk official')
+    if not 20<=args.project_timeout<=1200:parser.error('project-timeout 20..1200')
     from desk_companion import model_catalog,model_network
     model=model_catalog.require_active() if args.live else dict(id='eval-fixture',model='eval-fixture',api_key='eval-fixture-only',base_url='')
     policy=model_network.load() if args.live else dict(mode='direct')
@@ -134,6 +178,7 @@ def main():
     report=dict(schema_version=1,contract_version=CONTRACT_VERSION,mode='live' if args.live else 'fixture',model=model['model'],cases=[],attempts=1,
                 samples_per_case=args.samples,sampling_plan='independent; no retry or success selection',
                 network_mode=policy['mode'],budget=dict(max_cases=args.limit,max_samples=args.limit*args.samples,case_timeout_seconds=args.timeout,
+                    project_timeout_seconds=args.project_timeout if projects else None,project_sdk=('official'if args.live else'fixture')if projects else'disabled',
                     collaboration_rounds=max(s.get('phase_budget',s.get('budget',2)) for s in selected),max_case_model_calls=max(s.get('budget',2) for s in selected),transport_retries=0),
                 source_commit='',semantic_scope='machine-verifiable fixed tasks; not a general capability guarantee')
     import subprocess
@@ -144,7 +189,11 @@ def main():
             'desk_companion/task_worker.py','desk_companion/collaboration_worker.py',
             'desk_companion/collaboration_llm.py','desk_companion/workflow_worker.py','desk_companion/workflow_nodes.py',
             'desk_companion/local_calendar.py','desk_companion/tebb_tools.py','desk_companion/collaboration.py',
-            'desk_companion/agent_eval_tools.py','desk_companion/agent_eval_lifecycle.py','scripts/eval_fixture_worker.py')
+            'desk_companion/agent_eval_tools.py','desk_companion/agent_eval_lifecycle.py','scripts/eval_fixture_worker.py',
+            'desk_companion/agent_eval_projects.py','scripts/eval_project_host.py','scripts/eval_project_fixture.py',
+            'desk_companion/project_environments.py','desk_companion/project_environment_store.py','desk_companion/project_operations.py',
+            'desk_companion/project_tools.py','desk_companion/project_receipts.py','desk_companion/docker_sandboxes.py',
+            'desk_companion/worker_rpc.py','desk_companion/bridge.py','desk_companion/local_api/host.py','desk_companion/local_api/server.py')
     hashes={}
     for name in source_paths:
         raw=(ROOT/name).read_bytes()
@@ -179,12 +228,23 @@ def main():
             try:
                 run_id=uuid.uuid4().hex
                 workspace=profile/'workspaces'/(run_id+'.sqlite3')
-                initialize_workspace(workspace)
+                project=spec.get('executor')=='project'
+                if not project:initialize_workspace(workspace)
                 context=prepare(spec,workspace,run_id,fixture=not args.live)
                 row.update(input=context['prompt'],selection=context['selection'],collab_run=run_id)
                 lifecycle=spec.get('executor')=='lifecycle'
                 verification=None;calls=None
-                if lifecycle:
+                if project:
+                    from desk_companion.agent_eval_projects import execute
+                    def progress(value):
+                        row.update(value)
+                        if value.get('root_run'):row['collab_run']=value['root_run']
+                        save()
+                    task,verification,task_ids,calls=execute(spec,profile=profile,model_id=model['id'],timeout=args.project_timeout,sample=sample,official=args.live,progress=progress)
+                    row['task_ids']=task_ids;task_id=task_ids[0]if task_ids else''
+                    expired=verification.get('deadline_exceeded',False)
+                    row['project_case']=verification
+                elif lifecycle:
                     from desk_companion.agent_eval_lifecycle import execute
                     def progress(value):row.update(value);save()
                     task,verification,task_ids,calls=execute(spec,profile=profile,workspace=workspace,model_id=model['id'],timeout=args.timeout,command=command,progress=progress)
@@ -204,15 +264,15 @@ def main():
                 else:
                     task_id=manager.submit(context['prompt'],'eval-'+run_id,'collaboration',workflow='collaboration',kind=spec.get('kind','chat'),role=dict(id='research',name='验收助手',role='按实际输入完成可验证任务',tools=spec.get('tools',[])),selection=context['selection'],context=[],members=[],model_id=model['id'],collab_run=run_id,collab_path=str(workspace),budget=spec.get('budget',2),search_budget=0,fetch_budget=spec.get('fetch_budget',0),task_limits=dict(call_timeout=min(args.timeout,90),task_timeout=args.timeout),sampling=dict(reasoning_effort='low',temperature=0.1,top_p=1))
                 row['task_id']=task_id;save()
-                if not lifecycle:row['task_ids']=[task_id]
+                if not lifecycle and not project:row['task_ids']=[task_id]
                 row['stage']='wait'
-                if not lifecycle:task,expired=wait_task(manager,task_id,started+args.timeout)
+                if not lifecycle and not project:task,expired=wait_task(manager,task_id,started+args.timeout)
                 row['deadline_exceeded']=expired
                 if spec['category']=='workflow':
                     observed=service.operation('get',dict(run_id=run['id']))['run']
                     row['node_states']={k:v['state'] for k,v in observed['receipts'].items()}
                     task={**task,'answer':observed['receipts'].get('ai',{}).get('output',{}).get('text','')}
-                if not lifecycle:verification=verify(spec,task,context)
+                if not lifecycle and not project:verification=verify(spec,task,context)
                 row['stage']='verify'
                 outcome,evidence=evaluate(spec,task,verification=verification)
                 if expired:outcome='timed_out'
@@ -230,6 +290,8 @@ def main():
                 if row['outcome'] in {'success','needs_input'} and not calls:
                     row.update(outcome='false_success',reason='actual_model_call_not_recorded')
                 row['stage']='finished'
+            except ProjectPrerequisiteMissing as exc:
+                row.update(outcome='skip',reason='official_sdk_prerequisite_missing',error=str(exc))
             except CancellationNotSettled as exc:
                 row.update(outcome='timed_out',termination=exc.task['state'],deadline_exceeded=True,cancellation_confirmed=False,error_type=type(exc).__name__)
             except Exception as exc:
