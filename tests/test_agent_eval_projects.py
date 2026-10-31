@@ -10,6 +10,33 @@ from desk_companion.agent_evals import CASES,evaluate
 
 
 class ProjectVerdictTests(unittest.TestCase):
+    def test_setup_failure_waits_for_parent_cleanup_without_calling_unserved_http(self):
+        with TemporaryDirectory()as directory:
+            folder=None;parent=None
+            class Parent:
+                def __init__(self,command,**kwargs):
+                    nonlocal folder,parent
+                    parent=self;folder=Path(command[command.index('--directory')+1]);self.returncode=None;self.waited=False
+                    (folder/'setup-error.json').write_text(json.dumps(dict(error='fixture create EOF')),'utf-8')
+                def poll(self):return self.returncode
+                def wait(self,**kwargs):
+                    self.waited=True;self.returncode=1
+                    (folder/'cleanup.json').write_text(json.dumps(dict(sdk_stopped=True)),'utf-8')
+                    return 1
+            class Tree:
+                def __init__(self,process):self.process=process
+                def close(self):
+                    if self.process.poll()is None:self.process.returncode=-9
+            with patch('desk_companion.agent_eval_projects.subprocess.Popen',Parent),patch('desk_companion.task_process.ProcessTree',Tree),patch('desk_companion.agent_eval_projects.http.client.HTTPConnection',side_effect=AssertionError('parent has not served HTTP'))as connection:
+                with self.assertRaisesRegex(RuntimeError,'fixture create EOF'):
+                    execute(dict(id='setup-failure',scenario='cancel'),profile=directory,model_id='fake',timeout=20)
+            proof=json.loads((folder/'result.json').read_text('utf-8'))
+            self.assertTrue(parent.waited);connection.assert_not_called()
+            self.assertEqual(proof['parent_exit_code'],1)
+            self.assertNotIn('forced_parent_stop',proof)
+            self.assertTrue(proof['cleanup']['sdk_stopped'])
+            self.assertFalse(proof['verified'])
+
     def test_command_echo_is_not_an_active_guest_marker(self):
         self.assertTrue(active_tool_marker(b'guest output\r\ntebb-eval-tool-active\r\n'))
         self.assertFalse(active_tool_marker(b'python -c \'print("tebb-eval-tool-active")\''))

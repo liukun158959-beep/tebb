@@ -223,16 +223,21 @@ def execute(spec,*,profile,model_id,timeout,sample=1,official=False,progress=lam
         raise
     finally:
         if backend and backend.poll()is None:
+            if(folder/'ready.json').exists():
+                try:
+                    if run_id and root.get('state')not in{'succeeded','failed','cancelled','timed_out','interrupted'}:
+                        rpc('collaboration_action',action=dict(type='cancel',id=run_id,request_id=uuid.uuid4().hex))
+                    connection=http.client.HTTPConnection('127.0.0.1',port,timeout=4)
+                    connection.request('GET','/shutdown',headers={'Authorization':'Bearer '+token});connection.getresponse().read();connection.close()
+                except Exception as exc:proof['shutdown_request_error']=type(exc).__name__
             try:
-                if run_id and root.get('state')not in{'succeeded','failed','cancelled','timed_out','interrupted'}:
-                    rpc('collaboration_action',action=dict(type='cancel',id=run_id,request_id=uuid.uuid4().hex))
-                connection=http.client.HTTPConnection('127.0.0.1',port,timeout=4)
-                connection.request('GET','/shutdown',headers={'Authorization':'Bearer '+token});connection.getresponse().read();connection.close()
                 backend.wait(timeout=110)
-            except Exception:
-                proof['forced_parent_stop']=True
-                if tree:tree.close()
-                else:backend.kill();backend.wait(timeout=3)
+            except Exception as exc:
+                proof['parent_wait_error']=type(exc).__name__
+                if backend.poll()is None:
+                    proof['forced_parent_stop']=True
+                    if tree:tree.close()
+                    else:backend.kill();backend.wait(timeout=3)
         if stream:stream.close()
         if tree:tree.close()
         proof['parent_exited']=bool(backend and backend.poll()is not None)

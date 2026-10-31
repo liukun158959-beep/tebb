@@ -124,7 +124,11 @@ async def main(args):
         if args.scenario in{'coding','cancel'}:
             repository,ref=REPOSITORIES[args.variant]
             prepared=await asyncio.to_thread(service.prepare,'conversation:dm-research',uuid.uuid4().hex,repository,ref=ref)
-            if not prepared['ok']:raise RuntimeError(prepared.get('error','project fixture preparation failed'))
+            if not prepared['ok']:
+                atomic_json(folder/'setup-error.json',dict(prerequisite_missing=False,error=prepared.get('error','project fixture preparation failed'),
+                    environment_id=prepared.get('environment',{}).get('id'),operation_id=prepared.get('operation',{}).get('id'),
+                    log_id=prepared.get('log_id'),details=prepared.get('details',{})))
+                raise RuntimeError(prepared.get('error','project fixture preparation failed'))
             ident=prepared['environment']['id'];setup.update(environment=ident,setup_operations=[prepared['operation']['id']])
             if args.scenario=='coding':
                 for name,text in [('eval_math.py',BUG),('test_eval_math.py',TEST)]:
@@ -151,7 +155,7 @@ async def main(args):
         result=await cleanup
         atomic_json(folder/'cleanup.json',dict(sdk_stopped=result['ok'],result=result))
     except Exception as exc:
-        atomic_json(folder/'setup-error.json',dict(prerequisite_missing=False,error_type=type(exc).__name__,error=str(exc)))
+        atomic_json(folder/'setup-error.json',{**read_json(folder/'setup-error.json',{}),**dict(prerequisite_missing=False,error_type=type(exc).__name__,error=str(exc))})
         raise
     finally:
         service.closed=True
