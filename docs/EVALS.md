@@ -146,6 +146,10 @@ v9项目模拟回归12/12通过，JSON解析后的生命周期模拟6/6通过；
 
 预定三案与delegate_deliver各3个真实样本、每样本一次；计划保存在 `output/context-168-planning/predeclared-live.json`。当前12个模拟任务/21次SSE调用均通过、记录worker退出且凭据删除，材料在 `output/context-168-fixture-v10/`。这些样本跨旧应用裁切阈值，不是模型最大窗口测定；旧纯代码反例与新真实模型结果分开。普通/伙伴共用的已知容量准入由真实离线模板及实际Atlas/SDK请求边界另行回归，不能把模拟或未知tokenizer说成当前MIMO精确分词。
 
+真实v10执行代码为2c7e5d3，12个预定样本原判11成功、1 false_success，无跳过、未执行或超时。短/25条/长单条三组各3例全部通过，并核对9份实际请求完整保留历史；分工2成功、1最终格式失败。失败例存在真实子任务，子任务实际返回total=18、checked=true，父最终答复却在正确JSON外加Markdown，违反只返回JSON；不重写原分，也不将其归为错误计算或假分工。生产交付提示的Markdown要求及完成检查缺口由#169处理。
+
+实际21个阶段任务/21次调用，完整provider用量输入38404、输出5257 tokens、费用未知。33份源码副本逐文件匹配该Git提交，凭据已删、记录worker均退出。原报告 `output/context-168-live-v10/report.json`、审计 `output/context-168-planning/audit-completed.json` 与失败判读独立保留；模拟批次较早源码的差异有快照，不冒充同一真实执行版本。当前MIMO窗口和tokenizer未声明，此结果不能推广为最大窗口或一般成功率。
+
 v6复核补齐等待异常的调用证据，并将委派子任务的正确答案纳入验收，题目同步明确子任务也要交付JSON。故障注入在实际模拟调用出现后主动抛等待异常，正确记录timed_out、实际call_id及清理证明；不是质量样本。最终v6模拟三轮仍为60次成功/9次incomplete、75个阶段任务、87次调用，单独保存在 `output/agent-evals-173-fixture-samples3-v6/`；故障探针在 `output/agent-evals-173-exception-v6/`。没有回改任何历史分数，也未把模拟结果当真实模型新成绩。
 
 最终29项评测聚焦测试通过，完整后端单次855项、0失败/错误、13项条件跳过（12项显式沙箱opt-in、1项Windows符号链接权限）；其中17项是同工作树尚未提交的 #191 适配基础测试，本变更所含主线范围为838项，不能据此宣称 #191 产品验收完成。复核脚本 `output/agent-evals-173-checks-v6/audit.py` 核对三个报告的14份源码副本、当前v6源码及全部记录worker退出；报告与开发失败材料均保留在本机。
