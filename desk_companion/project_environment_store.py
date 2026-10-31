@@ -118,12 +118,13 @@ class EnvironmentStore:
             environment['sandbox_id']=sandbox_id;self._save(db,environment)
             return environment
 
-    def finish(self,operation_id,state,*,result=None,error='',changes=None):
+    def finish(self,operation_id,state,*,result=None,error='',changes=None,error_details=None):
         with self.transaction() as db:
             operation=self._operation(db,operation_id);environment=self._environment(db,operation['environment'])
             if operation['state'] not in ACTIVE:return environment,operation
             if operation['cancel_requested'] and state=='succeeded':raise RuntimeError('取消后不能登记项目操作成功。')
             operation.update(state=state,result=result,error=error)
+            if error_details is not None:operation['error_details']=error_details
             if environment.get('active_operation')==operation_id:
                 environment.update(changes or {})
                 environment['latest_operation']=operation_id

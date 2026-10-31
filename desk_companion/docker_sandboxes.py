@@ -12,6 +12,17 @@ DEPENDENCY_HOSTS=('github.com:443','codeload.github.com:443','objects.githubuser
 NO_WINDOW=0x08000000 if os.name=='nt' else 0
 
 
+def diagnostic_text(value):
+    """Bound local control diagnostics and remove common credential encodings."""
+    text=value.decode('utf-8',errors='replace') if isinstance(value,bytes) else str(value or '')
+    text=re.sub(r'(?i)\b(?:Bearer|Basic)\s+[^\s\"\']+','[redacted authorization]',text)
+    text=re.sub(r'''(?ix)(["']?[\w-]*(?:api[_-]?key|token|secret|password|credential|authorization)[\w-]*["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)''',r'\1[redacted]',text)
+    text=re.sub(r'(https?://)[^\s/@:]+:[^\s/@]+@',r'\1[redacted]@',text)
+    text=re.sub(r'(https?://[^\s?]+)\?[^\s]+',r'\1?[redacted query]',text)
+    text=re.sub(r'\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b','[redacted jwt]',text)
+    return text[:65536]+('\n[control diagnostic truncated]\n' if len(text)>65536 else '')
+
+
 def cli_environment():
     """Keep Docker's user login context, remove product RPC and common provider keys."""
     secrets={'OPENAI_API_KEY','ANTHROPIC_API_KEY','MIMO_API_KEY','DASHSCOPE_API_KEY','NPM_TOKEN','GITHUB_TOKEN','GH_TOKEN'}
@@ -20,10 +31,12 @@ def cli_environment():
 
 
 class SandboxError(RuntimeError):
-    def __init__(self,code,message,*,operation='',unknown=False,exit_code=None):
+    def __init__(self,code,message,*,operation='',unknown=False,exit_code=None,diagnostics_available=False):
         super().__init__(message)
         self.code,self.public_message,self.operation,self.outcome_unknown=code,message,operation,unknown
         self.exit_code=exit_code
+        self.details=dict(error_code=code,cli_operation=operation,exit_code=exit_code,outcome_unknown=unknown,
+                          diagnostics_available=diagnostics_available)
 
 
 def name(value):
@@ -40,25 +53,42 @@ def port(value):
 class SandboxesClient:
     def __init__(self,*,program=None,runner=subprocess.run):
         self.runner=runner
+        self.recorders=[]
         if program is None:
             program=shutil.which('sbx')
             candidate=Path(os.environ.get('LOCALAPPDATA',''))/'DockerSandboxes/bin/sbx.exe'
             if not program and candidate.is_file():program=str(candidate)
         self.program=str(program) if program else None
 
+    def observe_control(self,recorder):
+        """Observers receive completed control IO, never replace/replay its runner."""
+        if not callable(recorder):raise TypeError('SDK recorder must be callable')
+        if recorder not in self.recorders:self.recorders.append(recorder)
+
+    def _record(self,command,*,result=None,error=None):
+        available=False
+        for recorder in self.recorders:
+            try:available=recorder(command,result=result,error=error)is True or available
+            except Exception:pass  # Observability cannot change or repeat a mutation.
+        return available
+
     def _call(self,args,*,timeout=30,mutating=False):
         if self.program is None:raise SandboxError('not_installed','未找到官方Docker Sandboxes，请先安装并登录。')
+        command=[self.program,*args]
         try:
-            result=self.runner([self.program,*args],capture_output=True,text=True,encoding='utf-8',errors='replace',
+            result=self.runner(command,capture_output=True,text=True,encoding='utf-8',errors='replace',
                                timeout=timeout,creationflags=NO_WINDOW,env=cli_environment())
         except subprocess.TimeoutExpired as exc:
+            recorded=self._record(command,error=exc)
             raise SandboxError('outcome_unknown' if mutating else 'query_timeout',
-                '官方沙箱操作超时，请先核对原环境状态。' if mutating else '官方沙箱状态查询超时。',operation=args[0],unknown=mutating) from exc
+                '官方沙箱操作超时，请先核对原环境状态。' if mutating else '官方沙箱状态查询超时。',operation=args[0],unknown=mutating,diagnostics_available=recorded) from exc
         except OSError as exc:
-            raise SandboxError('cli_unavailable','官方沙箱CLI不可用，请检查安装与本机运行权限。',operation=args[0]) from exc
+            recorded=self._record(command,error=exc)
+            raise SandboxError('cli_unavailable','官方沙箱CLI不可用，请检查安装与本机运行权限。',operation=args[0],diagnostics_available=recorded) from exc
+        recorded=self._record(command,result=result)
         if result.returncode:
             # Raw CLI output may contain local configuration; public errors stay bounded.
-            raise SandboxError('cli_failed','官方沙箱操作失败，请核对daemon、登录、版本和当前策略。',operation=args[0],unknown=mutating,exit_code=result.returncode)
+            raise SandboxError('cli_failed','官方沙箱操作失败，请核对daemon、登录、版本和当前策略。',operation=args[0],unknown=mutating,exit_code=result.returncode,diagnostics_available=recorded)
         if len(result.stdout)>1024*1024:raise SandboxError('invalid_response','官方沙箱控制响应过大。',operation=args[0],unknown=mutating)
         return result.stdout
 

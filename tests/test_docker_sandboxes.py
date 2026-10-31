@@ -23,6 +23,22 @@ def inventory(state='running',ident='id-1'):
 
 
 class SandboxesClientTests(unittest.TestCase):
+    def test_failing_recorder_cannot_retry_or_replace_actual_cli_result(self):
+        calls=[]
+        def runner(command,**kwargs):
+            calls.append(command)
+            return SimpleNamespace(returncode=17,stdout='',stderr='synthetic private detail')
+        client=SandboxesClient(program='sbx-test',runner=runner)
+        client.observe_control(lambda *a,**k:(_ for _ in ()).throw(OSError('synthetic full log')))
+        with self.assertRaises(SandboxError)as failure:client._call(['create'],mutating=True)
+        self.assertEqual(len(calls),1)
+        self.assertEqual(failure.exception.exit_code,17)
+        self.assertTrue(failure.exception.outcome_unknown)
+        self.assertFalse(failure.exception.details['diagnostics_available'])
+        self.assertNotIn('synthetic private detail',str(failure.exception))
+        client.runner=lambda *a,**k:SimpleNamespace(returncode=0,stdout='actual result',stderr='')
+        self.assertEqual(client._call(['create'],mutating=True),'actual result')
+
     def test_cli_does_not_inherit_product_rpc_or_common_provider_keys(self):
         with patch.dict(os.environ,DESK_TERMINAL_TOKEN='synthetic-rpc-secret',OPENAI_API_KEY='synthetic-key',LOCALAPPDATA='user-login-location'):
             client,runner=self.client(['sbx version v0.50.1','[]']);self.assertTrue(client.probe()['ok'])

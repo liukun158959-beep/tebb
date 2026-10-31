@@ -2,7 +2,23 @@
 
 关联 #190/#191。Tauri 主客户端中的“项目环境”能力使用官方 Docker Sandboxes，不在宿主运行下载的项目。首版面向公开 GitHub HTTPS 的 Node/Python Web 项目；私有仓库、GPU 和 Windows 桌面程序不在本轮验收范围。Docker Sandboxes 当前接口仍属预发布能力，本轮固定 CLI v0.50.1 与已验证的官方 shell digest，基础证据见 [PoC](SANDBOX_POC.md)。不据两个样本承诺任意依赖均可安装。
 
-## 使用
+## 官方 CLI 故障诊断（#202）
+
+默认服务原本已有操作日志；现在显式注入的官方 client 也通过同一记录通道保存控制输出，不替换其 runner 或子类、不再次执行命令。`create`、网络、clone、install 等阶段与原 operation 对齐；失败的 `operation.error_details` 保存 `error_code/cli_operation/exit_code/outcome_unknown/diagnostics_available`，原错误回放仍返回原记录。公开错误保持简短，原 `log_id` 即诊断关联号。
+
+通过现有桌面 token 认证 RPC 调用 `project_environments_ui`：`operation=status, payload={environment:环境ID}` 取得原 operation 和错误码；再以 `operation=log, payload={environment:环境ID, operation:原操作ID, offset:0}` 读取 base64 日志。没有新建执行入口。CLI 控制片段最多64KiB，操作总日志仍为4MiB；Bearer/Basic、常见密钥字段、URL认证和查询签名脱敏，其他环境的 ls/policy 标准输出不写入本项目日志。日志记录失败或达到总限额不改变/重放实际 SDK 操作，失败回执会标诊断不可得。
+
+创建回执不明、身份未绑定或原操作 unknown 时，status 明确 `recovery_required=true`。先沿用原 `reconcile` 归属标记核对，不重新 create，不凭同名停止。未在当前清单找到原名只是一时观察，不能据此声称它从未创建。模型诚实报告失败与任务完成状态的统一由 #169 跟踪。
+
+本机无模型回归命令：
+
+```powershell
+python -m unittest tests.test_docker_sandboxes tests.test_project_environments tests.test_project_operations tests.test_project_environment_store tests.test_project_receipts -v
+```
+
+覆盖注入client/自定义runner/子类、非零退出与超时部分bytes、凭据脱敏、跨scope日志拒绝、未知原请求不重复及日志故障不改变实际结果。不重放此前失败的创建，不自动登录或重启daemon。
+
+## 使用步骤
 
 1. 本机先安装、登录并启动官方 Docker Sandboxes。Windows 虚拟化前置按官方要求配置；“检查连接”仅检测控制通道，不冒充 VM/项目验收。
 2. 在伙伴设置显式勾选“项目环境”，再提供公开仓库地址及运行目标。旧角色不会自动获得这项权限，tebb 的身份也不能绕过它。无需先授权本机文件夹。

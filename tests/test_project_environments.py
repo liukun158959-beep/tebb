@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import uuid
 
 from desk_companion.project_environments import ProjectEnvironmentService,relative_path,repository
-from desk_companion.docker_sandboxes import SandboxError
+from desk_companion.docker_sandboxes import SandboxError,SandboxesClient
 
 
 class Provider:
@@ -36,6 +36,57 @@ class Provider:
 
 
 class ProjectEnvironmentTests(unittest.TestCase):
+    def test_control_timeout_keeps_redacted_partial_bytes_and_unknown_original(self):
+        import subprocess
+        calls=[];secret='synthetic-timeout-secret-202'
+        def runner(command,**kwargs):
+            calls.append(command)
+            if command[1]=='ls':return SimpleNamespace(returncode=0,stdout='[]',stderr='')
+            raise subprocess.TimeoutExpired(command,1,output=('token='+secret).encode(),stderr=('Bearer '+secret).encode())
+        service=ProjectEnvironmentService(Path(self.folder.name)/'timeout',client=SandboxesClient(program='sbx-test',runner=runner))
+        result=service.prepare(self.scope,self.request,'https://github.com/example/demo')
+        self.assertEqual([v[1]for v in calls],['ls','create'])
+        self.assertEqual(result['operation']['state'],'unknown')
+        self.assertEqual(result['operation']['error_details']['error_code'],'outcome_unknown')
+        self.assertTrue(result['operation']['error_details']['diagnostics_available'])
+        data=base64.b64decode(service.log(result['environment']['id'],self.scope,result['log_id'])['base64']).decode()
+        self.assertNotIn(secret,data);self.assertIn('TimeoutExpired',data)
+        self.assertTrue(service.status(result['environment']['id'],self.scope)['recovery_required'])
+
+    def test_injected_native_client_keeps_runner_and_subclass_with_scoped_redacted_diagnostics(self):
+        calls=[]
+        secret='synthetic-private-secret-202'
+        def runner(command,**kwargs):
+            calls.append(command)
+            if command[1]=='ls':return SimpleNamespace(returncode=0,stdout='[]',stderr='')
+            return SimpleNamespace(returncode=17,stdout='',stderr='create denied; Authorization: Bearer '+secret+
+                '\napi_key="'+secret+'"\nhttps://name:'+secret+'@example.test/x?token='+secret)
+        class Native(SandboxesClient):
+            creates=0
+            def create(self,*args,**kwargs):
+                self.creates+=1
+                return super().create(*args,**kwargs)
+        client=Native(program='sbx-test',runner=runner)
+        service=ProjectEnvironmentService(Path(self.folder.name)/'injected',client=client)
+        first=service.prepare(self.scope,self.request,'https://github.com/example/demo')
+        second=service.prepare(self.scope,uuid.uuid4().hex,'https://github.com/example/demo')
+        self.assertIs(service.client,client);self.assertIs(client.runner,runner)
+        self.assertEqual(client.creates,1);self.assertEqual([v[1]for v in calls],['ls','create'])
+        self.assertEqual(first['environment']['id'],second['environment']['id'])
+        self.assertEqual(first['operation']['stage'],'create')
+        details=first['operation']['error_details']
+        self.assertEqual(details['error_code'],'cli_failed');self.assertEqual(details['exit_code'],17)
+        self.assertTrue(details['diagnostics_available'])
+        self.assertEqual(second['operation']['error_details'],details)
+        log=service.log(first['environment']['id'],self.scope,first['log_id'])
+        data=base64.b64decode(log['base64']).decode()
+        self.assertIn('create denied',data);self.assertIn('exit=17',data)
+        self.assertNotIn(secret,data);self.assertNotIn(secret,json.dumps(first))
+        self.assertIn('[redacted',data)
+        status=service.status(first['environment']['id'],self.scope)
+        self.assertTrue(status['recovery_required']);self.assertEqual(client.creates,1)
+        with self.assertRaises(ValueError):service.log(first['environment']['id'],'another-scope',first['log_id'])
+
     def setUp(self):
         self.folder=tempfile.TemporaryDirectory();self.addCleanup(self.folder.cleanup)
         self.provider=Provider();self.service=ProjectEnvironmentService(self.folder.name,client=self.provider)

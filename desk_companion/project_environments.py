@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 
-from .docker_sandboxes import SandboxesClient, SandboxError, NO_WINDOW, port, cli_environment
+from .docker_sandboxes import SandboxesClient, SandboxError, NO_WINDOW, port, cli_environment, diagnostic_text
 from .project_environment_store import EnvironmentStore
 
 LOG_LIMIT=4*1024*1024
@@ -60,7 +60,8 @@ class ProjectEnvironmentService:
         self.store.recover_pending()
         self.context=threading.local();self.lock=threading.RLock();self.processes={};self.readers={};self.runtime_locks={};self.closed=False
         self.owner_active=owner_active
-        self.client=client or SandboxesClient(runner=self._control)
+        self.client=client or SandboxesClient()
+        if isinstance(self.client,SandboxesClient):self.client.observe_control(self._record_control)
 
     def _log_path(self,operation):
         return self.path/'logs'/(request_id(operation)+'.log')
@@ -76,19 +77,23 @@ class ProjectEnvironmentService:
             with path.open('ab') as stream:stream.write(data[:remaining])
             return len(data)>remaining
 
-    def _control(self,command,**kwargs):
+    def _record_control(self,command,*,result=None,error=None):
         operation=getattr(self.context,'operation','')
-        try:result=subprocess.run(command,**kwargs)
-        except subprocess.TimeoutExpired as exc:
-            for output in (exc.stdout,exc.stderr):
-                if output:self._append(operation,output)
-            self._append(operation,'\n[official CLI timeout; receipt unknown]\n');raise
+        if not operation:return None
+        truncated=[]
+        def append(value):
+            truncated.append(self._append(operation,diagnostic_text(value)))
+        if error is not None:
+            for output in (getattr(error,'stdout',None),getattr(error,'stderr',None)):
+                if output:append(output)
+            append('\n[official CLI '+command[1]+' '+type(error).__name__+'; receipt requires checking]\n')
+            return not any(truncated)
         # ls includes other users' locally owned SDK resources; it is not this project's log.
         outputs=(result.stderr,) if command[1] in {'ls','policy'} else (result.stdout,result.stderr)
         for output in outputs:
-            if output:self._append(operation,output)
-        self._append(operation,f'\n[official CLI {command[1]} exit={result.returncode}]\n')
-        return result
+            if output:append(output)
+        append(f'\n[official CLI {command[1]} exit={result.returncode}]\n')
+        return not any(truncated)
 
     @contextmanager
     def _context(self,operation):
@@ -185,7 +190,9 @@ class ProjectEnvironmentService:
 
     def _failure(self,operation,exc):
         record=self.store.operation(operation);environment=self.store.get(record['environment'])
-        self._append(operation,'\n['+type(exc).__name__+'] '+str(exc)+'\n')
+        log_error=False
+        try:self._append(operation,'\n['+type(exc).__name__+'] '+str(exc)+'\n')
+        except OSError:log_error=True
         error=str(exc);unknown=isinstance(exc,SandboxError) and exc.outcome_unknown
         stopped=False
         with self.lock:process=self.processes.get(operation)
@@ -201,9 +208,11 @@ class ProjectEnvironmentService:
         state='unknown' if unknown and not stopped else 'cancelled' if isinstance(exc,OperationCancelled) or record['cancel_requested'] else 'failed'
         changes=dict(state=environment['state'] if preserve_service else state,
                      service=environment.get('service') if preserve_service or state=='unknown' else None)
-        environment,record=self.store.finish(operation,state,error=error,changes=changes)
+        details=dict(getattr(exc,'details',{}))
+        if log_error:details['diagnostics_available']=False
+        environment,record=self.store.finish(operation,state,error=error,changes=changes,error_details=details)
         return dict(ok=False,environment=environment,operation=record,error=error,log_id=operation,stop_confirmed=stopped,
-                    details=getattr(exc,'details',{}))
+                    details=details)
 
     def prepare(self,scope,request,repo,*,ref='',owner_task='',owner_run='',conversation='',project_id=''):
         repo=repository(repo);request=request_id(request)
@@ -222,6 +231,7 @@ class ProjectEnvironmentService:
         with self._context(request):
             try:
                 self._check(request)
+                self.store.checkpoint(request,'create')
                 observed=self.client.create(environment['sandbox_name'],environment['id'])
                 environment=self.store.bind_runtime(request,observed['id'])
                 self._check(request)
@@ -410,9 +420,10 @@ class ProjectEnvironmentService:
             process=self.processes.get(service.get('operation'))
             held=bool(process and process.poll() is None)
         ready=bool(service.get('state')=='ready' and held and observed and observed['status']=='running' and health['ok'])
+        operation=self.store.operation(environment['active_operation']) if environment.get('active_operation') else None
         return dict(ok=True,environment=environment,observed_runtime=observed,error=error,service_ready=ready,
-                    health=health,recovery_required=bool(service.get('state') in {'ready','unknown'} and not held),
-                    operation=self.store.operation(environment['active_operation']) if environment.get('active_operation') else None)
+                    health=health,recovery_required=bool(environment['state']=='unknown' or (operation or {}).get('state')=='unknown'
+                        or service.get('state') in {'ready','unknown'} and not held),operation=operation)
 
     def reconcile(self,ident,scope,*,verify=False,owner_task=''):
         """Observe the old candidate, then explicitly verify its saved ownership marker."""
