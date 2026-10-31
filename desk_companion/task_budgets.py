@@ -333,6 +333,15 @@ class Scope:
     def notice(self):
         if self.emit:self.emit('task_budget',self.ledger.view(self.member['id']))
 
+    def stage_call_limit(self,legacy_limit,kind):
+        """A finite loop hint; the atomic ledger still admits every request."""
+        if kind!='task'or self.member['purpose']!='task':return legacy_limit
+        root=self.ledger.view(self.member['id'])
+        if root['status']!='active':return 0
+        remaining=root['remaining']['model_calls']
+        if self.member['root_member']:return remaining
+        return max(0,min(legacy_limit,remaining-root['finish_reserve']['model_calls']))
+
     def tool(self,read_only=True,kind=''):
         tier='coding'if kind.startswith(('project_','workspace_'))and kind not in{'project_chat_search'}else'research'if kind in{'web_search','web_fetch','github_repository','read_video'}else'chart'if kind=='build_chart'else None
         root=self.ledger.read(self.member['id'])

@@ -15,6 +15,34 @@ class RootBudgets(unittest.TestCase):
         self.ledger.bind(self.root,'parent',root_member=True)
         self.ledger.bind(self.root,'child')
 
+    def test_stage_loop_hint_uses_trusted_root_and_keeps_child_local_limit(self):
+        from desk_companion.task_budgets import Scope
+        with patch('desk_companion.task_budgets.Ledger',return_value=self.ledger):
+            parent=Scope('parent');child=Scope('child')
+        self.assertEqual(parent.stage_call_limit(12,'task'),16)
+        self.assertEqual(parent.stage_call_limit(1000000,'task'),16)
+        self.assertEqual(child.stage_call_limit(12,'task'),12)
+        self.assertEqual(parent.stage_call_limit(2,'plan'),2)
+        for i in range(13):
+            call,_=self.ledger.reserve_call('parent',10,phase='control')
+            self.ledger.settle('parent',call,dict(prompt_tokens=10,completion_tokens=1))
+            self.ledger.progress('parent','read',str(i),str(i))
+        self.assertEqual(parent.stage_call_limit(12,'task'),3)
+        self.assertEqual(child.stage_call_limit(12,'task'),1)
+        self.assertEqual(self.ledger.view(self.root)['limits']['model_calls'],16)
+        self.assertEqual(self.ledger.view(self.root)['extensions'],[])
+        self.ledger.finish(self.root)
+        self.assertEqual(parent.stage_call_limit(12,'task'),0)
+        self.assertEqual(child.stage_call_limit(12,'task'),0)
+        self.ledger.resume(self.root)
+        self.assertEqual(parent.stage_call_limit(12,'task'),3)
+
+    def test_control_member_cannot_claim_root_task_loop_hint(self):
+        from desk_companion.task_budgets import Scope
+        self.ledger.bind(self.root,'planner',root_member=True,purpose='plan')
+        with patch('desk_companion.task_budgets.Ledger',return_value=self.ledger):scope=Scope('planner')
+        self.assertEqual(scope.stage_call_limit(2,'task'),2)
+
     def test_parallel_children_cannot_overspend_and_crashed_reservations_remain(self):
         with self.ledger.change(self.root)as root:
             root['limits'].update(output_tokens=1000000)

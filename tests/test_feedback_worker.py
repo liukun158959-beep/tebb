@@ -65,6 +65,29 @@ class FeedbackWorkerTests(unittest.TestCase):
                     self.assertEqual(json.loads(row['content'])['text'],result['text'])
         self.assertFalse(any(kind=='evidence'and any(s.get('level')=='body'for s in data.get('sources',[]))for kind,data in self.events))
 
+    def test_trusted_root_can_finish_after_old_twelve_call_phase_boundary(self):
+        import hashlib
+        from desk_companion.task_budgets import Ledger,installed,current
+        ledger=Ledger();root=ledger.create('root-stage','coding');ledger.bind(root,self.request['task_id'],root_member=True)
+        self.request.update(budget=12,role=dict(id='writer',name='writer',role='write',tools=['项目环境']))
+        calls=[dict(tool_calls=[dict(id='read-'+str(i),function=dict(name='project_read',arguments=json.dumps(
+            dict(environment='a'*32,path='source-'+str(i)))) )])for i in range(13)]
+        task=self.request['task_id']
+        class BudgetedModel(ScriptedModel):
+            def chat(model,*args,**kwargs):
+                call,_=ledger.reserve_call(task,10,phase=current().phase())
+                result=super().chat(*args,**kwargs);ledger.settle(task,call,result['usage']);return result
+        model=BudgetedModel([*calls,'{"read":13}'])
+        def read(method,payload):
+            text=payload['path'];return dict(ok=True,text=text,sha256=hashlib.sha256(text.encode()).hexdigest())
+        with installed(task),patch('desk_companion.project_tools.call',side_effect=read):self.run_model(model)
+        self.assertEqual(len(model.calls),15)  # 13 actual reads, final candidate, independent review.
+        self.assertEqual(ledger.view(root)['consumed']['model_calls'],15)
+        self.assertEqual(ledger.view(root)['limits']['model_calls'],24)
+        self.assertEqual(ledger.view(root)['extensions'],[])
+        report=next(data for kind,data in self.events if kind=='feedback_check')
+        self.assertFalse(any(row['id']=='review_unavailable'for row in report['checks']))
+
     def test_structured_citation_and_real_review_have_separate_checks(self):
         source=dict(kind='page',level='body',url='https://example.org/source',text='Launch was in 2020.')
         self.request.update(text='只输出JSON对象，含year和citation来源。',source_evidence=[source])

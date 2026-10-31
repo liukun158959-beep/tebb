@@ -167,6 +167,9 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     search_errors = []
     default_budget=call_budget(role.get('id'),kind,role.get('tools',()))
     budget = min(default_budget, int(request.get("budget",default_budget)))
+    from .task_budgets import current
+    scope=current()
+    if scope:budget=scope.stage_call_limit(budget,kind)
     allowed_search = kind == "task" and "联网搜索" in role.get("tools", [])
     allowed_fetch = kind == "task" and "网页读取" in role.get("tools", [])
     search_budget = max(0, min(4, int(request.get("search_budget", 2))))
@@ -349,7 +352,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
         latest_updates()
         if kind=='task' and sources:
             catalog_message=replace_owned_message(messages,catalog_message,'当前实际证据编号（仅body为已读正文；snippet仅摘要）：'+json.dumps([{k:s.get(k) for k in ('id','url','level','title','truncated')} for s in source_catalog(sources)],ensure_ascii=False))
-        reserve=1 if set(role.get('tools',[])) & {'文件编辑','终端','项目环境'} else 2
+        reserve=2 if scope or not set(role.get('tools',[])) & {'文件编辑','终端','项目环境'} else 1
         finishing=kind=='task' and consumed>=max(0,budget-reserve)
         if finishing:
             turn_message=replace_owned_message(messages,turn_message,'进入交付收尾，本轮不再发起采集或执行工具。用实际已取得资料完成当前交付，保留Markdown来源链接；不足须说明，不编造。实际可引用链接：'+json.dumps(list(dict.fromkeys(s['url'] for s in sources)),ensure_ascii=False))
