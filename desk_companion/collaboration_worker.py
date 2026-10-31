@@ -392,7 +392,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
         nonlocal catalog_message,turn_message,finishing
         latest_updates()
         if kind=='task' and sources:
-            catalog_message=replace_owned_message(messages,catalog_message,'当前实际证据编号（仅body为已读正文；snippet仅摘要）：'+json.dumps([{k:s.get(k) for k in ('id','url','level','title','truncated')} for s in source_catalog(sources)],ensure_ascii=False))
+            catalog_message=replace_owned_message(messages,catalog_message,'引用即使放在JSON字符串字段内，也必须是"[完整证据id]"，保留方括号；裸id不会成为引用。以下id只是格式变量，复制本清单实际id，不照抄示例。当前实际证据编号（仅body为已读正文；snippet仅摘要）：'+json.dumps([{k:s.get(k) for k in ('id','url','level','title','truncated')} for s in source_catalog(sources)],ensure_ascii=False))
         reserve=2 if scope or not set(role.get('tools',[])) & {'文件编辑','终端','项目环境'} else 1
         finishing=kind=='task' and consumed>=max(0,budget-reserve)
         if finishing:

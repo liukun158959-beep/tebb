@@ -16,7 +16,7 @@ run的`execution_runtime`记录实际legacy或atlas_readonly；`runtime_observat
 python scripts/eval_agent.py --case readonly_serial --case readonly_legacy_parallel --case readonly_atlas_parallel --limit 3 --samples 1 --timeout 90 --output ../output/research-fixture-new
 ```
 
-这是明确的合成文档与假模型，不构成真实语义能力结论。三个案例都走实际路由、计划、两个子任务、负责人汇总和独立审阅；旧串行仅1工作进程，另外两种允许2个。统一报告契约v17。
+这是明确的合成文档与假模型，不构成真实语义能力结论。三个案例都走实际路由、计划、两个子任务、负责人汇总和独立审阅；旧串行仅1工作进程，另外两种允许2个。统一报告契约v18：引用字段明确要求方括号；v17真实三组全部失败保留，不能与修订后的输入合并评分。判定仍要求实际已读来源和逐字连续引句，不归一化原文空白来放宽通过。
 
 真实模型另加`--live --research-corpus <固定实际文档目录>`，时间限额至多300秒/案；需要验证的生成上限绑定可显式传`--output-limit-bindings <SQLite快照>`。只复制至隔离数据目录，不改用户默认配置。运行前冻结三个案例各1样本1次尝试、模型、来源哈希和有限预算，保留失败、取消、跳过与未知费用；不自动重跑补分。模型调用真实；网页读取替换为冻结的实际来源，不能声称本轮实时HTTP读取或网络性能对照。无飞书写入或沙箱创建。
 
