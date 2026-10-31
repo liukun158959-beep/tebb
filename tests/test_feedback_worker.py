@@ -34,6 +34,17 @@ def delivery(text):
 
 
 class FeedbackWorkerTests(unittest.TestCase):
+    def test_explicit_delegation_reaches_actual_route_prompt_and_schema(self):
+        self.request.update(kind='route',requested_strategy='delegate',require_execution=True,members=[dict(id='writer',name='writer',role='read',tools=[])])
+        call=dict(tool_calls=[dict(id='actual-route',function=dict(name='start_background_task',arguments=json.dumps(dict(instructions='核对资料',strategy='direct'))))])
+        model=ScriptedModel([call]);self.run_model(model)
+        tool=next(t for t in model.calls[0]['tools']if t['function']['name']=='start_background_task')
+        self.assertEqual(tool['function']['parameters']['properties']['strategy']['enum'],['delegate'])
+        self.assertIn('用户已明确选择协作',model.calls[0]['messages'][0]['content'])
+        # Keep the raw model recommendation; the authoritative parent applies user intent.
+        result=json.loads(next(data for kind,data in self.events if kind=='result'))
+        self.assertEqual(result['strategy'],'direct')
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         for context in [patch.dict(os.environ,{'DESK_COMPANION_DATA_DIR':self.temp.name}),

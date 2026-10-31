@@ -228,17 +228,24 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
             '通用操作任务按实际回执简洁报告结果和失败阶段，无需写成长篇研究报告；不要重复执行前序已经完成的外部写入。'
             '技术结论优先依据实际取得的一手正文；未使用的搜索结果不必堆入来源清单。仓库可读取不代表获得开源许可，未核实许可时不要称其已开源。')
     if kind == 'route':
+        if request.get('requested_strategy')=='delegate':
+            messages[0]['content']+='\n用户已明确选择协作；目标就绪后必须申请delegate分工，不能改为direct。仍须对真正缺失的目标/材料先request_clarification。'
         messages[0]['content']+='\n用户明确要求图表时，start_background_task设置requires_charts=true，交付需有真实构建的图表；普通技术报告按需要使用图表。'
         extra['start_background_task'] = dict(type='function', function=dict(name='start_background_task', description='目标明确后开始执行。简单工作选direct；确需独立职责分工才选delegate。不执行业务工具。', parameters=dict(type='object', properties={'instructions': {'type':'string'}, 'strategy':{'type':'string','enum':['direct','delegate']}, 'requires_charts':{'type':'boolean','description':'用户明确要求必须有图表时为true，不能以无图正文冒充完整交付'}}, required=['instructions'], additionalProperties=False)))
         from .clarification import QUESTION_SCHEMA,questions
         extra['request_clarification'] = dict(type='function',function=dict(name='request_clarification',description='缺少目标、对象、范围或必要参数时说明具体问题并暂停。日程仅缺时长时首选preset=calendar_duration，由系统提供可靠选项；其他问题提供questions。',parameters=dict(type='object',properties={'question':{'type':'string'},'questions':QUESTION_SCHEMA,'preset':{'type':'string','enum':['calendar_duration']}},required=['question'],additionalProperties=False)))
         messages[0]['content']+='\n需要追问时优先提供questions结构化选项，每次只问真正缺少的1至3项，每项2至4个选项，系统提供自定义。日程默认本地保存，不重复确认；只缺时长可给30分钟、1小时、1.5小时。不选中默认值，不自行代用户选择。'
+        if request.get('requested_strategy')=='delegate':extra['start_background_task']['function']['parameters']['properties']['strategy']['enum']=['delegate']
         if request.get('require_execution'):messages[0]['content']+='\n这是显式执行请求：必须调用start_background_task或request_clarification，不以普通回答冒充任务完成。'
     if kind=='plan':
         extra['submit_plan']=dict(type='function',function=dict(name='submit_plan',description='提交有限的一层分工计划，不执行业务操作。只分派给其他职责伙伴，禁止自己给自己创建子任务。',parameters=dict(type='object',properties=dict(tasks=dict(type='array',minItems=1,maxItems=3,items=dict(type='object',properties=dict(
             agent_id=dict(type='string',enum=[m['id'] for m in request.get('members',[]) if m['id']!=role.get('id')]),title=dict(type='string'),instructions=dict(type='string'),
             stage=dict(type='string',enum=['collect','deliver']),required_sources=dict(type='array',items=dict(type='string',enum=['repository','web'])),
             source_topics=dict(type='array',maxItems=4,items=dict(type='string')),depends_on=dict(anyOf=[dict(type='null'),dict(type='integer',minimum=0),dict(type='array',maxItems=2,items=dict(type='integer',minimum=0))])),required=['agent_id','title','instructions','depends_on'],additionalProperties=False))),required=['tasks'],additionalProperties=False)))
+        required_assignees=request.get('requested_assignees',[])
+        if required_assignees:
+            extra['submit_plan']['function']['parameters']['properties']['tasks']['minItems']=len(required_assignees)
+            messages[0]['content']+='\n用户明确指定的伙伴必须各派单一次，不得遗漏：'+json.dumps(required_assignees,ensure_ascii=False)
     changes, checks = [], []
     attachment_spec = dict(type='function',read_only=True, function=dict(name='read_local_source', description='按source_id读取用户本轮选择的资料快照，按offset分页。', parameters=dict(type='object',properties={'source_id':{'type':'string'},'offset':{'type':'integer'}},required=['source_id'])))
     allowed_attachments = set()

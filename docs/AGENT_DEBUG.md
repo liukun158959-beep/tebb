@@ -527,3 +527,17 @@ python -m unittest tests.test_tasks tests.test_execution_flow tests.test_collabo
 ## 原项目源码校验
 
 #205提供`project_integrity`工具及认证`project_environments_ui(operation=integrity,payload={environment,request_id})`。它只使用原存活服务管道，停止/旧会话/unknown不隐式创建exec。结果含原提交、实际跟踪变动、UUID/owner/服务/代际/时刻与范围；同编号重放返回历史快照。调用详情和project_receipt保存实际字段供反馈审阅，不将Web输出升级成控制回执。停止前调用；完整性失败不会自动停止已就绪服务。详见[项目运行](PROJECT_RUNTIME.md)。
+
+## 明确协作策略
+
+#210复用认证`collaboration_action(action=...)`。对隔离协作群发送以下action，request_id每次新任务唯一；重用同编号仅核对原回执，不改参数重放：
+
+```json
+{"type":"send","conversation":"实际协作群ID","mode":"task","strategy":"delegate","text":"@实际伙伴ID_A @实际伙伴ID_B 各自独立核对给定资料，负责人汇总。","request_id":"new-isolated-request-001"}
+```
+
+先用现有group操作明确2至6位成员和目标；显式委派限当前群、负责人不因单@改变。未传strategy为auto；非法值、单聊、聊天模式、冲突target、无候选、明确超过3位被委派伙伴均拒绝。任务模式多@当前群伙伴也形成委派约束；聊天招呼沿原行为。未@时由计划选择当前群中的伙伴，不代表自动分派所有成员。
+
+仍先判断目标就绪，缺项进入原needs_input；就绪后由可信用户约束进入plan，即使模型建议direct。run提供requested_strategy、strategy_source、适用的requested_assignees，原建议保留在调用记录；伙伴计划遗漏时在任何子任务创建前失败。查原run、父子关系、task、call、实际来源、feedback_check与task_budget，不能把计划文本当回执。补充不改变策略，取消/等待/恢复保持同根及原预算。旧失败任务不自动补派。
+
+隔离验证沿`scripts/eval_agent.py`的readonly_serial、readonly_legacy_parallel、readonly_atlas_parallel案例，契约v19；实际根预算从公开run投影采集。命令和真实模型有限队列见[READONLY_RESEARCH](READONLY_RESEARCH.md)，决策见[ADR0035](adr/0035-explicit-collaboration-strategy.md)。普通自动自然语言路由仍依赖模型判断，这个入口不承诺任意文本必定被正确拆分。

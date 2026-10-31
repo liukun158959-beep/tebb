@@ -36,6 +36,65 @@ class Queue:
 
 
 class CollaborationTests(unittest.TestCase):
+    def test_explicit_delegation_overrides_direct_suggestion_in_same_root(self):
+        result=self.service.action(dict(type='send',conversation='group-research',text='两位伙伴独立核对资料',mode='task',strategy='delegate',request_id=uuid.uuid4().hex))
+        root=result['state']['runs'][-1];self.assertEqual(root['requested_strategy'],'delegate')
+        self.service.tick();task=next(iter(self.chat.items))
+        self.assertEqual(self.chat.requests[task]['requested_strategy'],'delegate')
+        self.chat.complete(task,json.dumps(dict(mode='task',instructions='核对资料',strategy='direct')))
+        self.service.tick();current=next(r for r in self.state()['runs']if r['id']==root['id'])
+        self.assertEqual(current['kind'],'plan');self.assertIsNone(current['parent']);self.assertEqual(len(self.state()['runs']),1)
+
+    def test_explicit_delegate_single_mention_keeps_group_coordinator_and_scope(self):
+        group=self.service.action(dict(type='group',title='最小协作',members=['tebb','writer'],request_id=uuid.uuid4().hex))['state']['selected']
+        result=self.service.action(dict(type='send',conversation=group,text='@writer 请核对资料',mode='task',strategy='delegate',request_id=uuid.uuid4().hex))
+        root=result['state']['runs'][-1];self.assertEqual(root['agent'],'tebb')
+        self.service.tick();request=next(iter(self.chat.requests.values()))
+        self.assertEqual([m['id']for m in request['members']],['writer'])
+        with self.assertRaises(ValueError):self.service.action(dict(type='send',conversation=group,text='@research 核对资料',strategy='delegate',request_id=uuid.uuid4().hex))
+
+    def test_invalid_delegation_never_creates_task_or_changes_active_strategy(self):
+        for values in (dict(strategy='invalid'),dict(strategy=[]),dict(strategy=None),dict(strategy='delegate',mode='message'),dict(strategy='delegate',conversation='dm-tebb'),dict(strategy='delegate',target='writer')):
+            with self.subTest(values=values),self.assertRaises(ValueError):
+                self.service.action({**dict(type='send',conversation='group-research',text='核对资料',request_id=uuid.uuid4().hex),**values})
+        self.assertEqual(len(self.state()['runs']),0)
+
+    def test_explicit_delegation_keeps_clarification_and_resume_constraint(self):
+        root=self.service.action(dict(type='send',conversation='group-research',text='请协作处理',strategy='delegate',request_id=uuid.uuid4().hex))['state']['runs'][-1]
+        self.service.tick();self.chat.complete(next(iter(self.chat.items)),json.dumps(dict(mode='clarify',text='请补充资料及目标。')))
+        self.service.tick();current=next(r for r in self.state()['runs']if r['id']==root['id'])
+        self.assertEqual(current['state'],'needs_input')
+        with self.assertRaises(ValueError):self.service.action(dict(type='send',conversation='group-research',run=root['id'],text='现在改成直接执行',strategy='auto',request_id=uuid.uuid4().hex))
+        state=self.service.action(dict(type='send',conversation='group-research',run=root['id'],text='两位伙伴核对已提供文档',request_id=uuid.uuid4().hex))['state']
+        resumed=next(r for r in state['runs']if r['id']==root['id']);self.assertEqual(resumed['requested_strategy'],'delegate');self.assertEqual(resumed['kind'],'route')
+
+    def test_explicit_task_mentions_bind_delegation_but_greeting_does_not(self):
+        for mode,expected in(('task','delegate'),('message','auto')):
+            state=self.service.action(dict(type='send',conversation='group-research',text='@research @writer 核对资料'if mode=='task'else'@research @writer 你们好',mode=mode,request_id=uuid.uuid4().hex))['state']
+            self.assertEqual(state['runs'][-1].get('requested_strategy','auto'),expected)
+
+    def test_non_tebb_coordinator_and_reopen_keep_explicit_strategy(self):
+        group=self.service.action(dict(type='group',title='研究协作',members=['research','writer'],request_id=uuid.uuid4().hex))['state']['selected']
+        root=self.service.action(dict(type='send',conversation=group,text='核对资料',strategy='delegate',request_id=uuid.uuid4().hex))['state']['runs'][-1]
+        reopened=Collaboration(path=self.service.path,managers=self.service.managers,start=False)
+        try:
+            restored=next(r for r in reopened.snapshot()['state']['runs']if r['id']==root['id'])
+            self.assertEqual(restored['agent'],'research');self.assertEqual(restored['requested_strategy'],'delegate')
+        finally:reopened.shutdown()
+
+    def test_plan_omitting_an_explicit_partner_creates_no_partial_children(self):
+        root=self.service.action(dict(type='send',conversation='group-research',text='@research @writer 各自核对',mode='task',request_id=uuid.uuid4().hex))['state']['runs'][-1]
+        self.service.tick();self.chat.complete(next(iter(self.chat.items)),json.dumps(dict(mode='task',instructions='核对',strategy='direct')))
+        self.service.tick();self.service.tick()
+        self.work.complete(next(iter(self.work.items)),json.dumps(dict(tasks=[dict(agent_id='research',title='核对',instructions='核对',depends_on=None)])))
+        self.service.tick();runs=self.state()['runs']
+        self.assertEqual(len(runs),1);self.assertEqual(runs[0]['state'],'failed');self.assertIn('全部伙伴',runs[0]['error'])
+
+    def test_model_delegate_without_eligible_members_never_silently_runs_direct(self):
+        self.service.action(dict(type='send',conversation='dm-writer',text='请协作核对',mode='task',request_id=uuid.uuid4().hex))
+        self.service.tick();self.chat.complete(next(iter(self.chat.items)),json.dumps(dict(mode='task',instructions='核对',strategy='delegate')))
+        self.service.tick();self.assertEqual(self.state()['runs'][-1]['state'],'failed');self.assertEqual(self.work.items,{})
+
     def test_route_control_never_flashes_in_chat_when_advancing_to_execution(self):
         run=self.service.action(dict(type='send',conversation='dm-tebb',text='创建一场明确日程',mode='auto',request_id=uuid.uuid4().hex))['state']['runs'][-1]
         self.service.tick()

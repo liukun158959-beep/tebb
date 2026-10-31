@@ -37,13 +37,13 @@ class ResearchEvalTests(unittest.TestCase):
             children.append(dict(id=agent,parent='root',agent=agent,state='succeeded',dependencies=[],execution_runtime='atlas_readonly',answer=json.dumps(answer),
                 feedback_check=dict(ok=True),evidence=[dict(kind='page',level='body',url=url,text=text,sha256=digest)]))
         root['answer']=json.dumps(answers)
-        proof=dict(accepted_delivery=True,workers_exited_before_shutdown=True,research_mode='atlas_parallel',worker_overlap=True,child_intervals_complete=True,
+        proof=dict(accepted_delivery=True,workers_exited_before_shutdown=True,research_mode='atlas_parallel',worker_overlap=True,child_intervals_complete=True,execution_strategy='delegate',actual_requested_strategy='delegate',
             reader_assignments=assignments,corpus_hashes=hashes)
         return root,children,proof
 
     def test_judge_requires_actual_source_runtime_citations_and_settled_workers(self):
         root,children,proof=self.successful();self.assertTrue(judge(root,children,proof))
-        for change in ('failed','wrong-runtime','no-body','wrong-hash','fake-citation','pending-worker','missing-intervals','no-overlap'):
+        for change in ('failed','wrong-runtime','no-body','wrong-hash','fake-citation','pending-worker','missing-intervals','missing-strategy','no-overlap'):
             r,c,p=copy.deepcopy((root,children,proof))
             if change=='failed':c[0]['state']='failed'
             elif change=='wrong-runtime':c[0]['execution_runtime']='legacy'
@@ -53,6 +53,7 @@ class ResearchEvalTests(unittest.TestCase):
                 answer=json.loads(c[0]['answer']);answer['citation']='https://example.org/not-read';c[0]['answer']=json.dumps(answer)
             elif change=='pending-worker':p['workers_exited_before_shutdown']=False
             elif change=='missing-intervals':p.update(research_mode='serial',child_intervals_complete=False,worker_overlap=False)
+            elif change=='missing-strategy':p['actual_requested_strategy']='auto'
             else:p['worker_overlap']=False
             with self.subTest(change=change):self.assertFalse(judge(r,c,p))
 

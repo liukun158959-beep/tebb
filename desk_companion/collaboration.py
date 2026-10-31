@@ -501,6 +501,8 @@ class Collaboration:
             if state["selected"] == conversation["id"]:
                 state["selected"] = state["conversations"][0]["id"]
         elif kind == "send":
+            strategy=action.get('strategy','auto')
+            if not isinstance(strategy,str)or strategy not in{'auto','delegate'}:raise ValueError('协作策略须为auto或delegate')
             if 'new_chat' in action:
                 draft = action['new_chat']
                 ident = action.get('conversation')
@@ -526,6 +528,7 @@ class Collaboration:
             if action.get("run"):
                 run = next((r for r in state["runs"] if r["id"] == action["run"] and r["conversation"] == conversation["id"]), None)
                 if not run or run["state"] not in OPEN or run["kind"] == "chat": raise ValueError("此任务已结束或不支持补充")
+                if 'strategy'in action and strategy!=run.get('requested_strategy','auto'):raise ValueError('补充不能改变当前任务的协作策略，请先结束后新建任务')
                 if len(run["updates"]) >= 3 and run['state']!='needs_input': raise ValueError("本轮最多补充3次，请等待结束后创建新任务")
                 selection = dict(skills=action.get('skills', []), attachments=action.get('attachments', []))
                 if not all(isinstance(values,list) and len(values)<=10 and all(isinstance(v,str) for v in values) for values in selection.values()): raise ValueError('补充资料参数无效')
@@ -568,6 +571,14 @@ class Collaboration:
                 if ident not in selected: selected.append(ident)
             if len(selected) == 1: target = selected[0]
             elif len(selected) > 1: target = conversation["coordinator"]
+            require_delegate=strategy=='delegate'or(action.get('mode')=='task'and conversation['kind']=='group'and len(selected)>1 and set(selected)<=set(conversation['members']))
+            if require_delegate:
+                if conversation['kind']!='group'or action.get('mode')=='message':raise ValueError('显式协作须在协作群中作为任务发送')
+                if action.get('target')and action['target']!=conversation['coordinator']:raise ValueError('显式协作由当前群负责人协调，请勿同时指定其它发送对象')
+                if not set(selected)<=set(conversation['members']):raise ValueError('显式协作不能委派给当前群以外的伙伴')
+                target=conversation['coordinator']
+                if not any(ident!=target for ident in(selected or conversation['members'])):raise ValueError('当前选择没有可委派的其他群成员')
+                if len([ident for ident in selected if ident!=target])>3:raise ValueError('单轮最多明确委派3位伙伴，请拆分任务')
             if target not in conversation["members"] and not (conversation["coordinator"]=="tebb" and any(a["id"]==target for a in state["agents"])): raise ValueError("发送对象不在当前会话中")
             history = self._history(state, conversation)
             selection = dict(skills=action.get("skills", []), attachments=action.get("attachments", []))
@@ -589,12 +600,14 @@ class Collaboration:
             if reserved + (2 if mode != "message" else 1) > 12: raise ValueError("已有较多待处理工作，请先完成或停止部分任务")
             run = self._run(state, conversation, target, text, 'chat' if mode=='message' else 'route', context=history, model_id=action.get("model_id", ""))
             from .execution_flow import explicit_search
-            run['require_execution']=mode=='task' or mode=='auto' and explicit_search(text)
+            run['require_execution']=require_delegate or mode=='task' or mode=='auto' and explicit_search(text)
+            if require_delegate:run.update(requested_strategy='delegate',strategy_source='explicit'if strategy=='delegate'else'mentions')
+            if require_delegate and selected:run['requested_assignees']=[ident for ident in selected if ident!=target]
             run["selection"] = selection
             if action.get('sampling'):
                 from .sampling import parse_sampling
                 run['sampling'] = parse_sampling(action['sampling'])
-            run['participants'] = selected or ([a['id'] for a in state['agents']] if target=='tebb' else conversation['members'])
+            run['participants'] = selected or (conversation['members']if require_delegate else [a['id'] for a in state['agents']]if target=='tebb'else conversation['members'])
             if mode != 'message':
                 run["members"] = [dict(id=a["id"], name=a["name"], role=a["role"], tools=a['tools']) for a in state["agents"] if a["id"] in run['participants'] and a['id'] != target]
             # Keep the user message before the streaming reply.
@@ -751,7 +764,7 @@ class Collaboration:
                         run['status'] = '等待工作目录的编码任务完成'; continue
                     request = dict(workflow="collaboration", collab_path=str(self.path), collab_run=run["id"],conversation=run['conversation'],source_scope=run.get('parent') or run['id'],
                         role=run["agent_config"], kind=run["kind"], model_id=run["model_id"], context=run["context"], workspace=run.get("workspace"), selection=run.get("selection", {}),
-                        reference_time=run.get("created",0), supplemented_at=run.get("supplemented_at"), members=run.get("members", []), require_execution=run.get('require_execution',False), applied=run["applied"], draft=run.get("parent_draft", ""), budget=max(0, call_budget(run['agent'],run['kind'],run.get('agent_config',{}).get('tools',()))-phase_calls(run)),
+                        reference_time=run.get("created",0), supplemented_at=run.get("supplemented_at"), members=run.get("members", []), requested_strategy=run.get('requested_strategy','auto'), requested_assignees=run.get('requested_assignees',[]), require_execution=run.get('require_execution',False), applied=run["applied"], draft=run.get("parent_draft", ""), budget=max(0, call_budget(run['agent'],run['kind'],run.get('agent_config',{}).get('tools',()))-phase_calls(run)),
                         objective=run.get('objective',run['input']),parent_run=run.get('parent'),stage=run.get('stage','collect'),required_sources=run.get('required_sources',[]),requires_charts=run.get('requires_charts',False),
                         search_budget=max(0, run.get('search_limit',2)-run.get("search_calls",0)),fetch_budget=max(0,run.get('fetch_limit',4)-run.get("fetch_calls",0)),
                         source_topics=run.get('source_topics',[]),dependencies=dependencies(run),execution_runtime=run.get('execution_runtime','legacy'),
@@ -849,7 +862,10 @@ class Collaboration:
                         run['answer']=content
                         self._finish(state,run,'succeeded');continue
                     # Same root owns readiness, direct work and final delivery.
-                    delegate=decision.get('strategy')=='delegate' and bool(run.get('members'))
+                    delegate=run.get('requested_strategy')=='delegate'or decision.get('strategy')=='delegate'
+                    if run.get('requested_strategy')=='delegate'and decision.get('strategy')!='delegate':run['events'].append('模型建议直接执行，已按用户明确的协作策略准备分工。')
+                    if delegate and not run.get('members'):
+                        self._finish(state,run,'failed','当前任务没有可委派的伙伴，未降级为直接执行；请先选择协作群成员。');continue
                     run['requires_charts']=decision.get('requires_charts',False)
                     advance(run,'plan' if delegate else 'task',status='目标明确，准备职责分工' if delegate else '目标明确，直接执行',preserve_answer=True)
                     continue
@@ -859,6 +875,8 @@ class Collaboration:
                 if run["kind"] == "plan":
                     try:
                         plans = parse_plan(task["answer"], {m["id"] for m in run["members"] if m["id"]!=run["agent"]})
+                        if run.get('requested_assignees')and {p['agent_id']for p in plans}!=set(run['requested_assignees']):
+                            self._finish(state,run,'failed','委派计划未覆盖用户明确指定的全部伙伴，尚未创建子任务。');continue
                     except (ValueError, TypeError):
                         self._finish(state, run, "failed", "协调者未返回有效委派计划，未执行任何子任务")
                         continue

@@ -60,12 +60,13 @@ def configure(spec,service,model_id,profile,proof):
     other=next(a for a in state['agents']if a['name']=='快照B')
     assignments={'writer':URLS[8259],other['id']:URLS[7159]};spec['readonly_readers']=assignments
     scope,corpus=load_corpus(Path(profile)/'memory/eval_research_corpus')
-    proof.update(research_mode=mode,corpus_scope=scope,corpus_hashes={url:item['sha256']for url,item in corpus.items()},reader_assignments=assignments)
+    proof.update(research_mode=mode,execution_strategy=spec.get('execution_strategy','auto'),corpus_scope=scope,corpus_hashes={url:item['sha256']for url,item in corpus.items()},reader_assignments=assignments)
     instruction=('这是固定归档来源的只读研究对照，不执行外部写入。必须实际提交两个互不依赖的collect分工：'
         +'；'.join(f'agent_id={agent}只读source_url={url}，仅核对文档头部RFC编号及正式发布日期年份，子任务只返回JSON number/year/citation'for agent,url in assignments.items())
         +'。不要将子任务设为deliver，不要互相依赖，不搜索其他材料。citation字段必须用"[完整实际证据id]"（保留方括号，变量须替换为实际id），系统渲染链接；不能只填裸id。'
         '负责人等待两份真实成果，核对来源后只返回JSON对象rfc8259和rfc7159，各含number、year、citation；不能凭记忆填年份，不添加其他键。'
         '只需头部实际段落，不要求全文。归档URL仅定位原来源，不表示实时查询。')
+    instruction=' '.join('@'+ident for ident in assignments)+' '+instruction
     spec['prompt']=instruction
     state=service.action(dict(type='group',title='只读归档对照',goal='两个独立文档采集后合并',members=['research','writer',other['id']],request_id=uuid.uuid4().hex))['state']
     return state['selected'],instruction
@@ -79,6 +80,7 @@ def judge(root,runs,proof):
     if root['state']!='succeeded'or not proof.get('accepted_delivery')or not proof.get('workers_exited_before_shutdown'):return reject('root_delivery_or_worker_cleanup')
     children=[r for r in runs if r.get('parent')==root['id']]
     if len(children)!=2:return reject('two_actual_children_required')
+    if proof.get('execution_strategy')=='delegate'and proof.get('actual_requested_strategy')!='delegate':return reject('explicit_delegation_not_observed')
     if not proof.get('child_intervals_complete'):return reject('actual_worker_intervals_missing')
     expected_runtime='atlas_readonly'if proof['research_mode']=='atlas_parallel'else'legacy'
     if proof.get('worker_overlap')!=(proof['research_mode']!='serial'):return reject('actual_worker_overlap_mismatch')

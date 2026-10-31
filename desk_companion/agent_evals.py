@@ -4,7 +4,7 @@ import math
 import time
 from .json_document import json_answer
 
-CONTRACT_VERSION=18
+CONTRACT_VERSION=19
 
 
 class CancellationNotSettled(TimeoutError):
@@ -152,7 +152,7 @@ CASES.extend([
 
 
 CASES.extend(case('readonly_'+mode,'lifecycle','独立读取两份固定归档文档头部并合并编号、年份与实际引用。',
-    executor='lifecycle',scenario='readonly',research_mode=mode,budget=16,phase_budget=8)
+    executor='lifecycle',scenario='readonly',research_mode=mode,execution_strategy='delegate',budget=16,phase_budget=8)
     for mode in ('serial','legacy_parallel','atlas_parallel'))
 
 

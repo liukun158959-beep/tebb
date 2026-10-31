@@ -70,7 +70,7 @@ def execute(spec, *, profile, workspace, model_id, timeout, command=None, progre
                 state=service.action(dict(type='group',title='合成求和验收',goal='写作者核对数值，研究员汇总',members=['research','writer'],request_id=uuid.uuid4().hex))['state']
                 conversation=state['selected']
             before={r['id'] for r in state['runs']}
-            state=service.action(dict(type='send',conversation=conversation,text=spec['prompt'],mode='task',
+            state=service.action(dict(type='send',conversation=conversation,text=spec['prompt'],mode='task',strategy=spec.get('execution_strategy','auto'),
                 sampling=dict(reasoning_effort='low',temperature=.1,top_p=1),request_id=uuid.uuid4().hex))['state']
             run_id=next(r['id'] for r in state['runs'] if r['id'] not in before)
         else:
@@ -122,12 +122,14 @@ def execute(spec, *, profile, workspace, model_id, timeout, command=None, progre
             proof['child_intervals_complete']=bool(len(intervals)==2 and len({item['run']for item in intervals})==2
                 and all(type(item['started'])in(int,float)and type(item['ended'])in(int,float)and 0<item['started']<item['ended']for item in intervals))
             proof['worker_overlap']=None if not proof['child_intervals_complete']else max(item['started']for item in intervals)<min(item['ended']for item in intervals)
+        actual_root=next((r for r in runs if r['id']==run_id),{})
+        proof['actual_requested_strategy']=actual_root.get('requested_strategy','auto')
         proof.update(verified=not expired and judge(scenario,root,runs,proof),deadline_exceeded=expired,
                      root_state=root.get('state'),chain_state=root.get('chain',{}).get('state'),
-                     runs=[{k:r.get(k) for k in ('id','parent','agent','kind','stage','state','execution_runtime','runtime_observations')} for r in runs],
+                     runs=[{k:r.get(k) for k in ('id','parent','agent','kind','stage','state','requested_strategy','requested_assignees','strategy_source','execution_runtime','runtime_observations')} for r in runs],
                      task_states={ident:t['state'] for ident,t in tasks.items()})
         result=dict(state=root['state'],answer=root.get('answer',''),error=root.get('chain',{}).get('error') or root.get('error',''),events=events,
-                    task_budget=root.get('task_budget'))
+                    task_budget=actual_root.get('task_budget'))
         return result,proof,list(tasks),list(calls.values())
     finally:
         if service:service.shutdown()
