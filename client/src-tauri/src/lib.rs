@@ -7,6 +7,8 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tauri::{Emitter, Manager, PhysicalPosition};
+pub mod main_window;
+use main_window::{show_main, open_today};
 mod video_login;
 mod pet_chat;
 use pet_chat::{set_pet_chat_visible, toggle_pet_chat, get_pet_chat_state, set_pet_chat_pinned};
@@ -102,26 +104,6 @@ fn nudge_pet(app: tauri::AppHandle, dx: f64, dy: f64) -> Result<(), String> {
     window
         .set_position(tauri::PhysicalPosition::new(nx, ny))
         .map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-fn show_main(app: tauri::AppHandle) -> Result<(), String> {
-    let window = app
-        .get_window("main")
-        .ok_or("找不到主窗口。恢复：重启客户端。")?;
-    window.unminimize().map_err(|err| err.to_string())?;
-    window.show().map_err(|err| err.to_string())?;
-    window.set_focus().map_err(|err| err.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-fn open_today(app: tauri::AppHandle) -> Result<(), String> {
-    let window = app
-        .get_window("main")
-        .ok_or("找不到主窗口。恢复：重启客户端。")?;
-    window.emit("open-today", true).map_err(|err| err.to_string())?;
-    Ok(())
 }
 
 #[tauri::command]
@@ -322,6 +304,9 @@ pub fn run() {
         .manage(DragLock(drag_lock_for_state))
         .manage(MenuRegion(menu_region.clone()))
         .setup(move |app| {
+            if let Some(main) = app.get_webview_window("main") {
+                main_window::retain_on_close(&main);
+            }
             let backend = app.state::<BackendInfo>();
             match start_backend(app.handle(), backend.port, &backend.token) {
                 Ok(child) => *app.state::<BackendProcess>().0.lock().unwrap() = Some(child),

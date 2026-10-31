@@ -42,6 +42,13 @@ function load() {
     select, click, closed: () => closed, setError: (text) => { error = text; controls.refresh(); } };
 }
 
+test('menu action errors preserve existing recovery advice exactly once', () => {
+  const { petActionError } = load();
+  assert.equal(petActionError('打开主窗口', '找不到主窗口。恢复：重启客户端。'), '打开主窗口失败：找不到主窗口。恢复：重启客户端。');
+  assert.equal(petActionError('打开主窗口', new Error('窗口操作失败')), '打开主窗口失败：窗口操作失败。恢复：重启客户端。');
+  assert.equal(petActionError('今天的安排', '读取失败。恢复：稍后重试。'), '今天的安排失败：读取失败。恢复：稍后重试。');
+});
+
 test('outside click, Escape, focus loss and native outside click close the menu', () => {
   for (const event of ['pointerdown', 'keydown', 'blur', 'native']) {
     const ui = load();

@@ -1,6 +1,13 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+export function petActionError(label: string, error: unknown): string {
+  const message = (error instanceof Error ? error.message : String(error)).trim();
+  const ending = /[。！？.!?]$/.test(message) ? "" : "。";
+  const recovery = message.includes("恢复：") ? "" : "恢复：重启客户端。";
+  return `${label}失败：${message}${ending}${recovery}`;
+}
+
 export function selectedPetText(selection: Selection | null, menu: HTMLElement, bubble: HTMLElement): string {
   if (!selection || selection.isCollapsed || !selection.anchorNode || !selection.focusNode) return "";
   const inside = (node: Node) => menu.contains(node) || bubble.contains(node);

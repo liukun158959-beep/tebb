@@ -23,7 +23,7 @@ import { backendInfo, rpc, type BackendInfo } from "./client/api";
 import type { SetupStatus } from "./client/onboarding";
 import { loadCubismCore, petErrorText } from "./pet-assets";
 import { isBuiltinSkin } from "./builtin-pet";
-import { installPetMenu, syncPetMenuRegion } from "./pet-menu";
+import { installPetMenu, syncPetMenuRegion, petActionError } from "./pet-menu";
 
 let petAvailable = false;
 const bubbleEl = document.getElementById("bubble") as HTMLDivElement;
@@ -220,7 +220,7 @@ function runMenu(action: string): void {
     return;
   }
   void job.run().catch((err: unknown) => {
-    showError(`${job.label}失败：${String(err)}。恢复：重启客户端。`);
+    showError(petActionError(job.label, err));
   });
 }
 
