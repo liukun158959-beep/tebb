@@ -200,3 +200,9 @@ v14固定公开来源案例要求RFC第2、3节，但旧验收额外要求整篇
 另有认证RPC真实参数验证2次（64/128输出截断）及一次业务64token边界停止（task failed、goal未完成），与质量成绩分开。生成参数验证仅证明该模型/路由，不推断窗口、分词器或价格。输出硬参数按显式验证绑定；scripts/eval_agent.py的--output-limit-bindings需--live并指向既有验证SQLite快照，复制进隔离profile，不能用于伪造其他模型支持。完整源码快照已纳入task_budgets.py、model_generation.py；终态收尾后刷新根预算投影。详见[TASK_BUDGETS.md](TASK_BUDGETS.md)。
 
 #170/#206最终运行代码76752ad的[CI 41182333915](https://github.com/liukun158959-beep/tebb/actions/runs/41182333915)全部通过：986项后端，12显式旧WSL/bubblewrap条件跳过，0失败/错误；208前端、tsc、构建与Rust通过。完整后端首轮因5个离线fixture缺少任务编号失败，已补齐登记，不在生产放宽预算归属。原失败日志、源码快照及零调用复判均保留。
+
+## v16 停止前原源码回执（#205）
+
+clone_install_run要求真实项目服务启动后、停止前通过project_integrity采集原基线/跟踪文件的实际观察。SDK停止后独立verifier读取已保存的原operation结果，不再为只读Git检查隐式启动VM。结果仍需绑定同一原环境、SDK UUID、service/start-operation，保留HTTP、日志、原启动命令、模型停止与worker清理等原条件；后续修改动作使旧校验失效。原v13/v14及v15零调用复判报告不覆盖。
+
+单一语言须运行前选择，例如`python scripts/eval_agent.py --case clone_install_run --project-variant python --limit 1 --samples 1 --output output/new-fixture`；真实模型另加`--live --project-sdk official`并预定调用/时间预算。默认语言轮换保持兼容；改代码后新队列单独报告，不把重新选择样本掩成原成绩。价格未配置保持未知。

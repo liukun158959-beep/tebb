@@ -38,6 +38,7 @@ class FixtureSDK:
         self.owned(name,ident);return dict(scope='fixture',exclusive_allowlist=False)
     def stop(self,name,ident):
         self.owned(name,ident);self.items[name]['status']='stopped'
+        (self.path/ident/'fixture-stop').write_text('stop','utf-8')
         return dict(ok=True,state='stopped',sandbox_id=ident)
     def publish(self,name,ident,guest_port,host_port):self.owned(name,ident);self.mapping[name]=host_port
     def unpublish(self,name,ident,guest_port,host_port):self.owned(name,ident);self.mapping.pop(name,None)
@@ -50,8 +51,29 @@ class FixtureSDK:
         if argv[:3]!=['python3','-I','-c'] or 'TEBB_ENV_ID' not in argv[-1]:raise ValueError('unsupported fixed fixture metadata')
         return json.dumps(dict(owner=item['owner'],project_exists=True,repository_matches=True,commit=self.commit()))
     def commit(self):return '49943b5a94413a530761350f04e896f76e8d620e' if self.variant=='python' else '8b8dec11fcf027522a857e0c831ee01b7124f673'
-    def exec_command(self,name,ident,argv):
+    def exec_command(self,name,ident,argv,*,interactive=False):
         self.owned(name,ident);self.items[name]['status']='running'
+        if interactive:
+            from desk_companion.project_integrity import RUNNER,GIT_PROBE
+            if argv[:4]!=['python3','-I','-u','-c']or argv[-2]!=RUNNER:raise ValueError('unsupported fixture control wrapper')
+            config=json.loads(base64.b64decode(argv[-1]));script=config['argv'][2]
+            command=shlex.split(script.split('\nexec bash -c ',1)[1])
+            if len(command)!=1 or command[0]not in {'npm start',PYTHON_START}:raise ValueError('unsupported fixture service command')
+            root=self.path/ident;(root/'fixture-stop').unlink(missing_ok=True)
+            config.update(project=str(root),argv=[sys.executable,str(Path(__file__).resolve()),'--child',
+                json.dumps(dict(action='serve',root=str(root),variant=self.variant,port=self.mapping[name]))])
+            probe='''
+def inspect_source(project,baseline,owner):
+    import time
+    from pathlib import Path
+    clean=(Path(project)/'README.md').read_text('utf-8')=='Synthetic SDK fixture; not a downloaded repository.'
+    now=time.time()
+    return dict(complete=True,unchanged=clean,scope='tracked_files_at_observation',untracked_excluded=True,
+        baseline_commit=baseline,current_commit=baseline,tracked_changes=not clean,head_matches_baseline=True,
+        owner=owner,observed_at=now,observation_finished_at=now,fixture=True)
+'''
+            runner='import os;os.environ["TEBB_ENV_ID"]='+repr(self.items[name]['owner'])+'\n'+RUNNER.replace(GIT_PROBE,probe)
+            return [sys.executable,'-I','-u','-c',runner,base64.b64encode(json.dumps(config).encode()).decode()]
         if argv[:2]!=['bash','-lc']:raise ValueError('fixture accepts only the production wrapper')
         script=argv[2];instruction=dict(root=str(self.path/ident),variant=self.variant)
         if script.startswith('set -eu\nexport GIT_TERMINAL_PROMPT=0 '):instruction.update(action='clone',commit=self.commit())
@@ -116,7 +138,10 @@ def child(value):
             def do_GET(self):
                 self.send_response(200);self.end_headers();self.wfile.write(b'Synthetic SDK project fixture')
             def log_message(self,*args):pass
-        print('SYNTHETIC SDK server',flush=True);HTTPServer(('127.0.0.1',value['port']),Handler).serve_forever()
+        print('SYNTHETIC SDK server',flush=True);server=HTTPServer(('127.0.0.1',value['port']),Handler);server.timeout=.1
+        try:
+            while not(root/'fixture-stop').exists():server.handle_request()
+        finally:server.server_close()
     else:raise ValueError('unsupported fixture child operation')
     return 0
 

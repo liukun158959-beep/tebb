@@ -4,7 +4,7 @@ import math
 import time
 from .json_document import json_answer
 
-CONTRACT_VERSION=15
+CONTRACT_VERSION=16
 
 
 class CancellationNotSettled(TimeoutError):
@@ -120,7 +120,7 @@ CASES = [
          dict(type='flow',nodes=['接收','核对','交付'],edges=[[0,1],[1,2]],source_ids=[],flow_style='steps'),
          executor='chart',kind='task',tools=['构建图表'],budget=5,required_tools=['read_local_source','build_chart']),
     case('coder_read_modify_test','coding','读取隔离项目，修复函数且运行原测试，不修改测试。', executor='project',scenario='coding',budget=16,tools=['项目环境'],required_tools=['project_read','project_write','project_execute']),
-    case('clone_install_run','coding','从固定公开仓库配置原应用，验证HTTP/状态/日志后停止同一环境。', executor='project',scenario='clone',budget=16,tools=['项目环境'],required_tools=['project_prepare','project_read','project_start','project_status','project_log','project_stop']),
+    case('clone_install_run','coding','从固定公开仓库配置原应用，验证HTTP/状态/日志后停止同一环境。', executor='project',scenario='clone',budget=16,tools=['项目环境'],required_tools=['project_prepare','project_read','project_start','project_status','project_log','project_integrity','project_stop']),
     case('calendar_read_only','tools','这是隔离的合成日历验收。请实际调用read_local_calendar读取北京时间2040-01-02的本地已保存日程。只输出JSON对象，必须且只能含count（数量）和titles（按开始时间排序的标题数组）。范围仅为本地快照，不访问飞书，不创建、修改或删除任何日程。',
          dict(count=2,titles=['验收事件A','验收事件B']), executor='local_calendar',kind='task',
          tools=['本地日程读取'],budget=4,required_tools=['read_local_calendar']),

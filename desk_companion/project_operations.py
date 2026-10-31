@@ -14,6 +14,7 @@ OPERATIONS={
     'stop':({'environment'},set()),
     'list':(set(),set()),
     'reconcile':({'environment'},{'verify'}),
+    'integrity':({'environment'},set()),
 }
 
 
@@ -55,6 +56,7 @@ def execute(host,run_id,task_id,operation,args):
         if operation=='stop':return service.stop(ident,scope)
         if operation=='reconcile':return service.reconcile(ident,scope,verify=arguments.get('verify',False),owner_task=task_id)
         common=dict(ident=ident,scope=scope,request=request,owner_task=task_id)
+        if operation=='integrity':return service.integrity(**common)
         if operation=='read':return service.read(**common,path=arguments['path'])
         if operation=='write':return service.write(**common,path=arguments['path'],text=arguments['text'])
         if operation=='execute':return service.execute(**common,command=arguments['command'],timeout=arguments.get('timeout',120))

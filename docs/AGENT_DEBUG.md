@@ -523,3 +523,7 @@ python -m unittest tests.test_tasks tests.test_execution_flow tests.test_collabo
 ## 整个目标的预算（#170）
 
 任务/协作run及调用详情提供同一个task_budget投影，区别于单次上下文容量。模型尝试与真实工具执行分开，缺usage显示未知及保守占用；不把费用未知当免费。继续、子任务、审阅共享额度与期限，停止原因保留length及实际请求参数。输出绑定的受认证验证接口为verify_model_output_limit(model_id, parameter, request_id)，最多两次短请求、相同编号返回同一任务；load_model_output_limit只读状态。配置面板支持停止。参见[TASK_BUDGETS.md](TASK_BUDGETS.md)。
+
+## 原项目源码校验
+
+#205提供`project_integrity`工具及认证`project_environments_ui(operation=integrity,payload={environment,request_id})`。它只使用原存活服务管道，停止/旧会话/unknown不隐式创建exec。结果含原提交、实际跟踪变动、UUID/owner/服务/代际/时刻与范围；同编号重放返回历史快照。调用详情和project_receipt保存实际字段供反馈审阅，不将Web输出升级成控制回执。停止前调用；完整性失败不会自动停止已就绪服务。详见[项目运行](PROJECT_RUNTIME.md)。

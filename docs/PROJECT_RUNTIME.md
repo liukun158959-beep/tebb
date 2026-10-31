@@ -60,6 +60,7 @@ python -m unittest tests.test_docker_sandboxes tests.test_project_environments t
 | `project_write` | `environment, path, text`；VM 内写入及真实退出码 |
 | `project_execute` | `environment, command, timeout?`；有界命令、退出码、stdout 和日志 |
 | `project_start` | `environment, command, port, expected_http_text?`；前台服务、真实 HTTP 及 loopback 预览 |
+| `project_integrity` | 原Web服务存活连接；返回基线/当前提交、跟踪文件变化、实际UUID/owner和观察时刻；停止前调用，不新建exec |
 | `project_status / project_log` | 原环境；实时状态或按原操作 ID、字节 offset 读日志 |
 | `project_stop / project_list` | 停止原 UUID，或查询当前项目/会话的保存记录 |
 | `project_reconcile` | `environment, verify?`；观察原候选或明确验证归属，不重建 |
@@ -141,3 +142,23 @@ if items:
 本机材料保留在工作区上级 `output/project-agent-191-live-attempt1…5*`、`project-191-receipt-loss-physical`、`project-191-cancel-physical`、`project-191-shutdown-physical`。第1轮权限身份错误、第2轮HTTP条件/解释器/stdio契约、第3轮缺失读取误停及300秒边界、第4轮工具等待未被父管理器采纳和额度耗尽，均保留原始失败。接口修订后才独立重验，不把排队成功当运行成功。模型临时配置已删除，已记录worker和测试环境均已停止；原始载荷不上传仓库。
 
 #203验收：运行代码285a790的[精确CI](https://github.com/liukun158959-beep/tebb/actions/runs/41184835560)全部通过，996项后端0失败/错误、12项显式旧沙箱条件跳过；209前端、类型/构建及Rust通过。本机首轮完整995项通过（另有Windows不允许创建测试symlink一项跳过），补锁取得失败反例后48项受影响回归通过。原生认证RPC在冻结代码上通过，验证拒绝错误token/缺确认、同编号回放、两槽释放一槽、原owner/unknown/日志保留；真实SDK仅一次只读清单，无创建/停止、模型或飞书写入。旧da30f94双未知反例的缺恢复入口错误保留，没有重跑历史SDK失败。
+
+## 停止前的源码校验（#205）
+
+用户要求保持原源码/测试时，在实际启动后、停止前调用`project_integrity(environment)`。`ok=true`表示固定检查已取得完整观察，仍须看`integrity.unchanged`：只有它为true才支持该时刻相对原prepare基线的跟踪文件未变。结果同时记录baseline/current commit、tracked_changes、实际UUID、owner、service/start-operation、guest_session与时间；untracked构建产物明确排除。HEAD移动、已暂存修改与实际内容/模式变化分别纳入；隐藏索引、子模块、可执行Git配置、限额或采集中变化保留未知。它不证明全部运行行为安全、全仓原子快照或从未修改。
+
+校验复用`project_start`原本已授权的官方`exec -i`前台连接；固定Python包装器启动原Web命令，Web输出封装为数据，Git回执单独解帧，不从日志tail或普通JSON识别。stdin只接收固定检查类型/编号/代际，不接收命令、路径或Git选项；原Web子进程stdin为DEVNULL，首版不支持启动时交互输入。包装器保留原退出码，Web退出、断管、代际变化会失效待答检查。日志达到4MiB仍能单独解析校验帧。
+
+此API不调用create/exec/capture/reconcile，不为检查启动或重启VM。只在本后台仍持有原Popen、service/UUID/owner及首个guest代际一致时发到旧管道；没有存活控制会话、SDK已停/unknown/身份不符或旧后台会话时返回未知。产品stop与检查全程串行，外部SDK停止造成原管道失效；不重连同名新实例。源码检查自身失败不停止已就绪Web。后台重启后不按PID恢复控制连接，旧服务无通道也不自动重启。
+
+同一实际工具调用编号重放只返回原快照，`replayed=true`及原时间说明它不是新检查；新编号才能再读。后续修改/配置/启动操作会使旧检查不能继续满足当前验收，停止不改变其历史观察范围。实际回执进入既有project_receipt、调用调试与独立反馈材料，普通Web输出不能自报为这一事实。
+
+桌面token调试：
+
+```json
+{"method":"project_environments_ui","args":{"operation":"integrity","payload":{"environment":"原环境ID","request_id":"为本次检查生成并在ACK不明时保持的编号"}}}
+```
+
+RPC沿用现有认证；模型仍通过有项目权限且活跃的run/task调用`project_operation`，不可传scope/owner/request_id。原错误、操作编号、log_id和不完整原因都可查询，不建立旁路Agent。固定Git命令沿用clone的隔离配置，禁可选索引写入和自动刷新；用实际numstat/模式摘要区分stat缓存变化，校验不刷新索引。
+
+无模型回归：`python -m unittest discover -s tests -p test_project_integrity.py -v`。真实本机PIPE/临时Git测试与官方SDK/真实模型分开记录；统一评测契约v16的`clone_install_run`新增停止前校验，`--project-variant python`可事先指定单一语言，默认仍按原样本轮换。独立verifier读取原保存回执，停止后不再exec恢复VM做检查。原v13运行成功而审阅失败的成绩不回填。设计见[ADR0030](adr/0030-project-source-integrity-session.md)。

@@ -9,6 +9,7 @@ import time
 from .resource_lock import ResourceLock
 
 ACTIVE={'running','unknown','stopping'}
+READ_KINDS={'read','integrity'}
 
 
 def fingerprint(value):return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
@@ -156,7 +157,7 @@ class EnvironmentStore:
                 raise ValueError('原创建已归档；仅可核对原身份与停止，新的工作请使用新请求。')
             active=environment.get('active_operation')
             if active and self._operation(db,active)['state'] in ACTIVE:raise ValueError('此项目操作仍在执行或结果未知，请先查询或停止原操作。')
-            if kind not in {'read','stop'} and (environment.get('service') or {}).get('state') in {'ready','stopping','unknown'}:raise ValueError('请先停止此项目服务，再修改或执行配置命令。')
+            if kind not in READ_KINDS|{'stop'} and (environment.get('service') or {}).get('state') in {'ready','stopping','unknown'}:raise ValueError('请先停止此项目服务，再修改或执行配置命令。')
             if kind!='stop':
                 others=[json.loads(row[0]) for row in db.execute('SELECT data FROM environments WHERE id<>?',(ident,))]
                 occupied=sum(bool(value.get('active_operation') or (value.get('service') or {}).get('state') in {'starting','ready','stopping','unknown'}) for value in others)

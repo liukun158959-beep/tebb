@@ -77,6 +77,10 @@ def check_receipts(receipts,requirements):
             receipt=candidates[-1]if len(scopes)==1 else None
         if receipt is None and kind=='command'and isinstance(req.get('command'),str):
             receipt=next((r for r in reversed(receipts)if r.get('tool')in{'project_execute','workspace_run'}and r.get('arguments',{}).get('command')==req['command']),None)
+        if receipt is None and kind=='source_integrity':
+            candidates=[r for r in receipts if r.get('tool')=='project_integrity']
+            if req.get('environment'):candidates=[r for r in candidates if r.get('arguments',{}).get('environment')==req['environment']]
+            if len({r.get('arguments',{}).get('environment')for r in candidates})==1:receipt=candidates[-1]
         result=receipt.get('result')if receipt else None
         result=result if isinstance(result,dict)else {}
         status='unknown';message='缺少对应实际核验回执，未确认通过。'
@@ -96,6 +100,13 @@ def check_receipts(receipts,requirements):
         elif kind=='test_coverage'and receipt and receipt.get('tool')=='test_coverage_check':
             covered=result.get('covered')
             if type(covered)is bool:status='pass'if covered else 'fail';message='按指定验证范围的实际检查回执核对。'
+        elif kind=='source_integrity'and receipt and receipt.get('tool')=='project_integrity':
+            from .project_integrity import valid_receipt,observation_current_for_actions
+            proof=result.get('integrity')
+            if (result.get('ok')is True and valid_receipt(proof,environment=req.get('environment'),baseline=req.get('commit'))
+                and observation_current_for_actions(receipts,receipt,proof['environment'])):
+                status='pass'if proof['unchanged']is req.get('unchanged',True)else'fail'
+                message='核对原服务会话观察时刻的提交与跟踪文件；排除untracked，不保证全部运行行为或从未修改。'
         out.append(check(ident,kind,status,message,receipt_id=receipt.get('call_id')if receipt else req.get('receipt_id',req.get('call_id'))))
     return out
 

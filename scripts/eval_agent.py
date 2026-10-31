@@ -96,6 +96,7 @@ class Fixture(BaseHTTPRequestHandler):
                     elif not done('project_log'):
                         started=next(json.loads(m['content'])for m in receipts if json.loads(m['content']).get('service_ready'))
                         delta=tool('project_log',dict(environment=ident,operation=started['service']['operation']))
+                    elif not done('project_integrity'):delta=tool('project_integrity',dict(environment=ident))
                     elif not done('project_stop'):delta=tool('project_stop',dict(environment=ident))
                     else:
                         started=next(json.loads(m['content'])for m in receipts if json.loads(m['content']).get('service_ready'))
@@ -154,6 +155,7 @@ def main():
     parser.add_argument('--limit',type=int,default=len(CASES))
     parser.add_argument('--samples',type=int,default=1)
     parser.add_argument('--project-sdk',choices=['disabled','official'],default='disabled')
+    parser.add_argument('--project-variant',choices=['node','python'],help='Select one planned project language; default alternates samples')
     parser.add_argument('--project-timeout',type=int,default=600)
     parser.add_argument('--timeout',type=int,default=120)
     parser.add_argument('--output-limit-bindings',type=Path,help='Explicit verified generation-binding SQLite snapshot for this isolated live cohort')
@@ -164,6 +166,7 @@ def main():
     selected=[s for s in CASES if not args.case or s['id'] in args.case][:args.limit]
     if not selected or set(args.case)-{s['id'] for s in CASES}:parser.error('unknown or empty case selection')
     projects=any(s.get('executor')=='project'for s in selected)
+    if args.project_variant and not projects:parser.error('project-variant requires a project case')
     if args.project_sdk=='official'and not args.live:parser.error('official SDK requires --live')
     if args.live and projects and args.project_sdk!='official':parser.error('live project cases require explicit --project-sdk official')
     if not 20<=args.project_timeout<=1200:parser.error('project-timeout 20..1200')
@@ -199,7 +202,7 @@ def main():
     report=dict(schema_version=1,contract_version=CONTRACT_VERSION,mode='live' if args.live else 'fixture',model=model['model'],cases=[],attempts=1,
                 samples_per_case=args.samples,sampling_plan='independent; no retry or success selection',
                 network_mode=policy['mode'],budget=dict(max_cases=args.limit,max_samples=args.limit*args.samples,case_timeout_seconds=args.timeout,
-                    project_timeout_seconds=args.project_timeout if projects else None,project_sdk=('official'if args.live else'fixture')if projects else'disabled',
+                    project_timeout_seconds=args.project_timeout if projects else None,project_variant=args.project_variant,project_sdk=('official'if args.live else'fixture')if projects else'disabled',
                     collaboration_rounds=max(s.get('phase_budget',s.get('budget',2)) for s in selected),max_case_model_calls=max(s.get('budget',2) for s in selected),transport_retries=0),
                 source_commit='',semantic_scope='machine-verifiable fixed tasks; not a general capability guarantee')
     import subprocess
@@ -216,8 +219,8 @@ def main():
             'desk_companion/local_calendar.py','desk_companion/tebb_tools.py','desk_companion/collaboration.py',
             'desk_companion/agent_eval_tools.py','desk_companion/agent_eval_lifecycle.py','scripts/eval_fixture_worker.py',
             'desk_companion/agent_eval_projects.py','scripts/eval_project_host.py','scripts/eval_project_fixture.py',
-            'desk_companion/project_environments.py','desk_companion/project_environment_store.py','desk_companion/project_operations.py',
-            'desk_companion/project_tools.py','desk_companion/project_receipts.py','desk_companion/docker_sandboxes.py',
+            'desk_companion/project_environments.py','desk_companion/project_environment_store.py','desk_companion/resource_lock.py','desk_companion/project_operations.py',
+            'desk_companion/project_tools.py','desk_companion/project_receipts.py','desk_companion/project_integrity.py','desk_companion/docker_sandboxes.py',
             'desk_companion/worker_rpc.py','desk_companion/bridge.py','desk_companion/local_api/host.py','desk_companion/local_api/server.py',
             'desk_companion/execution_context.py','desk_companion/model_capacity.py','desk_companion/model_tokenizer.py',
             'desk_companion/task_budgets.py','desk_companion/model_generation.py',
@@ -271,7 +274,7 @@ def main():
                         if value.get('root_run'):row['collab_run']=value['root_run']
                         if value.get('project_case',{}).get('stage'):row['stage']=value['project_case']['stage']
                         save()
-                    task,verification,task_ids,calls=execute(spec,profile=profile,model_id=model['id'],timeout=args.project_timeout,sample=sample,official=args.live,progress=progress)
+                    task,verification,task_ids,calls=execute(spec,profile=profile,model_id=model['id'],timeout=args.project_timeout,sample=sample,official=args.live,variant=args.project_variant,progress=progress)
                     row['task_ids']=task_ids;task_id=task_ids[0]if task_ids else''
                     expired=verification.get('deadline_exceeded',False)
                     row['project_case']=verification

@@ -121,12 +121,12 @@ class ProjectVerdictTests(unittest.TestCase):
 
     def proof(self,scenario):
         names={'coding':['project_read','project_write','project_execute'],
-               'clone':['project_prepare','project_read','project_start','project_status','project_log','project_stop'],
+               'clone':['project_prepare','project_read','project_start','project_status','project_log','project_integrity','project_stop'],
                'cancel':[]}[scenario]
         return dict(sdk_stopped=True,identity_matches=True,model_workers_exited=True,
                     model_receipts=[dict(tool=name,ok=True)for name in names],
                     original_tests_unchanged=True,implementation_changed=True,model_test_exit_code=0,verification_test_exit_code=0,
-                    checkout_matches=True,tracked_files_unchanged=True,original_service_command=True,http_ready_before_stop=True,actual_log_bytes=42,
+                    model_source_integrity=True,stopped_vm_not_resumed_for_inspection=True,checkout_matches=True,tracked_files_unchanged=True,original_service_command=True,http_ready_before_stop=True,actual_log_bytes=42,
                     preview_unreachable=True,model_stop_same_environment=True,active_guest_marker=True,cancel_requested=True,original_tool_command=True)
 
     def test_coding_needs_unchanged_original_tests_and_real_test_exit_in_both_phases(self):
@@ -137,7 +137,7 @@ class ProjectVerdictTests(unittest.TestCase):
 
     def test_oral_success_or_stop_receipt_cannot_replace_original_runtime_and_http_evidence(self):
         proof=self.proof('clone');self.assertTrue(judge('clone',dict(state='succeeded'),proof))
-        for key,value in [('sdk_stopped',False),('identity_matches',False),('model_workers_exited',False),('checkout_matches',False),
+        for key,value in [('model_source_integrity',False),('stopped_vm_not_resumed_for_inspection',False),('sdk_stopped',False),('identity_matches',False),('model_workers_exited',False),('checkout_matches',False),
                           ('tracked_files_unchanged',False),('http_ready_before_stop',False),('actual_log_bytes',0),
                           ('original_service_command',False),
                           ('model_stop_same_environment',False),('preview_unreachable',False)]:

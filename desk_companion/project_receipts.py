@@ -21,6 +21,10 @@ def receipt(tool,call_id,arguments,result):
     if isinstance(arguments.get('command'),str):value['command_sha256']=hashlib.sha256(arguments['command'].encode()).hexdigest()
     for key in ('log_id','exit_code','service_ready','stop_confirmed','replayed'):
         if key in result:value[key]=result[key]
+    if tool=='project_integrity' and isinstance(result.get('integrity'),dict):
+        value['integrity']=selected(result['integrity'],('complete','unchanged','scope','untracked_excluded','baseline_commit',
+            'current_commit','tracked_changes','head_matches_baseline','owner','environment','sandbox_id','service_id','start_operation',
+            'observed_at','observation_finished_at','received_at','request_id','guest_session','transport','new_exec','reason'))
     return value
 
 

@@ -44,6 +44,7 @@ class Bridge:
         if operation=='status':return service.status(ident,environment['scope'])
         if operation=='stop':return service.stop(ident,environment['scope'])
         if operation=='reconcile':return service.reconcile(ident,environment['scope'],verify=payload.get('verify',False))
+        if operation=='integrity':return service.integrity(ident,environment['scope'],payload.get('request_id',''))
         if operation=='archive_create':return service.archive_unknown_create(ident,environment['scope'],
             payload.get('expected_operation',''),payload.get('request_id',''),confirm=payload.get('confirm',False))
         if operation=='log':return service.log(ident,environment['scope'],payload.get('operation',''),payload.get('offset',0))

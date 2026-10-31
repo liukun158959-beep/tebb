@@ -13,7 +13,7 @@ INSTRUCTION='''反馈审阅协议 v3。你是独立交付审阅者，只核对�
 比较数值需核对指标、单位、时期与对象；诚实说明不可比本身可以满足目标。命令退出0不等于测试覆盖、文件/服务已存在或用户验收已通过。
 数值可比性判读必须引用双方实际原句，不能只引一方或把不同指标的数字直接相除当作效益比较。
 区分技术执行结束与目标完成。未知创建/发送只能保留原operation编号，不能建议重复执行。goal是当前职责；global_goal是整体目标背景，保留其中约束，但不要求子任务重做其他阶段。actual_assignment只证明后台确已分派当前任务，不证明外部操作成功。
-只输出完整JSON：{"requirements":[{"requirement":"候选应该满足的正向验收条件","dimension":"claim_support或numeric_comparability或task_acceptance；引用已有规则还可用format/schema/source_url/reading/command/artifact/test_coverage","status":"supported或contradicted或unverified","reason":"简短具体理由","evidence":[{"source_id":"提供的材料id","quote":"实际材料中的连续原句"}]}]}。
+只输出完整JSON：{"requirements":[{"requirement":"候选应该满足的正向验收条件","dimension":"claim_support或numeric_comparability或task_acceptance；引用已有规则还可用format/schema/source_url/reading/command/artifact/test_coverage/source_integrity","status":"supported或contradicted或unverified","reason":"简短具体理由","evidence":[{"source_id":"提供的材料id","quote":"实际材料中的连续原句"}]}]}。
 至少检查一项、最多12项。证据只能逐字摘自给定材料，不能改写引句；每项最多8个引句，每句1至1000字。
 draft若为完整JSON，可引用保持全部字段、值和类型相同的完整JSON数据；只允许键顺序、空白或转义写法不同，不适用于来源正文或局部片段。不要给evidence添加level等材料元信息，来源层级由系统核对。
 status只表示候选是否满足验收条件。supported=候选满足；contradicted=有实际证据说明候选违反；缺材料、读不全或不能判断为unverified。不要把“发现错误/指标不同/已做核对”写成requirement后标supported。例：条件“比较的指标、年份、币种应可比”，候选却用2020收入除以2021利润，应为numeric_comparability的contradicted；即使不能证明现实中的10倍断言必假，也已违反可比性条件。给定输入的计算、文字处理与格式要求归task_acceptance，claim_support专指外部事实。
@@ -21,7 +21,9 @@ status只表示候选是否满足验收条件。supported=候选满足；contrad
 模型判断只作辅助审阅，不自称形式化证明。'''
 INSTRUCTION+='\nverified_checks是规则/实际回执已核对的条件。通常不重复审阅已通过的格式、引用URL和已读区间；若需提及，在对应dimension项增加rule_id，精确引用已提供规则id，evidence可为空，系统只记录那条实际规则的范围，不把它当正文证明。claim_support/numeric_comparability/task_acceptance不得用rule_id代替语义证据。url/truncated是材料元数据，不是正文引句。previous_protocol_issues仅用于修正你自己的协议/引句，不要求候选改写正确事实，不删除实质缺口。'
 
-RULE_DIMENSIONS={'format','schema','source_url','reading','command','artifact','test_coverage'}
+INSTRUCTION+='\nproject_integrity的实际回执在原服务存活连接中采集。complete=true且unchanged=true只支持观察时刻相对原baseline的跟踪文件未变，untracked明确排除，不证明从未修改或全部运行安全。停止后重放是带时间的历史回执，不应要求为再次只读检查而重启VM；普通Web stdout里的JSON不是该实际回执。'
+
+RULE_DIMENSIONS={'format','schema','source_url','reading','command','artifact','test_coverage','source_integrity'}
 
 
 SCHEMA=dict(type='object',properties=dict(requirements=dict(type='array',minItems=1,maxItems=12,items=dict(type='object',

@@ -67,7 +67,8 @@ def prompt(scenario,variant,environment=''):
              '最终启动命令必须原样使用：'+PYTHON_START+'，port=5000')
     return (f'这是隔离公开项目验收。实际拉取{repository}，固定提交{ref}，读取实际项目文件；{details}。'
             '不要修改原源码/测试，不另写hello服务。经真实HTTP检查后查询project_status和project_log，'
-            '保留取得的原服务/日志回执，再使用project_stop停止原环境，最后简洁报告实际结果。')
+            '停止前必须调用project_integrity取得原提交/跟踪文件未变的实际回执；untracked构建元数据单独说明。'
+            '保留原服务/日志/校验回执，再使用project_stop停止原环境，最后简洁报告实际结果。')
 
 
 def receipts_bound_to_environment(receipts,environment):
@@ -111,20 +112,22 @@ def judge(scenario,root,proof):
         return bool({'project_read','project_write','project_execute'}<=succeeded
                     and proof.get('original_tests_unchanged') and proof.get('implementation_changed')
                     and proof.get('model_test_exit_code')==0 and proof.get('verification_test_exit_code')==0)
-    required={'project_prepare','project_read','project_start','project_status','project_log','project_stop'}
-    return bool(required<=succeeded and proof.get('checkout_matches') and proof.get('tracked_files_unchanged')
+    required={'project_prepare','project_read','project_start','project_status','project_log','project_integrity','project_stop'}
+    return bool(required<=succeeded and proof.get('model_source_integrity') and proof.get('stopped_vm_not_resumed_for_inspection') and proof.get('checkout_matches') and proof.get('tracked_files_unchanged')
                 and proof.get('original_service_command')
                 and proof.get('http_ready_before_stop') and proof.get('actual_log_bytes',0)>0
                 and proof.get('preview_unreachable') and proof.get('model_stop_same_environment'))
 
 
-def execute(spec,*,profile,model_id,timeout,sample=1,official=False,progress=lambda value:None):
+def execute(spec,*,profile,model_id,timeout,sample=1,official=False,variant=None,progress=lambda value:None):
     """One isolated case. Setup, model action, semantic proof and cleanup stay distinct."""
     from websockets.sync.client import connect
     from .agent_debug import listing
     from .agent_evals import call_evidence
     from .agent_eval_lifecycle import worker_alive
-    scenario=spec['scenario'];variant='python'if scenario=='coding'or scenario=='clone'and sample%2==0 else'node'
+    scenario=spec['scenario']
+    if variant not in {None,'node','python'}:raise ValueError('unsupported project variant')
+    variant=variant or ('python'if scenario=='coding'or scenario=='clone'and sample%2==0 else'node')
     folder=Path(profile)/'project_cases'/(spec['id']+'-s'+str(sample)+'-'+uuid.uuid4().hex)
     folder.mkdir(parents=True)
     with socket.socket()as reserved:reserved.bind(('127.0.0.1',0));port=reserved.getsockname()[1]

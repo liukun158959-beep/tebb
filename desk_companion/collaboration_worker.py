@@ -112,6 +112,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     prompt += '\n当前北京时间：'+clock
     if '项目环境' in role.get('tools',[]):
         prompt+='\n本轮允许项目环境：公开GitHub的Node/Python项目可在独立Docker Linux环境拉取、配置、运行，不需要授权本机文件夹。执行操作转后台任务，真实preview URL取自project_start/status回执。'
+        prompt+='\n若用户要求保留原源码/测试，在原Web服务启动后、停止前调用project_integrity取得实际时刻/基线/跟踪文件回执。无存活校验通道则保留未知，不为只读检查重启服务或VM；不要把普通stdout或旧历史校验当新证明。'
     if request.get('reference_time'):
         prompt+='\n原目标提出时间：'+datetime.fromtimestamp(request['reference_time'],TZ).isoformat(timespec='minutes')+'。原目标中的明天/明晚按原提问时间解析，保持此前已明确的绝对日期；用户明确修改日期时才调整。'
     if request.get('supplemented_at'):prompt+='\n用户补充时间：'+datetime.fromtimestamp(request['supplemented_at'],TZ).isoformat(timespec='minutes')

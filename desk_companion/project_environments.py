@@ -19,7 +19,8 @@ import time
 import uuid
 
 from .docker_sandboxes import SandboxesClient, SandboxError, NO_WINDOW, port, cli_environment, diagnostic_text
-from .project_environment_store import EnvironmentStore
+from .project_environment_store import EnvironmentStore,READ_KINDS
+from .project_integrity import IntegritySession,valid_receipt
 
 LOG_LIMIT=4*1024*1024
 PROJECT='/home/agent/project'
@@ -60,6 +61,7 @@ class ProjectEnvironmentService:
         self.store.recover_pending()
         self.context=threading.local();self.lock=threading.RLock();self.processes={};self.readers={};self.runtime_locks={};self.closed=False
         self.owner_active=owner_active
+        self.controls={}
         self.client=client or SandboxesClient()
         if isinstance(self.client,SandboxesClient):self.client.observe_control(self._record_control)
 
@@ -112,27 +114,38 @@ class ProjectEnvironmentService:
         if self.closed or record['cancel_requested'] or record['owner_task'] and not self.owner_active(record['owner_task']):
             self.store.cancel(record['environment']);raise OperationCancelled('项目操作已取消，正在核对停止状态。')
 
-    def _spawn(self,environment,operation,script):
+    def _spawn(self,environment,operation,script,*,control=None):
         self._check(operation)
-        command=self.client.exec_command(environment['sandbox_name'],environment['sandbox_id'],['bash','-lc',script])
-        process=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
-                                 creationflags=NO_WINDOW,env=cli_environment())
-        with self.lock:self.processes[operation]=process
+        argv=control.command(PROJECT,script) if control else ['bash','-lc',script]
+        command=self.client.exec_command(environment['sandbox_name'],environment['sandbox_id'],argv,**({'interactive':True} if control else {}))
+        process=subprocess.Popen(command,stdin=subprocess.PIPE if control else subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                                 creationflags=NO_WINDOW,env=cli_environment(),**({'bufsize':0}if control else {}))
+        with self.lock:
+            self.processes[operation]=process
+            if control:control.attach(process);self.controls[operation]=control
         overflow=threading.Event();tail=bytearray()
+        def output(chunk,stdout):
+            if stdout:
+                tail.extend(chunk)
+                if len(tail)>131072:del tail[:-131072]
+            if self._append(operation,chunk):overflow.set()
         def read(stream,stdout):
             while True:
                 try:chunk=os.read(stream.fileno(),4096)
                 except (OSError,ValueError):break
                 if not chunk:break
-                if stdout:
-                    tail.extend(chunk)
-                    if len(tail)>131072:del tail[:-131072]
-                if self._append(operation,chunk):overflow.set()
+                for data,is_stdout in control.feed(chunk,stdout)if control else [(chunk,stdout)]:output(data,is_stdout)
+            if control:
+                for data,is_stdout in control.eof(stdout):output(data,is_stdout)
         readers=[threading.Thread(target=read,args=(stream,stdout),daemon=True)
                  for stream,stdout in ((process.stdout,True),(process.stderr,False))]
         for reader in readers:reader.start()
         with self.lock:self.readers[operation]=readers
         return process,readers,overflow,tail
+
+    def _retire_control(self,operation):
+        with self.lock:control=self.controls.pop(operation,None)
+        if control:control.close()
 
     def _exec(self,environment,operation,script,timeout=120):
         """Capture untrusted output as bytes; only the CLI exit code is a control signal."""
@@ -174,6 +187,7 @@ class ProjectEnvironmentService:
         with self.lock:owned=[(key,value) for key,value in self.processes.items()
                               if self.store.operation(key)['environment']==environment['id']]
         for key,process in owned:
+            self._retire_control(key)
             try:process.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 process.terminate()  # This exact Popen object belongs to this service, never a restored PID.
@@ -196,8 +210,8 @@ class ProjectEnvironmentService:
         error=str(exc);unknown=isinstance(exc,SandboxError) and exc.outcome_unknown
         stopped=False
         with self.lock:process=self.processes.get(operation)
-        read_finished=record['kind']=='read' and (process is None or process.poll() is not None)
-        preserve_service=record['kind']=='read' and (read_finished or (environment.get('service') or {}).get('state')=='ready')
+        read_finished=record['kind']in READ_KINDS and (process is None or process.poll() is not None)
+        preserve_service=record['kind']in READ_KINDS and (read_finished or (environment.get('service') or {}).get('state')=='ready')
         if preserve_service:
             unknown=unknown or bool(process and process.poll() is None)
         elif environment.get('sandbox_id'):
@@ -252,7 +266,8 @@ class ProjectEnvironmentService:
                     result=self._exec(environment,request,clone)
                     commit=result['stdout'].strip().splitlines()[-1]
                     if not re.fullmatch('[a-f0-9]{40,64}',commit):raise RuntimeError('未取得实际仓库提交编号。')
-                    self.store.checkpoint(request,'install',commit=commit)
+                    self.store.checkpoint(request,'install',commit=commit,source_baseline=dict(commit=commit,operation=request,
+                        repository=repo,at=time.time(),source='fresh_clone'))
                     install=('set -eu\ncd '+PROJECT+'\n'
                              'if test -f package.json; then\n'
                              '  if test -f package-lock.json; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi\n'
@@ -365,6 +380,73 @@ class ProjectEnvironmentService:
         except (OSError,http.client.HTTPException):return dict(ok=False,status=None)
         finally:connection.close()
 
+    def _source_baseline(self,environment):
+        baseline=environment.get('source_baseline')or{}
+        if (baseline.get('source')=='fresh_clone' and baseline.get('operation')==environment.get('prepare_operation')
+            and baseline.get('repository')==environment.get('repository') and re.fullmatch('[a-f0-9]{40,64}',baseline.get('commit',''))):
+            return baseline['commit']
+        original=environment.get('prepare_operation')
+        if original:
+            operation=self.store.operation(original);commit=(operation.get('result')or{}).get('commit','')
+            if operation['kind']=='prepare' and operation['state']=='succeeded' and commit==environment.get('commit') and re.fullmatch('[a-f0-9]{40,64}',commit):
+                return commit
+        return ''
+
+    def integrity(self,ident,scope,request,*,owner_task=''):
+        """Read only through the original live Web session. Never create/reconnect exec."""
+        self._environment(ident,scope);request=request_id(request)
+        with self._runtime_lock(ident):
+            try:environment,operation,fresh=self.store.begin(ident,'integrity',request,{},owner_task)
+            except ValueError as exc:
+                return dict(ok=False,error=str(exc),integrity=dict(complete=False,unchanged=None,reason='environment_unresolved'))
+            if not fresh:
+                return dict(ok=operation['state']=='succeeded',environment=environment,operation=operation,
+                            integrity=operation.get('result'),replayed=True,log_id=request)
+            proof=dict(complete=False,unchanged=None,scope='tracked_files_at_observation',untracked_excluded=True)
+            try:
+                self._check(request)
+                service=environment.get('service')or{}
+                with self.lock:
+                    process=self.processes.get(service.get('operation'));control=self.controls.get(service.get('operation'))
+                expected=dict(environment=ident,sandbox_id=environment.get('sandbox_id'),service_id=service.get('id'),
+                              start_operation=service.get('operation'),baseline_commit=self._source_baseline(environment))
+                if (not expected['sandbox_id'] or service.get('state')!='ready' or control is None or process is None
+                    or control.process is not process or control.binding!=expected or not control.ready or not control.app_running or process.poll()is not None):
+                    raise RuntimeError('no_live_integrity_channel')
+                if not expected['baseline_commit']:raise RuntimeError('missing_original_baseline')
+                observed=self.client.owned(environment['sandbox_name'],expected['sandbox_id'])
+                if observed.get('status')!='running':raise RuntimeError('original_instance_not_running')
+                self.store.checkpoint(request,'source_integrity')
+                raw=control.inspect(request,lambda:self._check(request))
+                self._check(request)
+                after=self.client.owned(environment['sandbox_name'],expected['sandbox_id'])
+                current=self.store.get(ident)
+                if (after.get('status')!='running' or (current.get('service')or{}).get('id')!=service['id']
+                    or control.closed or not control.app_running or process.poll()is not None):
+                    raise RuntimeError('original_service_changed_during_check')
+                if (not isinstance(raw,dict) or type(raw.get('complete'))is not bool or raw.get('owner')!=ident
+                    or raw.get('baseline_commit')!=expected['baseline_commit']):raise ValueError('invalid_source_integrity_receipt')
+                if raw['complete'] and (type(raw.get('tracked_changes'))is not bool or type(raw.get('unchanged'))is not bool
+                    or not re.fullmatch('[a-f0-9]{40,64}',raw.get('current_commit',''))
+                    or raw['unchanged']!=(raw['current_commit']==expected['baseline_commit'] and not raw['tracked_changes'])):
+                    raise ValueError('invalid_source_integrity_receipt')
+                proof=dict(raw,**expected,guest_session=control.guest,request_id=request,received_at=time.time(),
+                           transport='existing_service_pipe',new_exec=False)
+                if proof['complete'] and not valid_receipt(proof,environment=ident,baseline=expected['baseline_commit']):
+                    raise ValueError('invalid_source_integrity_receipt')
+                try:self._append(request,'[source integrity] '+json.dumps(proof,ensure_ascii=False)+'\n')
+                except OSError:proof['diagnostics_available']=False
+                state='succeeded'if proof['complete']else'failed'
+                environment,operation=self.store.finish(request,state,result=proof,error=proof.get('reason',''),changes=dict(source_integrity=proof))
+                return dict(ok=proof['complete'],environment=environment,operation=operation,integrity=proof,log_id=request)
+            except Exception as exc:
+                proof.update(complete=False,unchanged=None,reason=str(exc),received_at=time.time(),new_exec=False,transport='existing_service_pipe')
+                try:self._append(request,'[source integrity unknown] '+str(exc)+'\n')
+                except OSError:proof['diagnostics_available']=False
+                environment,operation=self.store.finish(request,'cancelled'if isinstance(exc,OperationCancelled)else'failed',
+                    result=proof,error=str(exc))
+                return dict(ok=False,environment=environment,operation=operation,integrity=proof,error=str(exc),log_id=request)
+
     def start(self,ident,scope,request,command,guest_port,*,expected='',owner_task=''):
         environment=self._environment(ident,scope);request=request_id(request);guest_port=port(guest_port)
         if not isinstance(command,str) or not command.strip() or len(command)>16000 or '\0' in command:raise ValueError('启动命令无效或过长。')
@@ -377,12 +459,14 @@ class ProjectEnvironmentService:
                 with socket.socket() as reserved:
                     reserved.bind(('127.0.0.1',0));host_port=reserved.getsockname()[1]
                 service=dict(id=uuid.uuid4().hex,state='starting',operation=request,command=command,
-                             host_port=host_port,guest_port=guest_port,log_id=request,url='')
+                             host_port=host_port,guest_port=guest_port,log_id=request,url='',integrity_channel=True)
                 self.store.checkpoint(request,'publish',service=service)
                 environment=self.store.get(ident)
                 self.client.publish(environment['sandbox_name'],environment['sandbox_id'],guest_port,host_port)
                 script=('set -eu\ncd '+PROJECT+f'\nexport HOST=0.0.0.0 PORT={guest_port}\nexec bash -c '+shlex.quote(command))
-                process,readers,overflow,tail=self._spawn(environment,request,script)
+                control=IntegritySession(dict(environment=ident,sandbox_id=environment['sandbox_id'],service_id=service['id'],
+                    start_operation=request,baseline_commit=self._source_baseline(environment)))
+                process,readers,overflow,tail=self._spawn(environment,request,script,control=control)
                 self.store.checkpoint(request,'health_check')
                 deadline=time.monotonic()+40;health=dict(ok=False)
                 while time.monotonic()<deadline:
@@ -390,14 +474,14 @@ class ProjectEnvironmentService:
                     if process.poll() is not None:raise RuntimeError('前台服务进程已退出，项目尚未就绪，请查看启动日志。')
                     if overflow.is_set():raise RuntimeError('启动日志达到4MiB上限。')
                     health=self._http(host_port,expected)
-                    if health['ok']:break
+                    if health['ok'] and control.ready and control.app_running:break
                     time.sleep(.2)
-                if not health['ok']:
+                if not health['ok'] or not control.ready or not control.app_running:
                     message=('HTTP已响应200，但正文不含指定文本；终端的Listening/Running日志不是HTTP正文条件。'
                              if health.get('status')==200 else '未通过本机HTTP健康检查，项目尚未就绪。')
                     raise HealthCheckFailure(message,health)
                 self._check(request)
-                if process.poll() is not None:raise RuntimeError('健康检查后前台服务已退出。')
+                if process.poll() is not None or not control.ready or not control.app_running:raise RuntimeError('健康检查后前台服务已退出或控制会话失效。')
                 service.update(state='ready',url=f'http://127.0.0.1:{host_port}/',health=health,checked=time.time(),cli_pid=process.pid)
                 environment,operation=self.store.finish(request,'succeeded',result=service,changes=dict(state='available',service=service))
                 threading.Thread(target=self._watch,args=(ident,service['id'],process),daemon=True).start()
@@ -406,6 +490,8 @@ class ProjectEnvironmentService:
 
     def _watch(self,ident,service_id,process):
         code=process.wait()
+        environment=self.store.get(ident)
+        if (environment.get('service')or{}).get('id')==service_id:self._retire_control(environment['service']['operation'])
         with self._runtime_lock(ident):
             environment=self.store.get(ident);service=environment.get('service') or {}
             if self.closed or service.get('id')!=service_id or service.get('state')!='ready':return
@@ -428,6 +514,8 @@ class ProjectEnvironmentService:
         with self.lock:
             process=self.processes.get(service.get('operation'))
             held=bool(process and process.poll() is None)
+            control=self.controls.get(service.get('operation'))
+            if service.get('integrity_channel'):held=held and bool(control and control.app_running and control.process is process)
         ready=bool(service.get('state')=='ready' and held and observed and observed['status']=='running' and health['ok'])
         operation_id=environment.get('active_operation') or (environment.get('prepare_operation') if environment.get('creation_archive') else '')
         operation=self.store.operation(operation_id) if operation_id else None

@@ -93,13 +93,22 @@ def verify(host,folder,scenario,variant,request,setup):
             proof.update(actual_log_bytes=len(data),actual_log_sha256=hashlib.sha256(data).hexdigest(),service=svc)
         if svc.get('host_port'):
             proof['preview_unreachable']=not service._http(svc['host_port']).get('ok')
-        code=('import json,subprocess;from pathlib import Path;'
-            'p=Path("/home/agent/project");'
-            'commit=subprocess.check_output(["git","-C",str(p),"rev-parse","HEAD"],text=True,timeout=4).strip();'
-            'changes=subprocess.check_output(["git","-C",str(p),"status","--porcelain","--untracked-files=no"],text=True,timeout=8);'
-            'print(json.dumps(dict(commit=commit,tracked_changes=changes)))\n# TEBB_EVAL_INSPECT_CHECKOUT')
-        metadata=json.loads(client.capture(environment['sandbox_name'],environment['sandbox_id'],['python3','-I','-c',code]))
-        proof.update(checkout_observation=metadata,tracked_files_unchanged=metadata['commit']==ref and not metadata['tracked_changes'])
+        from desk_companion.project_integrity import valid_receipt,observation_current_for_actions
+        checks=[value for value in receipts if value.get('tool')=='project_integrity'and value.get('ok')is True
+                and value.get('environment',{}).get('id')==ident]
+        integrity={}
+        if checks:
+            saved=service.store.operation(checks[-1].get('operation',{}).get('id',''))
+            candidate=saved.get('result')or{}
+            if (saved.get('kind')=='integrity'and saved.get('state')=='succeeded'and saved.get('environment')==ident
+                and candidate.get('request_id')==saved['id']and valid_receipt(candidate,environment=ident,baseline=ref)
+                and candidate.get('sandbox_id')==environment['sandbox_id']and candidate.get('service_id')==svc.get('id')
+                and candidate.get('start_operation')==started.get('operation',{}).get('id')
+                and observation_current_for_actions(receipts,checks[-1],ident)):
+                integrity=candidate
+        proof.update(source_integrity_receipt=integrity,model_source_integrity=bool(integrity),
+                     checkout_observation=integrity,tracked_files_unchanged=integrity.get('unchanged')is True,
+                     stopped_vm_not_resumed_for_inspection=True)
     stopped=service.stop(ident,scope);proof['verification_stop']=stopped
     proof.update(sdk_stopped=bool(stopped['ok']and runtime()['status']=='stopped'))
     return proof

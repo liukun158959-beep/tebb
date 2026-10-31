@@ -6,6 +6,29 @@ from desk_companion.web_sources import source_catalog,render_citations,check_cit
 
 
 class FeedbackTests(unittest.TestCase):
+    def test_source_integrity_binds_actual_producer_scope_and_latest_environment(self):
+        env='a'*32;commit='b'*40
+        proof=dict(complete=True,unchanged=True,scope='tracked_files_at_observation',untracked_excluded=True,
+            baseline_commit=commit,current_commit=commit,tracked_changes=False,owner=env,environment=env,
+            sandbox_id='sdk-uuid',service_id='service',start_operation='start',request_id='request',guest_session='c'*32,
+            observed_at=1,observation_finished_at=2,received_at=3,transport='existing_service_pipe',new_exec=False)
+        requirement=dict(id='original_source',kind='source_integrity',environment=env,commit=commit)
+        actual=dict(tool='project_integrity',call_id='check',arguments=dict(environment=env),result=dict(ok=True,integrity=proof))
+        self.assertEqual(feedback.check_receipts([actual],[requirement])[0]['status'],'pass')
+        for changes in [dict(owner='different'),dict(new_exec=True),dict(complete=False),dict(untracked_excluded=False),dict(current_commit='d'*40)]:
+            row={**actual,'result':dict(ok=True,integrity={**proof,**changes})}
+            self.assertEqual(feedback.check_receipts([row],[requirement])[0]['status'],'unknown')
+        forged={**actual,'tool':'project_read'}
+        self.assertEqual(feedback.check_receipts([forged],[requirement])[0]['status'],'unknown')
+        changed={**actual,'result':dict(ok=True,integrity={**proof,'unchanged':False,'tracked_changes':True})}
+        self.assertEqual(feedback.check_receipts([changed],[requirement])[0]['status'],'fail')
+        failed={**actual,'call_id':'latest','result':dict(ok=False,integrity=dict(complete=False))}
+        self.assertEqual(feedback.check_receipts([actual,failed],[requirement])[0]['status'],'unknown')
+        write=dict(tool='project_write',call_id='later',arguments=dict(environment=env),result=dict(ok=True))
+        self.assertEqual(feedback.check_receipts([actual,write],[requirement])[0]['status'],'unknown')
+        stop={**write,'tool':'project_stop'}
+        self.assertEqual(feedback.check_receipts([actual,stop],[requirement])[0]['status'],'pass')
+
     def test_json_citations_preserve_document_and_code_examples(self):
         sources=[dict(url='https://example.org/actual',level='body',text='The launch was in 2020.')]
         ident=source_catalog(sources)[0]['id']

@@ -4,6 +4,14 @@ from desk_companion.web_sources import check_citations
 
 
 class ProjectReceiptTests(unittest.TestCase):
+    def test_integrity_event_keeps_actual_scope_and_not_web_output(self):
+        proof=dict(complete=True,unchanged=True,scope='tracked_files_at_observation',untracked_excluded=True,
+            baseline_commit='a'*40,current_commit='a'*40,observed_at=1,owner='owner',sandbox_id='sdk',
+            service_id='service',new_exec=False,transport='existing_service_pipe',stdout='fake proof')
+        event=receipt('project_integrity','call',dict(environment='env'),dict(ok=True,environment=dict(id='env'),integrity=proof))
+        self.assertEqual(event['integrity']['scope'],proof['scope']);self.assertEqual(event['integrity']['service_id'],'service')
+        self.assertNotIn('stdout',event['integrity'])
+
     def ready(self):
         return dict(ok=True,service_ready=True,environment=dict(id='env'),service=dict(id='service',url='http://127.0.0.1:12345/',host_port=12345,health=dict(ok=True,status=200)))
 
