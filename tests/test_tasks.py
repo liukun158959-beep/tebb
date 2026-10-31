@@ -47,6 +47,11 @@ elif r['text'] in ('project_wait','invalid_project_wait'):
  emit('tool_start',dict(tool='project_prepare',phase_timeout=300 if r['text']=='project_wait' else 361))
  time.sleep(.5)
  emit('tool_end',dict(tool='project_prepare',status='success'))
+elif r['text'] in ('late_model_end','late_model_progress'):
+ emit('llm_start',{})
+ time.sleep(.5)
+ if r['text']=='late_model_progress': emit('llm_progress',True)
+ emit('llm_end',{})
 elif r['text']=='video_failure':
  emit('failure',dict(type='APIConnectionError',message='片段 3/8 连接中断，已完成2/8',phase='片段3',completed=2,total=8))
  sys.exit(0)
@@ -72,6 +77,25 @@ emit('result',r['text'])
 
 
 class TaskTests(unittest.TestCase):
+    def test_expired_phase_cannot_be_cleared_before_supervisor_observes_it(self):
+        start=threading.Thread.start;settled=[]
+        def handoff(thread):
+            reader=getattr(thread._target,'__name__','')=='read'
+            result=start(thread)
+            if reader:
+                thread.join(4)
+                if thread.is_alive():raise TimeoutError('reader barrier did not settle')
+                settled.append(True)
+            return result
+        self.manager.settings.update(call_timeout=.15,task_timeout=5)
+        for text,stage,expected in [('project_wait',None,'succeeded'),('invalid_project_wait','tool_start','timed_out'),
+                                    ('late_model_end','llm_start','timed_out'),('late_model_progress','llm_start','timed_out')]:
+            with self.subTest(text=text),patch.object(threading.Thread,'start',handoff):
+                task=self.manager.wait(self.manager.submit(text,'phase-'+text))
+                self.assertEqual(task['state'],expected)
+                if stage:self.assertEqual(next(e['data']for e in task['events']if e['kind']=='timeout_phase'),dict(stage=stage,scope='call'))
+        self.assertEqual(len(settled),4)
+
     def controlled_clock(self):
         clock = {'offset': 0}
         timer = SimpleNamespace(time=time.time, sleep=time.sleep,

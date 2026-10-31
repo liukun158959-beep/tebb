@@ -267,8 +267,14 @@ class TaskManager:
         deadline = control.get('started_monotonic', time.monotonic()) + request['limits']['task_timeout']
         tree = process = None
         phase = {"deadline": None, "hard_deadline": None, "kind": None, "waiting_note": None, "tool": None}
+        phase_lock=threading.Lock()
         ended = threading.Event()
         outcome = {}
+        def expiration(observed):
+            if observed>=deadline:
+                return dict(scope='task',stage=phase['kind']or'outside_call',tool=phase['tool'])
+            if (phase['deadline']and observed>=phase['deadline'])or(phase['hard_deadline']and observed>=phase['hard_deadline']):
+                return dict(scope='call',stage=phase['kind']or'outside_call',tool=phase['tool'])
         try:
             self.event(task_id, "status", "正在整理上下文，准备调用模型。")
             spawn_started = time.monotonic()
@@ -287,8 +293,27 @@ class TaskManager:
                     for line in process.stdout:
                         event = json.loads(line)
                         kind, data = event["kind"], event.get("data")
+                        observed=time.monotonic()
+                        with phase_lock:
+                            # A late end/progress event cannot erase an expiry
+                            # before the supervisor next gets scheduled.
+                            expired=expiration(observed)
+                            if expired:outcome.setdefault('expiration',expired)
+                            if kind in ('llm_start','tool_start'):
+                                wait=request['limits']['call_timeout']
+                                if kind=='tool_start'and isinstance(data,dict):
+                                    command_wait=data.get('phase_timeout')
+                                    if type(command_wait)in(int,float)and 1<=command_wait<=360:wait=max(wait,command_wait)
+                                phase.update(deadline=observed+wait,kind=kind,
+                                    tool=data.get('tool')if kind=='tool_start'and isinstance(data,dict)else None,
+                                    hard_deadline=observed+max(300,request['limits']['call_timeout'])if kind=='llm_start'else None,
+                                    waiting_note=observed+30)
+                            elif kind in ('llm_end','tool_end'):
+                                phase.update(deadline=None,hard_deadline=None,kind=None,tool=None,waiting_note=None)
+                            elif kind in ('token','think','llm_progress')and data and phase['kind']=='llm_start':
+                                phase.update(deadline=observed+request['limits']['call_timeout'],waiting_note=observed+30)
                         if kind == "result":
-                            outcome['answer_received'] = time.monotonic()
+                            outcome['answer_received'] = observed
                             outcome["answer"] = str(data)
                             self.update(task_id, answer=outcome["answer"])
                         elif kind == "answer_reset":
@@ -302,28 +327,6 @@ class TaskManager:
                             outcome["timed_out"] = isinstance(data, dict) and "Timeout" in data.get("type", "")
                             self.event(task_id, kind, data)
                         else:
-                            if kind in ("llm_start", "tool_start"):
-                                wait = request['limits']['call_timeout']
-                                if kind == 'tool_start' and isinstance(data,dict):
-                                    command_wait = data.get('phase_timeout')
-                                    # Trusted workers may declare a bounded tool wait;
-                                    # the task's immutable total deadline still wins.
-                                    if type(command_wait) in (int,float) and 1 <= command_wait <= 360:
-                                        wait = max(wait,command_wait)
-                                phase["deadline"] = time.monotonic() + wait
-                                phase["kind"] = kind
-                                phase['tool'] = data.get('tool') if kind == 'tool_start' and isinstance(data, dict) else None
-                                phase["hard_deadline"] = time.monotonic() + max(300, request["limits"]["call_timeout"]) if kind == "llm_start" else None
-                                phase["waiting_note"] = time.monotonic() + 30
-                            elif kind in ("llm_end", "tool_end"):
-                                phase["deadline"] = None
-                                phase["hard_deadline"] = None
-                                phase["kind"] = None
-                                phase['tool'] = None
-                                phase["waiting_note"] = None
-                            elif kind in ("token", "think", "llm_progress") and data and phase["kind"] == "llm_start":
-                                phase["deadline"] = time.monotonic() + request["limits"]["call_timeout"]
-                                phase["waiting_note"] = time.monotonic() + 30
                             if kind == "llm_progress":
                                 continue
                             replace = kind == 'token' and bool(data) and outcome.pop('replace_pending', False)
@@ -342,27 +345,30 @@ class TaskManager:
                 self._settled(task_id, control, 'reader_done')
                 raise
             reason = ""
-            timeout_scope = timeout_stage = None
+            timeout_scope = timeout_stage = timeout_tool = None
             while True:
                 completed = ended.wait(.05)
                 observed = outcome['ended_at'] if completed else time.monotonic()
                 if control["cancel"].is_set():
                     reason = "cancelled"
                     break
-                if observed >= deadline or (phase["deadline"] and observed >= phase["deadline"]) or (phase["hard_deadline"] and observed >= phase["hard_deadline"]):
+                with phase_lock:
+                    expired=outcome.get('expiration')or expiration(observed)
+                    if expired:outcome.setdefault('expiration',expired)
+                    waiting=phase['waiting_note']and observed>=phase['waiting_note']
+                    if waiting:phase['waiting_note']=None
+                if expired:
                     reason = "timed_out"
-                    timeout_scope = 'task' if observed >= deadline else 'call'
-                    timeout_stage = phase['kind'] or 'outside_call'
+                    timeout_scope,timeout_stage,timeout_tool=expired['scope'],expired['stage'],expired['tool']
                     break
                 if completed:
                     break
-                if phase["waiting_note"] and time.monotonic() >= phase["waiting_note"]:
+                if waiting:
                     self.event(task_id, "status", "当前调用仍在等待返回；此提示不代表超时或失败。")
-                    phase["waiting_note"] = None
             if reason:
                 completed_note = (reason == 'timed_out' and 'answer' in outcome
                                   and outcome.get('answer_received', float('inf')) <= deadline
-                                  and phase['kind'] == 'tool_start' and phase['tool'] == 'archive_video_notes')
+                                  and timeout_stage == 'tool_start' and timeout_tool == 'archive_video_notes')
                 if reason == 'timed_out':
                     self.event(task_id, 'timeout_phase', dict(
                         stage=timeout_stage, scope=timeout_scope))
