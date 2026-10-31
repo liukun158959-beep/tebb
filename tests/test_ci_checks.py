@@ -46,7 +46,8 @@ class CIChecksTests(unittest.TestCase):
 
     def test_draft_never_overwrites_existing_version_or_publishes(self):
         with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);ui=root/'desk_companion/ui';ui.mkdir(parents=True)
+            base=Path(directory);(base/'path-alias').mkdir()
+            root=base/'path-alias/..';ui=root/'desk_companion/ui';ui.mkdir(parents=True)
             (ui/'release.json').write_text(json.dumps(dict(version='9.0.0',tag='v9.0.0',title='fixture',image='poster.png')))
             notes=root/'docs/releases';notes.mkdir(parents=True);(notes/'v9.0.0.md').write_text('fixture')
             archive=root/'tebb-9.0.0-windows-x64.zip';sha='a'*40
@@ -65,7 +66,9 @@ class CIChecksTests(unittest.TestCase):
                 run.assert_not_called()
                 with patch.object(draft_release.subprocess,'check_output',side_effect=['[]','[]']):draft_release.main()
                 command=run.call_args.args[0];self.assertIn('--draft',command);self.assertNotIn('--latest',command)
-                self.assertIn(str(installer),command)
+                # Windows tempfile may use an 8.3 alias while the release entry
+                # resolves it to the long path; require the same candidate file.
+                self.assertIn(installer.resolve(),[Path(value).resolve()for value in command[4:8]])
                 receipt=root/'installer-build.json';metadata=json.loads(receipt.read_text());metadata['verification']=True;receipt.write_text(json.dumps(metadata))
                 run.reset_mock()
                 with self.assertRaisesRegex(ValueError,'禁止上传'):draft_release.main()
