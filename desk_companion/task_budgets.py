@@ -277,6 +277,20 @@ class Ledger:
             root['progress'].append(dict(key=key,kind=kind,reference=reference,at=time.time()))
             root['no_progress']=0
 
+    def log_progress(self,task,reference,start,end,fingerprint):
+        member=self.member(task)
+        if not member:return
+        with self.change(member['id'])as root:
+            covered=start
+            ranges=sorted((p['start'],p['end'])for p in root['progress']if p['kind']=='log_bytes'and p['reference']==reference)
+            for begin,finish in ranges:
+                if begin>covered:break
+                covered=max(covered,finish)
+                if covered>=end:return
+            key=hashlib.sha256(json.dumps(['log_bytes',reference,start,end,fingerprint]).encode()).hexdigest()
+            root['progress'].append(dict(key=key,kind='log_bytes',reference=reference,start=start,end=end,at=time.time()))
+            root['no_progress']=0
+
     def view(self,ident):
         root=self.read(ident)
         if root is None:return None
@@ -327,6 +341,9 @@ class Scope:
         self.ledger.reserve_tool(self.task);self.notice()
 
     def progress(self,kind,reference,fingerprint):self.ledger.progress(self.task,kind,reference,fingerprint);self.notice()
+
+    def log_progress(self,reference,start,end,fingerprint):
+        self.ledger.log_progress(self.task,reference,start,end,fingerprint);self.notice()
 
 
 @contextmanager
@@ -388,6 +405,14 @@ def record_progress(tool,arguments,result):
     text=result.get('text')or result.get('content')
     if tool in{'read_local_source','project_read','workspace_read'}and isinstance(text,str)and text:
         scope.progress('local_body',str(arguments.get('source_id')or arguments.get('path','')),hashlib.sha256(text.encode()).hexdigest())
+    if tool=='project_log'and isinstance(text,str)and text:
+        start=result.get('start_offset');end=result.get('offset');size=result.get('bytes')
+        if (result.get('environment')==arguments.get('environment')and result.get('operation')==arguments.get('operation')
+            and type(start)is int and type(end)is int and type(size)is int and 0<size<=65536
+            and start==arguments.get('offset',0)and end-start==size and start>=0
+            and isinstance(digest,str)and len(digest)==64 and all(c in'0123456789abcdef'for c in digest)):
+            reference=f"{result['environment']}/{result['operation']}"
+            scope.log_progress(reference,start,end,digest)
     if tool=='build_chart'and isinstance(result.get('id'),str):scope.progress('artifact',result['id'],result['id'])
     if isinstance(operation,dict)and operation.get('state')=='succeeded':
         meaningful={k:result.get(k)for k in ('exit_code','command_sha256','service_ready')}

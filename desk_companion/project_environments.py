@@ -348,6 +348,8 @@ class ProjectEnvironmentService:
         with self.lock:process=self.processes.get(operation)
         active=bool(process and process.poll() is None)
         return dict(ok=True,environment=ident,operation=operation,base64=base64.b64encode(content).decode(),
+                    text=content.decode('utf-8',errors='replace'),encoding='utf-8-replace',sha256=hashlib.sha256(content).hexdigest(),
+                    start_offset=offset,bytes=len(content),
                     offset=offset+len(content),size=size,done=not active and (record['state'] not in {'running','unknown','stopping'} or bool(record.get('creation_archive')) and not self.store.creation_active(operation)),
                     creation_outcome_unknown=record['kind']=='prepare' and record['state']=='unknown',
                     truncated=size>=LOG_LIMIT,limit=LOG_LIMIT)
