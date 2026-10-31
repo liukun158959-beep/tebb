@@ -139,3 +139,5 @@ if items:
 首个6031c4d的Windows完整CI另发现新增目录测试的8.3路径别名问题：子路径解析成长名，根路径未解析，导致同一目录被误判越界。本机已用真实短路径复现，读写根统一规范化后49项项目相关回归通过。该修订不重算前述16次模型成绩；实机读取补验单独保存于 `output/project-191-canonical-physical`，完整CI通过后再进入main。
 
 本机材料保留在工作区上级 `output/project-agent-191-live-attempt1…5*`、`project-191-receipt-loss-physical`、`project-191-cancel-physical`、`project-191-shutdown-physical`。第1轮权限身份错误、第2轮HTTP条件/解释器/stdio契约、第3轮缺失读取误停及300秒边界、第4轮工具等待未被父管理器采纳和额度耗尽，均保留原始失败。接口修订后才独立重验，不把排队成功当运行成功。模型临时配置已删除，已记录worker和测试环境均已停止；原始载荷不上传仓库。
+
+#203验收：运行代码285a790的[精确CI](https://github.com/liukun158959-beep/tebb/actions/runs/41184835560)全部通过，996项后端0失败/错误、12项显式旧沙箱条件跳过；209前端、类型/构建及Rust通过。本机首轮完整995项通过（另有Windows不允许创建测试symlink一项跳过），补锁取得失败反例后48项受影响回归通过。原生认证RPC在冻结代码上通过，验证拒绝错误token/缺确认、同编号回放、两槽释放一槽、原owner/unknown/日志保留；真实SDK仅一次只读清单，无创建/停止、模型或飞书写入。旧da30f94双未知反例的缺恢复入口错误保留，没有重跑历史SDK失败。
