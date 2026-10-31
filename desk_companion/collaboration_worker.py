@@ -370,6 +370,8 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
         try:
             tools=[{k:v for k,v in spec.items() if k not in {"implementation","read_only"}} for spec in extra.values()]+([schema] if allowed_search and tool_count<search_budget else [])+([fetch_schema] if allowed_fetch and fetch_count<fetch_budget else [])
             if repair.used:tools=[t for t in tools if t['function']['name']in{'web_search','web_fetch','submit_deliverable'}or repair.allows(t['function']['name'],extra.get(t['function']['name'],{}))]
+            if any(p['write_attempted']for p in feedback.pending_operations(tool_receipts)):
+                tools=[t for t in tools if t['function']['name']in{'web_search','web_fetch','submit_deliverable','build_chart'}or extra.get(t['function']['name'],{}).get('read_only')is True]
             if finishing: tools=[t for t in tools if t['function']['name']=='submit_deliverable']
             response = llm.chat(messages, tools=tools, on_delta=content_delta)
         finally:
@@ -442,6 +444,10 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                 if repair.used and name not in {'web_search','web_fetch'}and not repair.allows(name,extra.get(name,{})):
                     messages.append(dict(role='tool',tool_call_id=call['id'],content='定向纠错阶段不重复执行写入/命令；保留原operation回执，使用只读查询核对或如实标记未完成。'))
                     emit('repair_tool_blocked',dict(tool=name,reason='mutation_during_repair'));continue
+                pending=[p for p in feedback.pending_operations(tool_receipts)if p['write_attempted']]
+                if pending and name not in {'web_search','web_fetch','build_chart'}and extra.get(name,{}).get('read_only')is not True:
+                    messages.append(dict(role='tool',tool_call_id=call['id'],content='原写入/执行结果仍未知，本次操作未执行。只能按原operation编号只读核对，或如实保留未完成状态；不能再次创建/发送。'))
+                    emit('unknown_operation_blocked',dict(tool=name,call_id=call['id'],operation_ids=[p['operation_id']for p in pending]));continue
                 if finishing:
                     messages.append(dict(role='tool',tool_call_id=call['id'],content='已保留收尾模型调用用于交付，本次工具未执行。请据已有证据交付。'))
                     continue

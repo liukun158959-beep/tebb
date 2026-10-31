@@ -70,6 +70,12 @@ class LocalCalendarToolTests(unittest.TestCase):
         class LLM:
             def chat(_, messages, tools, on_delta):
                 offered.append([t['function']['name'] for t in tools])
+                if messages[0]['content'].startswith('反馈审阅协议'):
+                    material=json.loads(messages[1]['content'])['materials']
+                    row=next(m for m in material if m['level']=='actual_receipt')
+                    value=dict(requirements=[dict(requirement='读取已授权日期的本地记录',dimension='task_acceptance',status='supported',
+                        reason='受控只读回执；数量和前后事件由测试独立检查',evidence=[dict(source_id=row['id'],quote=row['segments'][0][:500])])])
+                    return dict(message=dict(content=json.dumps(value)),usage={})
                 if len(offered)==1 and (force_call or 'read_local_calendar' in offered[-1]):
                     return dict(message=dict(tool_calls=[dict(id='calendar-read',type='function',
                         function=dict(name='read_local_calendar',arguments=json.dumps(dict(day=day))))]),usage={})

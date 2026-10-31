@@ -1,6 +1,7 @@
 """仅离线测试启动：真实 worker/Atlas 循环，模型脚本在子进程内注入。"""
 from pathlib import Path
 import importlib.abc
+import json
 import os
 import sys
 
@@ -48,11 +49,17 @@ def build(host):
         path = data_root() / "write_count"
         value = int(path.read_text("utf-8")) if path.exists() else 0
         path.write_text(str(value + 1), "utf-8")
+        if os.environ.get('DESK_TEST_UNKNOWN_WRITE')=='1':
+            return json.dumps(dict(ok=False,operation=dict(id='fixture-original',state='unconfirmed'),change_state='unconfirmed'))
         return "已完成测试写入"
-    agent.tools.register(name="channel_write", description="离线写入测试", parameters={"type":"object","properties":{}},
+    agent.tools.register(name="channel_write", description="离线写入测试", parameters={"type":"object","properties":{"attempt":{"type":"string"}}},
                          func=write, retry_max=0)
     agent.llm = FakeLLM(["依据资料的知识回答。"] if os.environ.get('DESK_TEST_KNOWLEDGE') == '1'
                         else [query, "本地流式回归正常。"])
+    if os.environ.get('DESK_TEST_UNKNOWN_WRITE')=='1':
+        def again(messages,tools):
+            return dict(role='assistant',content='',tool_calls=[dict(id='call_2',type='function',function=dict(name='channel_write',arguments='{"attempt":"retry"}'))])
+        agent.llm=FakeLLM([query,again,'原操作未确认，未重复执行。'])
     return agent
 
 def create_note(title, body, **kwargs):

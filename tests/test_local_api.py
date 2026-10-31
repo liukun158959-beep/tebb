@@ -257,6 +257,12 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
             calls=0
             def chat(model,messages,tools,on_delta):
                 model.calls+=1
+                if messages[0]['content'].startswith('反馈审阅协议'):
+                    material=json.loads(messages[1]['content'])['materials']
+                    row=next(m for m in material if m['level']=='actual_receipt')
+                    value=dict(requirements=[dict(requirement='共享RPC实际保存日程',dimension='task_acceptance',status='supported',
+                        reason='受控服务回执；实际数据由下面的日程读取断言独立核对',evidence=[dict(source_id=row['id'],quote=row['segments'][0][:500])])])
+                    return dict(message=dict(content=json.dumps(value)),usage={})
                 if model.calls==1:
                     return dict(message=dict(role='assistant',content='',tool_calls=[dict(id='calendar-call',type='function',function=dict(name='calendar_change',arguments=json.dumps(dict(action=dict(type='create',summary='学习安排',start=START,end=END,item_id='')))))]),usage={})
                 receipt=json.loads(next(m['content'] for m in reversed(messages) if m['role']=='tool'))

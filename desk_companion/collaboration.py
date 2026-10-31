@@ -756,6 +756,8 @@ class Collaboration:
                     elif kind == "delivery_check": run['delivery_check']=data
                     elif kind == 'feedback_check': run['feedback_check']=data
                     elif kind == 'feedback_invalidated':run.pop('feedback_check',None)
+                    elif kind in {'unknown_operation_blocked','repair_tool_blocked'}:
+                        run['events'].append('工具未执行：'+str(data.get('tool',''))+'；保留原回执，先核对未知结果。')
                     elif kind == 'project_receipt':
                         receipts=run.setdefault('project_receipts',[])
                         receipts.append(data)

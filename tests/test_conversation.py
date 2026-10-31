@@ -24,7 +24,7 @@ class ConversationWorkerTests(unittest.TestCase):
         settings.save()
         self.saved_state = state.state_path().read_bytes()
 
-    def run_worker(self, text='查询测试', *, warm=False, **options):
+    def run_worker(self, text='查询测试', *, warm=False, expected_failure=False, **options):
         request = dict(text=text, session_id='worker-session', channel='desktop',
                        sampling=SAMPLING,
                        limits=dict(call_timeout=30, task_timeout=60), **options)
@@ -35,7 +35,8 @@ class ConversationWorkerTests(unittest.TestCase):
             env={**os.environ, 'PYTHONUTF8': '1', 'DESK_TEST_KNOWLEDGE': '1' if options.get('knowledge') else '0'}, timeout=45)
         self.assertEqual(result.returncode, 0, result.stderr)
         events = [json.loads(line) for line in result.stdout.splitlines()]
-        self.assertFalse([e for e in events if e['kind'] == 'failure'], result.stdout + result.stderr)
+        if expected_failure:self.assertTrue([e for e in events if e['kind']=='failure'],result.stdout+result.stderr)
+        else:self.assertFalse([e for e in events if e['kind'] == 'failure'], result.stdout + result.stderr)
         return events
 
     def test_real_tool_worker_has_no_gui_and_preserves_history_usage_and_state(self):
@@ -83,6 +84,16 @@ class ConversationWorkerTests(unittest.TestCase):
         self.assertFalse(self.root.joinpath('write_count').exists())
         result = next(e['data']['result'] for e in events if e['kind'] == 'tool_end')
         self.assertIn('不再重复执行', result['output'])
+
+    def test_atlas_worker_blocks_unknown_write_before_second_backend_call(self):
+        with patch.dict(os.environ,DESK_TEST_UNKNOWN_WRITE='1'):
+            events=self.run_worker('写入测试',expected_failure=True)
+        self.assertEqual(self.root.joinpath('write_count').read_text('utf-8'),'1')
+        self.assertTrue(any(e['kind']=='unknown_operation_blocked'for e in events))
+        report=next(e['data']for e in events if e['kind']=='feedback_check')
+        self.assertEqual(report['completion'],'unverified')
+        self.assertEqual(report['unknown_operations'][0]['operation_id'],'fixture-original')
+        self.assertFalse(any(e['kind']=='result'for e in events))
 
 
 class ConversationServiceTests(unittest.TestCase):

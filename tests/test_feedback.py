@@ -83,6 +83,29 @@ class FeedbackTests(unittest.TestCase):
         resolved=dict(tool='project_status',read_only=True,call_id='resolved',result=dict(operation=dict(id='original',state='succeeded')))
         self.assertEqual(feedback.report([],receipts=[first,resolved])['unknown_operations'],[])
 
+    def test_calendar_unconfirmed_and_board_request_ids_use_original_receipts(self):
+        calendar=dict(call_id='write',read_only=False,result=dict(operation=dict(id='calendar-op',state='unconfirmed'),change_state='unconfirmed'))
+        board=dict(call_id='board',read_only=False,result=dict(request_id='board-op',change_state='unconfirmed'))
+        unknown=feedback.pending_operations([calendar,board])
+        self.assertEqual({x['operation_id']for x in unknown},{'calendar-op','board-op'})
+        observed=dict(call_id='query',read_only=True,result=dict(operation=dict(id='calendar-op',state='synced')))
+        loaded=dict(call_id='load',read_only=True,result=dict(ok=True,receipt=dict(request_id='board-op')))
+        self.assertEqual(feedback.pending_operations([calendar,board,observed,loaded]),[])
+
+    def test_opaque_write_failure_remains_unknown_but_known_preflight_does_not(self):
+        opaque=dict(call_id='attempt',read_only=False,status='failed',result='Error: connection closed')
+        self.assertTrue(feedback.pending_operations([opaque])[0]['write_attempted'])
+        known=dict(opaque,result=dict(ok=False,change_state='not_changed'))
+        self.assertEqual(feedback.pending_operations([known]),[])
+
+    def test_failed_or_in_progress_query_is_not_resolution_of_original_write(self):
+        first=dict(call_id='write',read_only=False,result=dict(operation=dict(id='original',state='unknown')))
+        for result in [dict(ok=False,request_id='original',error='query failed'),dict(ok=True,operation=dict(id='original',state='running')),
+                       dict(ok=False,request_id='original',change_state='not_changed',error='query did not run')]:
+            query=dict(call_id='query',read_only=True,result=result)
+            pending=feedback.pending_operations([first,query])
+            self.assertEqual(len(pending),1);self.assertEqual(pending[0]['operation_id'],'original')
+
     def test_repair_is_once_and_blocks_mutations_even_when_model_requests_them(self):
         repair=feedback.RepairBudget()
         self.assertTrue(repair.begin());self.assertFalse(repair.begin())

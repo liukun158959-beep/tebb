@@ -135,5 +135,15 @@ class FeedbackWorkerTests(unittest.TestCase):
         self.assertFalse(any(k=='result'for k,d in self.events))
         self.assertEqual(self.events[-1],('token','{"total":19}'))
 
+    def test_unknown_create_blocks_another_create_before_any_final_draft(self):
+        self.request.update(text='准备公开项目。只输出JSON。',role=dict(id='writer',name='writer',role='write',tools=['项目环境']),budget=8)
+        def prepare(ident):return dict(tool_calls=[dict(id=ident,function=dict(name='project_prepare',arguments=json.dumps(dict(repository='https://github.com/example/project'))))])
+        model=ScriptedModel([prepare('first'),prepare('repeat'),'{"ready":false}','{"ready":false}'])
+        unknown=dict(ok=False,operation=dict(id='original-operation',state='unknown'),environment=dict(id='original-environment',state='unknown'))
+        with patch('desk_companion.project_tools.call',return_value=unknown)as rpc:
+            with self.assertRaises(PublicFailure):self.run_model(model)
+        self.assertEqual(rpc.call_count,1)
+        self.assertTrue(any(k=='unknown_operation_blocked'for k,d in self.events))
+
 
 if __name__=='__main__':unittest.main()

@@ -95,30 +95,49 @@ def check_receipts(receipts,requirements):
     return out
 
 
-def report(checks,*,execution='finished',receipts=()):
-    checks=list(checks)
+def operation_fact(receipt):
+    """Normalize only backend receipt contracts, not arbitrary prose or file data."""
+    result=receipt.get('result');result=result if isinstance(result,dict)else {}
+    operation=result.get('operation');operation=operation if isinstance(operation,dict)else {}
+    saved=result.get('receipt');saved=saved if isinstance(saved,dict)else {}
+    details=result.get('error_details');details=details if isinstance(details,dict)else {}
+    ident=operation.get('id')or result.get('request_id')or saved.get('request_id')
+    ident=ident if isinstance(ident,str)and ident else None
+    state=operation.get('state');state=state if isinstance(state,str)else None
+    changed=result.get('change_state');changed=changed if isinstance(changed,str)else None
+    unclear=state in {'unknown','unconfirmed'}or changed=='unconfirmed'or details.get('outcome_unknown')is True
+    if receipt.get('read_only')is False and receipt.get('status')=='failed'and not state and changed not in{'not_changed','committed'}:
+        unclear=True
+    resolved=not unclear and (state in {'succeeded','failed','cancelled','synced','saved','resolved_absent','retimed','observed','deleted','not_started'}
+        or changed=='committed'or result.get('ok')is True and bool(saved.get('request_id')))
+    return dict(key=ident or 'call:'+receipt['call_id'],id=ident,unclear=unclear,resolved=resolved,
+                log_id=result.get('log_id')or operation.get('log_id'))
+
+
+def pending_operations(receipts):
     unknown_operations=[];latest={}
     for receipt in receipts:
-        result=receipt.get('result');result=result if isinstance(result,dict)else {}
-        operation=result.get('operation');operation=operation if isinstance(operation,dict)else {}
-        ident=operation.get('id');ident=ident if isinstance(ident,str)and ident else None
-        key=ident or 'call:'+receipt['call_id']
-        latest[key]=receipt
-    for receipt in latest.values():
-        result=receipt.get('result');result=result if isinstance(result,dict)else {}
-        operation=result.get('operation');details=result.get('error_details')
-        operation=operation if isinstance(operation,dict)else {}
-        details=details if isinstance(details,dict)else {}
-        if operation.get('state')=='unknown'or details.get('outcome_unknown')is True:
-            unknown_operations.append(dict(call_id=receipt['call_id'],operation_id=operation.get('id'),log_id=result.get('log_id')or operation.get('log_id'),
+        fact=operation_fact(receipt)
+        previous=latest.get(fact['key'])
+        if not previous or fact['unclear']or fact['resolved']or not previous[1]['unclear']:
+            latest[fact['key']]=(receipt,fact)
+    attempted_keys={operation_fact(r)['key']for r in receipts if r.get('read_only')is False}
+    for receipt,fact in latest.values():
+        if fact['unclear']:
+            unknown_operations.append(dict(call_id=receipt['call_id'],operation_id=fact['id'],log_id=fact['log_id'],
                 state='unknown',action='reconcile_original_receipt_do_not_replay'))
             # A read-only query may truthfully return unknown. An actual write
             # attempt remains unconfirmed; final prose cannot turn it to success.
-            ident=operation.get('id');ident=ident if isinstance(ident,str)and ident else None
-            attempted=next((r for r in receipts if r.get('read_only')is False and
-                (r.get('call_id')==receipt['call_id']if ident is None else isinstance(r.get('result'),dict)and isinstance(r['result'].get('operation'),dict)and r['result']['operation'].get('id')==ident)),None)
-            if attempted:
-                checks.append(check('unknown_operation_'+receipt['call_id'],'task_acceptance','unknown','写入/执行结果仍未知，必须核对原操作，不能报完整完成。',operation_id=operation.get('id')))
+            unknown_operations[-1]['write_attempted']=fact['key']in attempted_keys
+    return unknown_operations
+
+
+def report(checks,*,execution='finished',receipts=()):
+    checks=list(checks)
+    unknown_operations=pending_operations(receipts)
+    for operation in unknown_operations:
+        if operation['write_attempted']:
+            checks.append(check('unknown_operation_'+operation['call_id'],'task_acceptance','unknown','写入/执行结果仍未知，必须核对原操作，不能报完整完成。',operation_id=operation['operation_id']))
     required=[c for c in checks if c.get('required',True)]
     failed=any(c['status']=='fail'for c in required)
     unknown=any(c['status']=='unknown'for c in required)

@@ -80,11 +80,11 @@ def main():
                                     "fingerprint": fingerprint(kw["tool_name"], kw["input"]),
                                     "read_only": host.agent.tools.get(kw["tool_name"]).isReadOnly})
             def on_tool_after_call(self, **kw):
-                raw=kw['result']
+                raw=kw['result'].get('output',kw['result'])if isinstance(kw['result'],dict)else kw['result']
                 if isinstance(raw,str):
                     try:raw=json.loads(raw)
                     except (ValueError,TypeError):pass
-                actual_receipts.append(dict(tool=kw['tool_name'],call_id=str(kw['step_id']),arguments=kw['input'],result=raw,read_only=host.agent.tools.get(kw['tool_name']).isReadOnly))
+                actual_receipts.append(dict(tool=kw['tool_name'],call_id=str(kw['step_id']),arguments=kw['input'],result=raw,read_only=host.agent.tools.get(kw['tool_name']).isReadOnly,status=kw['status']))
                 if kw['tool_name']in{'web_fetch','web_search','github_repository'}and isinstance(raw,dict):
                     from .web_sources import evidence_sources
                     actual_sources.extend(evidence_sources([raw]))
@@ -131,6 +131,11 @@ def main():
                 if fingerprint(name, args) in request.get("completed_writes", []):
                     return "该写入在前次任务中已经尝试过，本次不再重复执行；请查询确认原结果，再下达新的操作。"
                 tool = host.agent.tools.get(name)
+                from .feedback import pending_operations
+                pending=[op for op in pending_operations(actual_receipts)if op['write_attempted']]
+                if not tool.isReadOnly and pending:
+                    emit('unknown_operation_blocked',dict(tool=name,operation_ids=[op['operation_id']for op in pending]))
+                    return '原写入/执行结果仍未知，本次操作未执行。按原编号只读核对，不重复创建或发送。'
                 # Calendar writes own a cross-process board lease and short cache lock.
                 # Do not retain the global write lock across their remote IO.
                 if tool.isReadOnly or name == 'create_calendar_event':
