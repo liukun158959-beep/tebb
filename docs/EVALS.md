@@ -206,3 +206,16 @@ v14固定公开来源案例要求RFC第2、3节，但旧验收额外要求整篇
 clone_install_run要求真实项目服务启动后、停止前通过project_integrity采集原基线/跟踪文件的实际观察。SDK停止后独立verifier读取已保存的原operation结果，不再为只读Git检查隐式启动VM。结果仍需绑定同一原环境、SDK UUID、service/start-operation，保留HTTP、日志、原启动命令、模型停止与worker清理等原条件；后续修改动作使旧校验失效。原v13/v14及v15零调用复判报告不覆盖。
 
 单一语言须运行前选择，例如`python scripts/eval_agent.py --case clone_install_run --project-variant python --limit 1 --samples 1 --output output/new-fixture`；真实模型另加`--live --project-sdk official`并预定调用/时间预算。默认语言轮换保持兼容；改代码后新队列单独报告，不把重新选择样本掩成原成绩。价格未配置保持未知。
+
+2026-10-31每轮均事先冻结源码/计划、固定Flask提交49943b5a94413a530761350f04e896f76e8d620e、Mimo-v2.6-flash、官方SDK、1样本1次，分别保留：
+
+| 材料（仓库旁output/） | 代码/修复 | 业务成绩 | 模型/工具 | 输入/输出token | 用量完整 |
+| --- | --- | --- | --- | --- | --- |
+| integrity-205-live-v1 | 原管道校验冻结快照 | timed_out | 12/14 | 170997/12798 | 否 |
+| integrity-205-logfix-live-v2 | #207可读日志/进展 | failed | 13/13 | 148333/6007 | 是 |
+| integrity-205-urlfix-live-v3 | 88bf758，#208 URL边界 | success，403115.13ms | 12/10 | 153003/10356 | 是 |
+| integrity-205-budgetfix-live-v4 | a721ae4，#209阶段余额 | timed_out，含清理613636.42ms | 16/16 | 已知205844/5326 | 否，1调用未齐 |
+
+v3实际克隆/安装、原命令HTTP运行、状态/日志、停止前原管道源码未变、模型停止同一UUID和清理全部通过。v4同样有这些项目操作回执并越过旧12阶段边界，但后续模型请求未在评测600秒总期限结束；根状态cancelled、无扩展，仍不能计整项成功。其根执行计时590226ms，包含调度开销的评测总期限先到，不能伪称根模型/时间额度耗尽；取消与原凭据/worker/parent/SDK清理通过，长尾继续#97。不混算各轮成功率、补齐未知usage或新增重采样。费用均未知。
+
+88bf758的[CI 41190603512](https://github.com/liukun158959-beep/tebb/actions/runs/41190603512)1021后端、a721ae4的[CI 41191461801](https://github.com/liukun158959-beep/tebb/actions/runs/41191461801)1024后端均0失败/错误、12显式旧沙箱条件跳过，前端/类型/构建及Rust通过。独立零模型官方SDK断管竞态通过，但只作为生命周期边界证据，不算新模型业务样本。

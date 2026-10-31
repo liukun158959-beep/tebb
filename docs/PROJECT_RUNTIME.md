@@ -162,3 +162,9 @@ if items:
 RPC沿用现有认证；模型仍通过有项目权限且活跃的run/task调用`project_operation`，不可传scope/owner/request_id。原错误、操作编号、log_id和不完整原因都可查询，不建立旁路Agent。固定Git命令沿用clone的隔离配置，禁可选索引写入和自动刷新；用实际numstat/模式摘要区分stat缓存变化，校验不刷新索引。
 
 无模型回归：`python -m unittest discover -s tests -p test_project_integrity.py -v`。真实本机PIPE/临时Git测试与官方SDK/真实模型分开记录；统一评测契约v16的`clone_install_run`新增停止前校验，`--project-variant python`可事先指定单一语言，默认仍按原样本轮换。独立verifier读取原保存回执，停止后不再exec恢复VM做检查。原v13运行成功而审阅失败的成绩不回填。设计见[ADR0030](adr/0030-project-source-integrity-session.md)。
+
+#205/#207/#208 的运行代码88bf758通过[精确CI 41190603512](https://github.com/liukun158959-beep/tebb/actions/runs/41190603512)：1021后端、0失败/错误、12显式旧沙箱条件跳过，前端/类型/构建和Rust全部通过。首轮完整1011及日志修复版1015本机回归分别通过（各13条件跳过，另含本机symlink权限条件）；最终定向95项、URL相关64项通过。
+
+真实Mimo/官方SDK的预定v16 Python样本分别保留：v1超时（12模型/14工具、用量不完整）；#207后v2失败（13模型/13工具、148333/6007输入/输出、用量完整），实际应用和源码校验通过但日志URL异常及旧阶段上限影响交付；#208后精确88bf758的v3成功（12模型/10工具、403115.13ms、153003/10356输入/输出、用量完整）。v3固定Flask提交和原启动命令，HTTP/日志、原管道源码未变、模型停止同一UUID、停止后不恢复检查及parent/worker/临时凭据清理全部通过。费用均未知，不混算成功率，不覆盖旧结果。
+
+独立官方SDK断管竞态同样通过：只显式启动本轮已知UUID一次，正向校验后从外部停止原实例，旧管道返回未知；没有新exec或隐式恢复，原CLI退出，原样本数据库/文件哈希保持不变。它是零模型的生命周期边界验证，源快照早于保守的core.worktree拒绝；不冒充模型业务样本。材料在仓库旁`output/integrity-205-{live-v1,logfix-live-v2,urlfix-live-v3,native-race-v1}/`。独立#209预算衔接修复另验，不更改上述历史成绩。

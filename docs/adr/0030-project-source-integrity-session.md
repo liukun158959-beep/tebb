@@ -15,3 +15,5 @@
 拒绝本地 `core.worktree` 重定向，不能让另一份干净工作目录代替原项目。实际临时仓库反例先保留失败，再验证返回 unknown；这项保守拒绝在原生样本冻结后补充，另以定向回归及最终精确 CI 覆盖，不改样本源码或原成绩。
 
 事实来源：[官方exec](https://docs.docker.com/reference/cli/sbx/exec/)；[官方API/SDK入口](https://docs.docker.com/ai/sandboxes-api/)面向cloud，不据此假设兼容local。
+
+验收已完成：95项最终定向、原生PIPE/Git反例、官方SDK独立断管竞态通过；88bf758完整CI1021后端及前端/Rust通过，同版v3一次真实固定Flask完整任务成功。后续a721ae4完整CI1024通过，v4原项目操作同样完成而整项因后续模型请求达到评测总期限超时，原样保留，长尾交#97。原v1超时/v2失败不覆盖；范围、用量和源码差异详见PROJECT_RUNTIME/EVALS。
