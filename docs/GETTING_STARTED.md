@@ -10,6 +10,8 @@ tebb 原名知行 · ZhiXing。本版入口为 `tebb.exe`，沿用原有用户�
 
 支持 Windows 10/11 x64。需安装 Microsoft Edge WebView2 Runtime；若系统缺少，请从 [微软官方下载页](https://developer.microsoft.com/microsoft-edge/webview2/) 安装 Evergreen Runtime。当前包尚未做代码签名；Windows 可能显示未知发布者提示。
 
+后续源码提供官方NSIS安装候选，尚未正式发布；程序、用户扩展与保留/清除数据的规则见[安装生命周期](INSTALLER.md)。冻结0.4.1仍按上面的便携包步骤使用。
+
 ## 连接模型
 
 主窗左侧 **设置 → 模型**，或首次引导第二步：

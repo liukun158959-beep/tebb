@@ -70,6 +70,10 @@ def generate(package):
     shutil.copy2(ROOT/'LICENSE', package/'LICENSE')
     shutil.copy2(ROOT/'THIRD_PARTY_NOTICES.md', package/'THIRD_PARTY_NOTICES.md')
     records=[]
+    for name,version,license_id,repository in [
+        ('nsis','3.11','SEE COPYING','https://sourceforge.net/projects/nsis/files/NSIS%203/3.11/'),
+        ('nsis-tauri-utils','0.5.3','MIT OR Apache-2.0','https://github.com/tauri-apps/nsis-tauri-utils/tree/nsis_tauri_utils-v0.5.3')]:
+        records.append(collect_package('installer',name,version,ROOT/'licenses/supplemental/installer'/name/version,output,license_id,repository))
     executable=shutil.which('pnpm.cmd') or shutil.which('pnpm')
     if not executable:raise RuntimeError('pnpm is required to retain the locked frontend notices')
     frontend=json.loads(subprocess.check_output([executable,'licenses','list','--prod','--json'],cwd=ROOT/'client'))
@@ -107,4 +111,4 @@ def generate(package):
                             repository=info.get('Home-page') or '',files=sorted(files)))
     records.sort(key=lambda p:(p['ecosystem'],p['name'],p['version']))
     (output/'dependencies.json').write_text(json.dumps(records,ensure_ascii=False,indent=2)+'\n','utf-8')
-    return {group:sum(row['ecosystem']==group for row in records) for group in ('frontend','rust','python')}
+    return {group:sum(row['ecosystem']==group for row in records) for group in ('frontend','rust','python','installer')}

@@ -50,12 +50,28 @@ class CIChecksTests(unittest.TestCase):
             (ui/'release.json').write_text(json.dumps(dict(version='9.0.0',tag='v9.0.0',title='fixture',image='poster.png')))
             notes=root/'docs/releases';notes.mkdir(parents=True);(notes/'v9.0.0.md').write_text('fixture')
             archive=root/'tebb-9.0.0-windows-x64.zip';sha='a'*40
-            with zipfile.ZipFile(archive,'w') as package:package.writestr('tebb-9.0.0/build-info.json',json.dumps(dict(version='9.0.0',desk_commit=sha)))
+            with zipfile.ZipFile(archive,'w') as package:
+                package.writestr('tebb-9.0.0/build-info.json',json.dumps(dict(version='9.0.0',desk_commit=sha)))
+                package.writestr('tebb-9.0.0/tebb.exe',b'synthetic program')
+                package.writestr('tebb-9.0.0/runtime-provenance.json',json.dumps(dict(atlas_commit=draft_release.ATLAS_REF)))
             import hashlib
-            (root/'SHA256SUMS.txt').write_text(hashlib.sha256(archive.read_bytes()).hexdigest()+'  '+archive.name+'\n')
+            installer=root/'tebb-9.0.0-windows-x64-setup.exe';installer.write_bytes(b'synthetic installer')
+            (root/'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n'for p in [archive,installer]))
+            hashes=draft_release.archive_hashes(archive,'tebb-9.0.0/')
+            (root/'installer-build.json').write_text(json.dumps(dict(version=2,verification=False,dirty=False,nsis_binary_sha256=hashlib.sha256(b"synthetic NSIS program").hexdigest(),identifier='cn.deskcompanion.client',product_name='tebb',desk_commit=sha,app_version='9.0.0',payload_manifest_sha256=hashlib.sha256(json.dumps(hashes,sort_keys=True).encode()).hexdigest(),payload_files=len(hashes),binary_sha256=hashlib.sha256(b'synthetic program').hexdigest(),installer_sha256=hashlib.sha256(installer.read_bytes()).hexdigest(),atlas=draft_release.ATLAS_REF)))
             with patch.object(draft_release,'ROOT',root),patch.object(draft_release.sys,'argv',['draft_release.py',str(root)]),patch.dict(os.environ,CANDIDATE_SHA=sha,GITHUB_REPOSITORY='owner/repo'),patch.object(draft_release.subprocess,'run') as run:
                 with patch.object(draft_release.subprocess,'check_output',side_effect=[json.dumps([dict(tag_name='v9.0.0')]),'[]']):
                     with self.assertRaisesRegex(RuntimeError,'不覆盖'):draft_release.main()
                 run.assert_not_called()
                 with patch.object(draft_release.subprocess,'check_output',side_effect=['[]','[]']):draft_release.main()
                 command=run.call_args.args[0];self.assertIn('--draft',command);self.assertNotIn('--latest',command)
+                self.assertIn(str(installer),command)
+                receipt=root/'installer-build.json';metadata=json.loads(receipt.read_text());metadata['verification']=True;receipt.write_text(json.dumps(metadata))
+                run.reset_mock()
+                with self.assertRaisesRegex(ValueError,'禁止上传'):draft_release.main()
+                run.assert_not_called()
+                metadata['verification']=False;receipt.write_text(json.dumps(metadata))
+                installer.write_bytes(b'tampered installer')
+                run.reset_mock()
+                with self.assertRaises(ValueError):draft_release.main()
+                run.assert_not_called()

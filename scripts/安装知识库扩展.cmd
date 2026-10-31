@@ -5,10 +5,10 @@ if not exist "%~dp0runtime\python.exe" (
   pause
   exit /b 1
 )
-echo Close tebb before installing. This downloads the CPU retrieval dependencies.
-"%~dp0runtime\python.exe" -m pip install --no-build-isolation torch --index-url https://download.pytorch.org/whl/cpu
-if errorlevel 1 goto failed
-"%~dp0runtime\python.exe" -m pip install --no-build-isolation sentence-transformers
+if not defined DESK_COMPANION_DATA_DIR set "DESK_COMPANION_DATA_DIR=%LOCALAPPDATA%\DeskCompanion"
+echo Close tebb before installing. Dependencies are retained in your user data folder.
+echo A failed installation keeps the previous compatible extension generation.
+"%~dp0runtime\python.exe" -c "from desk_companion.runtime_extensions import main; main()" install
 if errorlevel 1 goto failed
 echo Installation complete. Restart tebb, then download models in the Knowledge page.
 pause

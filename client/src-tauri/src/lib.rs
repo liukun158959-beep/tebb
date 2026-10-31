@@ -493,7 +493,7 @@ fn start_backend(app: &tauri::AppHandle, port: u16, token: &str) -> Result<Child
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    command.spawn().map_err(|err| format!("无法启动本地助手：{err}。请完整解压发布包，保留 runtime 文件夹。日志：{}", log_path.display()))
+    command.spawn().map_err(|err| format!("无法启动本地助手：{err}。请确认程序旁的 runtime 文件夹完整；安装版可重新安装修复。日志：{}", log_path.display()))
 }
 
 #[cfg(debug_assertions)]
@@ -506,6 +506,6 @@ fn backend_location() -> Result<(std::path::PathBuf, std::path::PathBuf), String
     let exe = std::env::current_exe().map_err(|err| err.to_string())?;
     let directory = exe.parent().ok_or("无法确定程序目录")?.to_path_buf();
     let python = directory.join("runtime/python.exe");
-    if !python.is_file() { return Err("运行环境缺失。请完整解压发布包，保留程序入口旁的 runtime 文件夹。".into()); }
+    if !python.is_file() { return Err("运行环境缺失。请保留程序入口旁的 runtime 文件夹；安装版可重新安装修复，便携版请完整解压。".into()); }
     Ok((python, directory))
 }

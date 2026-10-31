@@ -2,7 +2,7 @@
 
 自动检查与手动候选构建见 [CI/CD](CI_CD.md)。`release-candidate.yml` 默认只产生 Actions 候选资产；正式发布继续需要独立指令，不覆盖历史版本。
 
-当前产物是独立 x64 便携 ZIP。发布前需执行 Python、前端、Rust 和隔离运行时验证；发布脚本拒绝个人配置与日志。不要把整个开发工作目录压缩上传。
+新候选支持独立 x64 便携 ZIP 与当前用户 NSIS 安装包，生命周期和验证边界见 [Windows安装](INSTALLER.md)。0.4.1既有公开资产仍只有原便携包，不重发。发布前需执行 Python、前端、Rust 和隔离运行时验证；发布脚本拒绝个人配置与日志。不要把整个开发工作目录压缩上传。
 
 主品牌统一为 `tebb`。下一次发布包名为 `tebb-<version>-windows-x64.zip`，入口为 `tebb.exe`；先按新版本维护 manifest、版本号、更新说明与主题图，避免覆盖已有 v0.2.3 发布。新 manifest 增加 `product_name: "tebb"`，供飞书卡片使用；没有该字段的历史 manifest 继续使用旧品牌。历史 Release、旧 ZIP 文件名和已发送卡片保持原记录。
 
@@ -24,7 +24,8 @@ $env:DESK_RELEASE = '1'
 pnpm tauri build --no-bundle
 cd ..
 python scripts/smoke_release.py C:/Build/tebb-runtime
-python scripts/bundle_release.py --runtime-package C:/Build/tebb-runtime --output C:/Build/tebb-release
+python scripts/bundle_release.py --runtime-package C:/Build/tebb-runtime --prepare-only
+python scripts/bundle_installer.py --runtime-package C:/Build/tebb-runtime --output C:/Build/tebb-release
 ```
 
 运行时取 [Python 官方 3.13.16 x64 嵌入包](https://www.python.org/downloads/release/python-31316/)，校验官方 SHA256 后解压。依赖版本固定在 `scripts/runtime-lock.txt`，包内记录 `runtime-packages.txt` 和 `runtime-provenance.json`。
@@ -50,7 +51,7 @@ python -m unittest discover -s tests -p test_atlas_runtime.py -v
 
 按仓库规则一刀一个 issue，提交 `Fixes #n: 中文说明。` 并直推 main。确认构建与测试后，创建对应版本 tag，将 ZIP 和 `SHA256SUMS.txt` 上传到 GitHub Release。发布说明需明确 Windows / WebView2 要求、配置引导、Live2D 素材和知识库扩展的准备条件，以及实机界面验收的范围。
 
-本包没有安装器、自动更新器或代码签名。更新替换程序目录即可，用户数据仍在 `%LOCALAPPDATA%/DeskCompanion`。
+已发布0.4.1没有安装器；后续源码支持NSIS候选，尚无自动更新器或代码签名。新候选两种产物使用同一程序和runtime，合并SHA256清单、逐文件载荷及来源回执经Draft入口核对；验证标识或dirty构建不可上传。用户数据仍在 `%LOCALAPPDATA%/DeskCompanion`，升级与默认卸载保留；显式清除及扩展保留范围见INSTALLER。
 
 ## 版本内容和图文通知
 

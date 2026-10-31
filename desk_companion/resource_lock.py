@@ -9,6 +9,11 @@ from pathlib import Path
 from .paths import data_root
 
 
+def lock_filename(name):
+    """Public filename for native adapters using the same byte-range lease."""
+    return hashlib.sha256(name.encode()).hexdigest()+'.lock'
+
+
 class ResourceLock:
     def __init__(self, name, *, shared=False, directory=None):
         self.name = name
@@ -28,7 +33,7 @@ class ResourceLock:
         try:
             if not self.depth:
                 directory = self.directory if self.directory is not None else data_root() / "memory" / "locks"
-                path = directory / (hashlib.sha256(self.name.encode()).hexdigest() + ".lock")
+                path = directory / lock_filename(self.name)
                 path.parent.mkdir(parents=True, exist_ok=True)
                 self.file = path.open("a+b")
                 if os.name == "nt":

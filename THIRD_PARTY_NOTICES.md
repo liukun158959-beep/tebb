@@ -57,3 +57,11 @@ assets. tebb's MIT code license does not grant third-party character, trademark
 or external image rights. Release concept illustrations are AI-generated product
 illustrations; prompts and generation records are in docs/VERSION_POSTER_PROMPT.md.
 External services and user-supplied materials remain subject to their own terms.
+
+## Windows installer
+
+NSIS 3.11 and nsis-tauri-utils 0.5.3 are used by the Tauri installer. Their
+original notices are retained in licenses/supplemental/installer and in the
+generated dependency inventory. NSIS's COPYING describes its compression-module
+licenses separately; the application MIT license does not replace those terms.
+Exact component source locations and notice hashes are recorded alongside.

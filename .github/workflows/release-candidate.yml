@@ -76,7 +76,9 @@ jobs:
         run: |
           python scripts/smoke_release.py "$env:RUNNER_TEMP/tebb-runtime"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/bundle_release.py --runtime-package "$env:RUNNER_TEMP/tebb-runtime" --output .ci-output/distribution
+          python scripts/bundle_release.py --runtime-package "$env:RUNNER_TEMP/tebb-runtime" --prepare-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/bundle_installer.py --runtime-package "$env:RUNNER_TEMP/tebb-runtime" --output .ci-output/distribution
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $archive = Get-ChildItem .ci-output/distribution/tebb-*-windows-x64.zip
           if (@($archive).Count -ne 1) { throw 'Expected exactly one archive' }

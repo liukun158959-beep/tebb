@@ -152,5 +152,22 @@
     "member": "tokenizers-0.23.2/tokenizers/LICENSE",
     "source_sha256": "7f0f085686b9de0d0079e6f874ae053600db64c5d13049e0bbc0119926d25aac",
     "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  },
+  {
+    "path": "supplemental/installer/nsis/3.11/COPYING",
+    "source": "https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip",
+    "sha256": "e7dd514003ab96cb3ddccbc028fe5c795fccf57dc41f21cfb9d4dd16ead23bf5",
+    "member": "nsis-3.11/COPYING",
+    "source_sha256": "c7d27f780ddb6cffb4730138cd1591e841f4b7edb155856901cdf5f214394fa1"
+  },
+  {
+    "path": "supplemental/installer/nsis-tauri-utils/0.5.3/LICENSE_MIT",
+    "source": "https://raw.githubusercontent.com/tauri-apps/nsis-tauri-utils/nsis_tauri_utils-v0.5.3/LICENSE_MIT",
+    "sha256": "1c1020fa10a6bf318717e82c911bcc54ebdfb9bb280460ae332bcb2f82f57fbe"
+  },
+  {
+    "path": "supplemental/installer/nsis-tauri-utils/0.5.3/LICENSE_APACHE-2.0",
+    "source": "https://raw.githubusercontent.com/tauri-apps/nsis-tauri-utils/nsis_tauri_utils-v0.5.3/LICENSE_APACHE-2.0",
+    "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
   }
 ]

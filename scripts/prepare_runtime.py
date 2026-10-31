@@ -75,6 +75,9 @@ def main():
     run(str(runtime / "python.exe"), "-c", "from desk_companion.local_api.host import HeadlessApp; from atlas.llm.base import LLM; print('runtime imports OK')")
     lock = subprocess.check_output([str(runtime / "python.exe"), "-m", "pip", "freeze", "--all"], text=True)
     (output / "runtime-packages.txt").write_text(lock, encoding="utf-8")
+    # Source interpreters are unchanged. Only the packaged interpreter activates
+    # a compatible, explicitly installed user extension generation at startup.
+    (site / 'sitecustomize.py').write_text('from desk_companion.runtime_extensions import activate\nactivate()\n',encoding='utf-8')
     print(output)
 
 

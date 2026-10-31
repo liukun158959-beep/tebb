@@ -54,8 +54,8 @@ def free_port():
         return sock.getsockname()[1]
 
 
-async def check(port, model_port, root, restored=False):
-    url = f"ws://127.0.0.1:{port}/ws?token=release-smoke"
+async def check(port, model_port, root, restored=False,token='release-smoke',expected_guide_show=False):
+    url = f"ws://127.0.0.1:{port}/ws?token={token}"
 
     async def rpc(method, args=None):
         async with connect(url, proxy=None) as ws:
@@ -67,11 +67,11 @@ async def check(port, model_port, root, restored=False):
             return result
 
     if restored:
-        assert (await rpc("load_models"))["items"][0]["model"] == "release-smoke"
-        assert (await rpc("load_model_network"))["mode"] == "direct"
-        assert not (await rpc("load_onboarding"))["show"]
-        assert (await rpc("load_chat_log"))["items"]
-        print("Restart preserves saved model, guide completion and history: OK")
+        assert (await rpc("load_models"))["items"][0]["model"] == "release-smoke", "Saved model was not restored"
+        assert (await rpc("load_model_network"))["mode"] == "direct", "Saved network mode was not restored"
+        assert (await rpc("load_onboarding"))["show"] is expected_guide_show, "Saved onboarding progress differs from expected fixture"
+        assert (await rpc("load_chat_log"))["items"], "Saved history was not restored"
+        print("Restart preserves saved model, expected guide progress and history: OK")
         return
     assert not (await rpc("load_models"))["items"]
     setup = await rpc("load_onboarding")
@@ -133,7 +133,7 @@ async def check(port, model_port, root, restored=False):
     assets = root / "assets/skins/kaltsit"
     assets.mkdir(parents=True)
     (assets / "kaltsit.model3.json").write_text("{}", encoding="utf-8")
-    with urllib.request.urlopen(f"http://127.0.0.1:{port}/pet-assets/release-smoke/skins/kaltsit/kaltsit.model3.json") as response:
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/pet-assets/{token}/skins/kaltsit/kaltsit.model3.json") as response:
         assert response.status == 200 and response.read() == b"{}"
     print("Empty-profile startup, model save/test, bundled Atlas streaming/sampling, history and guide completion: OK")
 

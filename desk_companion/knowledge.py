@@ -120,7 +120,7 @@ PIP_HINT = (
     "再执行 python -m pip install sentence-transformers -i https://pypi.tuna.tsinghua.edu.cn/simple 。装完重启客户端。"
 )
 if os.environ.get("DESK_COMPANION_DATA_DIR"):
-    PIP_HINT = "便携版请运行发布目录内的「安装知识库扩展.cmd」，安装完重启客户端；源码版可在当前 Python 环境安装 sentence-transformers。"
+    PIP_HINT = "安装版或便携版请先退出客户端，再运行程序目录内的「安装知识库扩展.cmd」；扩展保存在兼容的用户目录层，升级后会保留。源码版可在当前 Python 环境安装 sentence-transformers。"
 EMBED_MODELS = (
     {"repo": "BAAI/bge-small-zh-v1.5", "blurb": "中文，体积小，适合先跑通。"},
     {"repo": "BAAI/bge-base-zh-v1.5", "blurb": "中文，比 small 更大，CPU 上更慢。"},

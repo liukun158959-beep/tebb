@@ -20,9 +20,9 @@ Atlas 已于 2026-10-30 改为公开仓库。CI 和发布候选直接读取固�
 
 Release candidate 仅手动运行。sha 必须是 main 中可达的完整40位提交，且该提交最新 push CI 记录和三个必要 job 均成功。构建绑定这个提交，不能借用其他提交的绿色结果；保留每次尝试的 Actions 记录。
 
-运行时构建、前端/原生编译、空白配置 smoke、打包审计、中文/空格路径迁移均复用本地脚本。默认只上传候选 ZIP/SHA 到 Actions artifacts，不创建标签或 Release，不通知飞书。发布任务独立并发组且不自动取消。
+运行时构建、前端/原生编译、空白配置 smoke、打包审计、中文/空格路径迁移均复用本地脚本。默认只上传候选 ZIP、NSIS、共同SHA256及安装构建回执到 Actions artifacts，不创建标签或 Release，不通知飞书。发布任务独立并发组且不自动取消。共同载荷先prepare-only；官方NSIS编译时捕获实际EXE输入，Tauri完成后恢复便携EXE，两种EXE分别记录摘要。只允许官方包类型标记差异，其余逐文件一致；不自行修改EXE。安装生命周期调试见[INSTALLER](INSTALLER.md)。
 
-明确勾选 upload_draft 才会上传新 draft Release；校验包内 build-info 和 SHA256，已有版本或标签直接拒绝，不能覆盖 v0.4.0。不会自动将草稿转正式。正式发布仍需独立发版指令，沿用现有 release-feishu.yml 的通知与回执。#174 完成前不冒充已有 NSIS 产物。
+明确勾选 upload_draft 才会上传新 draft Release；校验包内 build-info、两个产物摘要及正式标识的干净安装回执，已有版本或标签直接拒绝，不能覆盖冻结0.4.1等历史资产。verification产物不能上传草稿。不会自动将草稿转正式。正式发布仍需独立发版指令，沿用现有 release-feishu.yml 的通知与回执。原生验证候选不等于正式分发，也不代表干净操作系统矩阵通过。
 
 ## 性能诊断与未来质量评测
 
