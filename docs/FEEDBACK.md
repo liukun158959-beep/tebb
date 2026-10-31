@@ -65,3 +65,14 @@ v14兼容明确独立指令“你必须/请必须只返回JSON”，引号/代�
 系统将评审状态降为待核验时，message说明实际原因，model_reason保留原模型解释用于诊断，避免把“链接一致”等肯定句显示成交付失败原因。原句、来源层级和未知操作的判定不变。
 
 最终v14源码778a62d的完整CI通过：后端963项0失败/错误、12显式沙箱条件跳过，前端206项/类型/构建与Rust10项通过。默认300秒的预定单次真实分工在约100秒、5调用内完成真实子任务与最终JSON交付，39源码/凭据/worker核对通过；这不是通用成功率或旧120秒批次的补分。各批失败与Python实际运行/交付被拒区别见EVALS.md。
+
+
+## #211 审阅协议与引用阶段
+
+JSON示例使用单个真实合法dimension，合法值单独列出。审阅可通过submit_feedback_review提交同一SCHEMA的结构化数据，兼容原JSON终答；这是输出格式接口，没有业务执行器，不登记或调用外部操作。多函数、未知函数、非法枚举仍为unknown，实际正文/引句/来源层级要求不变。
+
+Schema不符返回最多8条protocol_errors，含有界JSON pointer、keyword及Schema合法值/约束；不序列化ValidationError.message、instance、候选或引句。完整JSON仍不等于Schema通过。既有一次修订沿previous_protocol_issues接收具体路径，预算和候选不变，不重放工具。诊断过多显式标记truncated。
+
+主交付在assess解析引用后才独立审阅。只有实际passed/deterministic citation_provenance使candidate_stage=after_citation_resolution，表明内部[S...]可已经渲染为Markdown链接，不能仅因最终缺内部编号再判矛盾；该规则仍只证明出处，不证明事实。通用review_draft未先核验时阶段为unspecified，不宣称通过。
+
+v20明确区分提交系统的引用形式和最终用户链接。v19真实串行/旧并行失败、Atlas超时均保留；新协议不修改原分数。AI可查feedback_check.protocol_errors、feedback_review_repair、模型call与原始响应，接口见AGENT_DEBUG.md。

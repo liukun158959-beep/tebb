@@ -4,7 +4,7 @@ import math
 import time
 from .json_document import json_answer
 
-CONTRACT_VERSION=19
+CONTRACT_VERSION=20
 
 
 class CancellationNotSettled(TimeoutError):

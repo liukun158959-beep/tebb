@@ -528,6 +528,10 @@ python -m unittest tests.test_tasks tests.test_execution_flow tests.test_collabo
 
 #205提供`project_integrity`工具及认证`project_environments_ui(operation=integrity,payload={environment,request_id})`。它只使用原存活服务管道，停止/旧会话/unknown不隐式创建exec。结果含原提交、实际跟踪变动、UUID/owner/服务/代际/时刻与范围；同编号重放返回历史快照。调用详情和project_receipt保存实际字段供反馈审阅，不将Web输出升级成控制回执。停止前调用；完整性失败不会自动停止已就绪服务。详见[项目运行](PROJECT_RUNTIME.md)。
 
+## 独立审阅协议诊断
+
+独立审阅的`review_protocol`失败包含最多8条`protocol_errors`：有界JSON pointer、keyword及必要的Schema合法选项/约束，不拷贝候选、引句或原始响应。非法枚举仍为unknown，未自动改值。它沿原`previous_protocol_issues`进入一次定向修订，共享既有预算；先查错误路径，不用反复猜提示。只有实际通过的确定性citation_provenance才使candidate_stage标记after_citation_resolution，表明内部引用可能已渲染为链接；该规则不证明事实支持，通用review_draft入口未先核验时保持unspecified。
+
 ## 明确协作策略
 
 #210复用认证`collaboration_action(action=...)`。对隔离协作群发送以下action，request_id每次新任务唯一；重用同编号仅核对原回执，不改参数重放：

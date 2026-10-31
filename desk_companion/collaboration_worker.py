@@ -83,14 +83,14 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     llm.on_context = lambda report: emit('context_admission',report)
     role, kind = request["role"], request["kind"]
     if kind=='feedback_review':
-        from .feedback_review import review
+        from .feedback_review import review,OUTPUT_TOOL
         from .feedback import check,report,check_receipts
         if type(request.get('budget',1))is not int or request.get('budget',1)<1:raise PublicFailure('审阅没有可用模型调用预算。')
         def review_once(messages):
             emit('llm_start',dict(model=model['model'],turn=1,phase='feedback_review'))
             started=time.monotonic()
             try:
-                value=llm.chat(messages,tools=[],on_delta=lambda _:emit('llm_progress',True))
+                value=llm.chat(messages,tools=[OUTPUT_TOOL],on_delta=lambda _:emit('llm_progress',True))
                 record_usage(request,value.get('usage')or {},model['model'],emit)
                 return value
             finally:emit('llm_end',dict(phase='feedback_review',duration_ms=int((time.monotonic()-started)*1000)))
@@ -190,7 +190,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     research=ResearchTools(sources=sources,discovered=discovered,emit=emit,search_limit=search_budget,fetch_limit=fetch_budget,
         page_reader=page_reader,search=search or (lambda query:search_sources(query,on_status=lambda status:emit('status',status))),fetch=fetch,redact=model['api_key'])
     from . import feedback
-    from .feedback_review import review
+    from .feedback_review import review,OUTPUT_TOOL
     repair=feedback.RepairBudget()
     tool_receipts=[]
     consumed=0
@@ -606,7 +606,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                     try:
                         from .task_budgets import phase
                         with call_context(phase='feedback_review'),phase('feedback_review'):
-                            response=llm.chat(material,tools=[],on_delta=lambda _:emit('llm_progress',True))
+                            response=llm.chat(material,tools=[OUTPUT_TOOL],on_delta=lambda _:emit('llm_progress',True))
                         record_usage(request,response.get('usage')or {},model['model'],emit)
                         return response
                     finally:

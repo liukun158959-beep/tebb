@@ -6,6 +6,51 @@ from desk_companion.web_sources import source_catalog,render_citations,check_cit
 
 
 class FeedbackTests(unittest.TestCase):
+    def test_invalid_review_dimension_keeps_unknown_and_reports_safe_repair_path(self):
+        from desk_companion.feedback_review import review
+        item=dict(requirement='PRIVATE_CONTENT_NOT_FOR_DIAGNOSTIC',dimension='format/schema',status='supported',reason='checked',evidence=[])
+        captured=[]
+        def call(messages):
+            captured.append(messages)
+            return dict(message=dict(content=json.dumps(dict(requirements=[item]))))
+        checks=review('goal','draft',[],[],call)
+        self.assertEqual(checks[0]['status'],'unknown')
+        issue=checks[0]['protocol_errors'][0]
+        self.assertEqual(issue['path'],'/requirements/0/dimension');self.assertEqual(issue['keyword'],'enum')
+        self.assertIn('format',issue['allowed_values']);self.assertIn('schema',issue['allowed_values']);self.assertNotIn('format/schema',issue['allowed_values'])
+        self.assertNotIn('PRIVATE_CONTENT_NOT_FOR_DIAGNOSTIC',json.dumps(checks))
+        review('goal','draft',[],[],call,protocol_issues=checks)
+        self.assertEqual(json.loads(captured[-1][1]['content'])['previous_protocol_issues'][0]['protocol_errors'],checks[0]['protocol_errors'])
+        noisy=review('goal','draft',[],[],lambda _:dict(message=dict(content=json.dumps(dict(requirements=[item]*30)))))
+        self.assertLessEqual(len(noisy[0]['protocol_errors']),8);self.assertTrue(noisy[0]['protocol_errors_truncated'])
+        self.assertNotIn('PRIVATE_CONTENT_NOT_FOR_DIAGNOSTIC',json.dumps(noisy))
+
+    def test_review_rendering_stage_is_bound_to_actual_passed_provenance(self):
+        from desk_companion.feedback_review import review
+        captured=[]
+        def call(messages):
+            captured.append(messages)
+            return dict(message=dict(content='{}'))
+        rule=dict(id='citation_provenance',dimension='source_url',status='pass',basis='deterministic')
+        review('goal','draft',[],[],call,verified_checks=[rule])
+        payload=json.loads(captured[-1][1]['content'])
+        self.assertEqual(payload['candidate_stage'],'after_citation_resolution');self.assertEqual(payload['citation_provenance_rule'],'citation_provenance')
+        review('goal','draft',[],[],call,verified_checks=[{**rule,'status':'unknown'}])
+        self.assertIsNone(json.loads(captured[-1][1]['content'])['citation_provenance_rule'])
+        self.assertEqual(json.loads(captured[-1][1]['content'])['candidate_stage'],'unspecified')
+
+    def test_structured_review_submission_is_data_only_and_still_strict(self):
+        from desk_companion.feedback_review import review
+        item=dict(requirement='return the given word',dimension='task_acceptance',status='supported',reason='matches provided input',evidence=[dict(source_id='goal',quote='red')])
+        def call_for(name,items):
+            return lambda _:dict(message=dict(tool_calls=[dict(function=dict(name=name,arguments=json.dumps(dict(requirements=items))))]))
+        checks=review('red','red',[],[],call_for('submit_feedback_review',[item]))
+        self.assertEqual(checks[0]['status'],'pass')
+        unknown=review('red','red',[],[],call_for('send_message',[item]))
+        self.assertEqual(unknown[0]['status'],'unknown')
+        invalid=review('red','red',[],[],call_for('submit_feedback_review',[{**item,'dimension':'format/schema'}]))
+        self.assertEqual(invalid[0]['status'],'unknown');self.assertEqual(invalid[0]['protocol_errors'][0]['keyword'],'enum')
+
     def test_source_integrity_binds_actual_producer_scope_and_latest_environment(self):
         env='a'*32;commit='b'*40
         proof=dict(complete=True,unchanged=True,scope='tracked_files_at_observation',untracked_excluded=True,

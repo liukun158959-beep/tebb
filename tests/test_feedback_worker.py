@@ -159,7 +159,7 @@ class FeedbackWorkerTests(unittest.TestCase):
         self.assertEqual(json.loads(self.events[-1][1]),dict(total=18,checked=True))
         self.assertEqual(len(model.calls),3)
         self.assertEqual(sum(k=='llm_start'for k,d in self.events),3)
-        self.assertEqual(model.calls[-1]['tools'],[])
+        self.assertEqual([tool['function']['name']for tool in model.calls[-1]['tools']],['submit_feedback_review'])
 
     def test_unsupported_claim_can_only_receive_one_correction(self):
         source=dict(kind='page',level='body',url='https://example.org/source',text='Launch was in 2020.')
