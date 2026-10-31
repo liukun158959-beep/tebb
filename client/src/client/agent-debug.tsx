@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { rpc, type BackendInfo } from "./api";
 import { Markdown } from "./Markdown";
+import { TaskBudgetView,type TaskBudget } from './task-budget';
 import { PerformanceView, PerformanceStats, duration, type PerformanceSummary, type CallTiming, type TaskTiming } from './performance-view';
 
 type Obj = Record<string, unknown>;
 export type DebugCall = { id: string; created: number; updated: number; task_id: string; session: string; channel: string;
   model: string; endpoint: string; state: string; status: number; duration_ms: number; first_byte_ms: number; request_bytes: number; response_bytes?: number; error: string };
-export type DebugDetail = { call: DebugCall; request: Obj; request_raw: string; response: Obj; response_raw: string; task?:Task|null;timing?:CallTiming|null;chain?:TaskTiming|null };
-type Task = { id: string; state: string; text: string; answer: string; error: string; events?: { seq: number; ts: number; kind: string; data: unknown }[] };
+export type DebugDetail = { call: DebugCall; request: Obj; request_raw: string; response: Obj; response_raw: string; task?:Task|null;timing?:CallTiming|null;chain?:TaskTiming|null;task_budget?:TaskBudget|null };
+type Task = { id: string; state: string; text: string; answer: string; error: string; task_budget?:TaskBudget|null; events?: { seq: number; ts: number; kind: string; data: unknown }[] };
 const STATE: Record<string, string> = { sending: "发送中", receiving: "接收中", complete: "已返回", failed: "失败", timed_out:"超时",cancelled:"已取消", interrupted: "中断", recording_failed: "记录失败" };
 const CHANNEL: Record<string, string> = { collaboration:'伙伴聊天', desktop: "桌面对话", feishu: "飞书", video: "视频", automation: "定时任务", debug: "调用解读", notebook: "笔记问答", backend: "其它调用" };
 const pretty = (value: unknown) => typeof value === "string" ? value : JSON.stringify(value, null, 2) || "";
@@ -222,6 +223,7 @@ export function AgentDebugDialog({ info, onClose, debug = false }: { info: Backe
             <div className="shrink-0 border-b border-border px-5 py-3">
               <p className="truncate text-xs text-muted-foreground" title={detail.call.endpoint}>{detail.call.endpoint}</p>
               {task && <p className="mt-2 line-clamp-2 text-sm">{task.text}</p>}
+              <TaskBudgetView budget={detail.task_budget||task?.task_budget}/>
               <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs"><span className={detail.call.state === "failed" ? "text-destructive" : "text-primary"}>{STATE[detail.call.state]}</span><span>HTTP {detail.call.status || (active(detail.call.state) ? "等待" : "未收到响应")}</span>
                 <span>耗时 {(detail.call.duration_ms / 1000).toFixed(2)}s</span><span>响应体首字节 {detail.timing ? duration(detail.timing.marks.first_body) : detail.call.first_byte_ms ? `${detail.call.first_byte_ms}ms` : '未测得'}</span>
                 <span>{messages(detail.request).length} 条消息</span><span>输入 {usage?.prompt_tokens !== undefined ? String(usage.prompt_tokens) : "—"} / 输出 {usage?.completion_tokens !== undefined ? String(usage.completion_tokens) : "—"} Token</span>

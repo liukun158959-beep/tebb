@@ -340,9 +340,14 @@ def detail(call_id):
     refresh(info)
     from .performance import task_snapshot,task_timing
     task=task_snapshot(info['task_id'])
+    if task:
+        from .task_budgets import task_view
+        task['task_budget']=task_view(info['task_id'])
     meta_path=root()/(call_id+'.meta.json')
     meta=json.loads(meta_path.read_text('utf-8')) if meta_path.exists() else {}
+    from .task_budgets import task_view
     return {"ok": True, "call": info, "meta":meta, "request": json.loads(raw_request), "request_raw": raw_request,
+            'task_budget':task_view(info['task_id']),
             "response": decode_response(raw_response), "response_raw": raw_response,
             'timing':load_timing(call_id,info['state'] in {'sending','receiving'},info['updated']),'task':task,'chain':task_timing(task)}
 

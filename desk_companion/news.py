@@ -328,6 +328,8 @@ def collect(day, cfg, progress):
 
 
 def phase(emit, kind, name, operation):
+    from .task_budgets import current
+    if kind!='llm'and current():current().tool(kind!='write')
     start = time.monotonic()
     data = {"tool": name, "step": digest([name, time.time()]), "read_only": kind != "write"} if kind != "llm" else {"model": name}
     event = "llm" if kind == "llm" else "tool"

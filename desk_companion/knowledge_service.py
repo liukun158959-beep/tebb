@@ -4,6 +4,7 @@ import uuid
 
 from . import knowledge
 from .model_text import require_text
+from .task_budgets import budgeted_operation
 
 
 class KnowledgeService:
@@ -54,6 +55,7 @@ class KnowledgeService:
     def rebuild_knowledge(self):
         return self._change(knowledge.rebuild)
 
+    @budgeted_operation('knowledge')
     def ask_knowledge(self, text):
         details = dict(stage='admission', change_state='not_changed', answer_complete=False)
 

@@ -12,7 +12,7 @@ function load(name, mocks = {}) {
   const compiled = ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: {
     module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 } }).outputText;
   const mod = new Module(filename, module); mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
-  const original = mod.require.bind(mod); mod.require = id => mocks[id] || (id==='./performance-view'?load('performance-view'):original(id)); mod._compile(compiled, filename); return mod.exports;
+  const original = mod.require.bind(mod); mod.require = id => mocks[id] || (id.startsWith('./')?load(id.slice(2)):original(id)); mod._compile(compiled, filename); return mod.exports;
 }
 
 test('version opens on the fifth consecutive click, resets after an interval, and toolbar actions work', () => {

@@ -288,6 +288,8 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     messages.append(dict(role='user',content='本轮当前任务职责（按本阶段与真实工具范围完成；整体目标保留为背景，不重做其他阶段动作）：\n'+json.dumps(dict(task=request['text'],stage=request.get('stage'),global_goal_reference=request.get('objective',request['text']),members=request.get('members',[]),draft=request.get('draft',''),required_sources=request.get('required_sources',[]),source_topics=request.get('source_topics',[])),ensure_ascii=False)))
 
     def extra_call(name, arguments):
+        from .task_budgets import current
+        if current():current().tool(extra.get(name,{}).get('read_only',name not in{'workspace_write','workspace_run','build_chart'}),name)
         if name=='build_chart':
             return build_chart(arguments,sources,request.get('source_scope',request['collab_run']),emit)
         snapshot = request.get('workspace')
@@ -472,6 +474,8 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                     emit('tool_start',dict(tool=name,read_only=extra[name].get('read_only',name not in {'workspace_write','workspace_run'}),query=arguments.get('path') or arguments.get('command',''),**wait))
                     try:
                         result = extra_call(name, arguments)
+                        from .task_budgets import record_progress
+                        record_progress(name,arguments,result)
                         if name in TOOL_OPERATIONS:
                             from .project_receipts import receipt,preview_source,checkout_source
                             emit('project_receipt',receipt(name,call['id'],arguments,result))
@@ -489,6 +493,8 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                     except Exception as exc:
                         reason = str(exc).replace(model['api_key'],'[密钥已隐藏]')[:800]
                         result = dict(ok=False,error=reason,**getattr(exc,'details',{}))
+                        from .task_budgets import BudgetExceeded
+                        if isinstance(exc,BudgetExceeded):result.update(budget_denied=True,operation=dict(state='not_started'))
                         emit('tool_end',dict(tool=name,status='failed',error=reason))
                     messages.append(dict(role='tool',tool_call_id=call['id'],content=json.dumps(result,ensure_ascii=False) if not isinstance(result,str) else result))
                     tool_receipts.append(dict(tool=name,call_id=call['id'],arguments=arguments,result=result,read_only=extra[name].get('read_only',False)))
@@ -506,6 +512,8 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                 if name=="web_search": tool_count+=1
                 else: fetch_count+=1
                 emit("tool_start", {"tool": name, "read_only": True, "query" if name=="web_search" else "url": query})
+                from .task_budgets import current
+                if current():current().tool(True,name)
                 try:
                     if name=="web_search":
                         payload=search(query) if search else search_sources(query,on_status=lambda status:emit("status",status))
@@ -535,6 +543,11 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                 emit("tool_end", {"tool": name, "status": "success", "provider":evidence.get("provider"), "url":evidence.get("url"), "truncated":evidence.get("truncated",False)})
                 search_success+=1
                 sources.extend(ledger)
+                if current():
+                    for source in ledger:
+                        if source.get('level')=='body'and source.get('text'):
+                            import hashlib
+                            current().progress('body',source['url'],hashlib.sha256(source['text'].encode()).hexdigest())
                 discovered.update(url_key(s["url"]) for s in ledger)
                 discovered.update(url_key(url) for url in evidence.get("links",[]))
                 emit("evidence", evidence)
@@ -589,7 +602,8 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                     started=time.monotonic();old_delta=llm.on_tool_delta;llm.on_tool_delta=None
                     from .agent_debug import context as call_context
                     try:
-                        with call_context(phase='feedback_review'):
+                        from .task_budgets import phase
+                        with call_context(phase='feedback_review'),phase('feedback_review'):
                             response=llm.chat(material,tools=[],on_delta=lambda _:emit('llm_progress',True))
                         record_usage(request,response.get('usage')or {},model['model'],emit)
                         return response

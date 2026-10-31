@@ -252,6 +252,9 @@ class Collaboration:
             result.pop(key, None)
         # Internal snapshots/keys/worker requests never cross the browser boundary.
         for run in result["runs"]:
+            if run.get('budget_id'):
+                from .task_budgets import Ledger
+                run['task_budget']=Ledger().view(run['budget_id'])
             from .clarification import public_version
             public_version(run)
             if run.get('options_generation'):run['options_generation']={k:v for k,v in run['options_generation'].items() if k in {'state','error','calls'}}
@@ -320,6 +323,11 @@ class Collaboration:
             attempt=0, cursor=0, tool_calls=0, search_calls=0, fetch_calls=0, created=time.time(), context=context, task="")
         from .project_workspace import load
         run["workspace"] = load(conversation.get('project_id',''))
+        from .task_budgets import Ledger,default_tier
+        owner=next((r for r in state['runs']if r['id']==parent),None)
+        run['budget_id']=owner.get('budget_id')if owner else None
+        if not run['budget_id']:
+            run['budget_id']=Ledger().create('collab:'+run['id'],default_tier(kind,agent),execution_limits(agent_id,agent.get('tools',()))['task_timeout']*1000)
         state["runs"].append(run)
         self._message(state, conversation["id"], agent_id, "", run["id"])
         return run
@@ -687,6 +695,14 @@ class Collaboration:
         run["state"] = status; run["error"] = error
         run.pop('answer_pending', None)
         if status not in OPEN:run['finished']=time.time()
+        if not run.get('parent')and run.get('budget_id'):
+            from .task_budgets import Ledger
+            ledger=Ledger()
+            if status=='needs_input':ledger.waiting(run['budget_id'],True)
+            elif status not in OPEN:ledger.finish(run['budget_id'],'cancelled'if status=='cancelled'else'finished')
+        elif run.get('parent')and status=='succeeded'and run.get('budget_id'):
+            from .task_budgets import Ledger
+            Ledger().progress(run['task'],'handoff',run['id'],hashlib.sha256(run['answer'].encode()).hexdigest())
         for message in state["messages"]:
             if message.get("run") == run["id"] and message["sender"] == run["agent"]:
                 message["text"] = run["answer"] + ("\n\n[未完成："+error+"]" if error and run["answer"] else "") if run["answer"] else error
@@ -720,6 +736,15 @@ class Collaboration:
                     continue
                 manager = self._manager(run)
                 if run["state"] == "pending":
+                    from .task_budgets import Ledger,default_tier
+                    ledger=Ledger()
+                    if not run.get('budget_id'):
+                        parent=next((r for r in state['runs']if r['id']==run.get('parent')),None)
+                        run['budget_id']=(parent or{}).get('budget_id')or ledger.create('collab:'+run['id'],default_tier(run['kind'],run['agent_config']),execution_limits(run['agent'],run['agent_config'].get('tools',()))['task_timeout']*1000,
+                            prior_usage_unknown=bool(run.get('calls')or run.get('tool_calls')or run.get('attempt')or run.get('phases')))
+                    if not run.get('parent')and ledger.read(run['budget_id'])['status']=='finished':ledger.resume(run['budget_id'])
+                    if run['kind']=='task'and not run.get('parent'):ledger.choose_tier(run['budget_id'],default_tier(run['kind'],run['agent_config']))
+                    ledger.waiting(run['budget_id'],False)
                     if run.get('workspace', {}).get('primary') and set(run['agent_config']['tools']) & {'文件编辑', '终端'} and any(other['id'] != run['id'] and other['state'] in {'queued','running','cancelling'} and other.get('workspace',{}).get('primary') == run['workspace'].get('primary') and set(other['agent_config']['tools']) & {'文件编辑','终端'} for other in state['runs']):
                         run['status'] = '等待工作目录的编码任务完成'; continue
                     request = dict(workflow="collaboration", collab_path=str(self.path), collab_run=run["id"],conversation=run['conversation'],source_scope=run.get('parent') or run['id'],
@@ -730,6 +755,7 @@ class Collaboration:
                         source_topics=run.get('source_topics',[]),
                         source_evidence=run.get("source_evidence",[]),evidence=run.get("evidence",[]),handoffs=run.get('handoffs',[]))
                     run["task"] = manager.submit(run["input"], "collab-"+run["id"], "collaboration", submission_key=f"collab:{run['id']}:{run['attempt']}",
+                        _budget_root=run['budget_id'],_budget_root_member=not run.get('parent'),
                         task_limits=execution_limits(run['agent'],run.get('agent_config',{}).get('tools',())), **({**request, **({"sampling":run["sampling"]} if run.get("sampling") else {})}))
                     run["state"] = "queued"
                 task = manager.get(run["task"])
@@ -810,6 +836,8 @@ class Collaboration:
                         except ValueError:
                             self._finish(state,run,'failed','补充问题格式无效，未执行工具。');continue
                         run['events'].append('待补充，尚未开始执行：'+question)
+                        from .task_budgets import Ledger
+                        Ledger().choose_tier(run['budget_id'],'clarify',decided=False)
                         self._finish(state,run,'needs_input');continue
                     if decision['mode']=='answer':
                         run['answer']=content
@@ -829,6 +857,9 @@ class Collaboration:
                         self._finish(state, run, "failed", "协调者未返回有效委派计划，未执行任何子任务")
                         continue
                     conversation = next(c for c in state["conversations"] if c["id"] == run["conversation"])
+                    from .task_budgets import Ledger,default_tier
+                    tiers=[default_tier('task',next(a for a in run['members']if a['id']==p['agent_id']))for p in plans]
+                    Ledger().choose_tier(run['budget_id'],'coding'if'coding'in tiers else'research')
                     children = []
                     for plan in plans:
                         dep=plan.get('depends_on')

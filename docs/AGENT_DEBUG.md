@@ -519,3 +519,7 @@ python -m unittest tests.test_tasks tests.test_execution_flow tests.test_collabo
 ```
 
 真实浏览器＋认证 RPC 的隔离回归以每20ms采样验证路由公开说明、工具等待和最终回答持续可见，且不出现控制 JSON；主窗和浮动聊天复用同一任务进度与草稿标记。
+
+## 整个目标的预算（#170）
+
+任务/协作run及调用详情提供同一个task_budget投影，区别于单次上下文容量。模型尝试与真实工具执行分开，缺usage显示未知及保守占用；不把费用未知当免费。继续、子任务、审阅共享额度与期限，停止原因保留length及实际请求参数。输出绑定的受认证验证接口为verify_model_output_limit(model_id, parameter, request_id)，最多两次短请求、相同编号返回同一任务；load_model_output_limit只读状态。配置面板支持停止。参见[TASK_BUDGETS.md](TASK_BUDGETS.md)。

@@ -50,6 +50,21 @@ class FakeTasks:
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_budget_denial_is_before_write_pending_and_never_becomes_unknown(self):
+        from desk_companion.task_budgets import Ledger,installed
+        definition=self.save(graph(node('trigger','trigger'),document()))
+        run=self.start(definition,confirm_writes=True)
+        request=self.tasks.requests[-1];ledger=Ledger()
+        root=ledger.create('isolated-admission','probe');ledger.bind(root,request['task_id'],root_member=True)
+        with ledger.change(root)as value:value['limits']['tool_calls']=1
+        writes=[]
+        with installed(request['task_id']):
+            execute(request,lambda *_:None,store=self.store,check_target=lambda *_:None,
+                adapter=lambda kind,*args: {'text':''}if kind=='trigger'else writes.append(kind))
+        current=self.store.run(run['id'])
+        self.assertEqual(current['state'],'failed');self.assertEqual(writes,[])
+        self.assertNotIn('doc',current['receipts'])
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

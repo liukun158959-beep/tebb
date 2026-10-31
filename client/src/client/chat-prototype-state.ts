@@ -1,4 +1,5 @@
 import type { ClarificationForm,ClarificationAction } from './clarification-state';
+import type { TaskBudget } from './task-budget';
 // Local interaction model only. No model, tool, credential, or backend imports.
 export type DemoAgent = { id: string; name: string; role: string; mark: string; tone: string; model: string; tools: string[]; memory: string; avatar?: string; personality?: string };
 export type DemoProject = { id: string; name: string; primary?: string; instructions?: string; sources?: {id:string;title:string;text:string;truncated?:boolean}[] };
@@ -12,6 +13,7 @@ export type DemoRun = { id: string; conversation: string; agent: string; title: 
   kind?: string; parent?: string; answer?: string; answer_pending?: boolean; error?: string; status?: string; calls?: number; model?: string; input_tokens?: number; output_tokens?: number;
   chart_builds?:Record<string,ChartDraftView>;
   feedback_check?:FeedbackReport;
+  task_budget?:TaskBudget|null;
   project_receipts?: {tool:string;call_id:string;ok:boolean;error?:string;log_id?:string;service_ready?:boolean;
     environment:{id?:string;repository?:string;state?:string};operation:{id?:string;kind?:string;state?:string;stage?:string};service:{id?:string;state?:string;url?:string;log_id?:string}}[];
   changes?: { path: string; diff: string }[]; checks?: { command: string; state: string; exit_code: number | null; output: string; stale?: boolean; diff_limited?: boolean }[];

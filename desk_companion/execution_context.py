@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+from dataclasses import replace
 
 from atlas.llm import LLM
 from atlas.context.compact import CompactManager
@@ -152,6 +153,11 @@ class ExecutionLLM(LLM):
 
     def chat(self,messages,tools=None,on_delta=None,*,options=None,callbacks=None):
         if self._closed:return super().chat(messages,tools,on_delta,options=options,callbacks=callbacks)
+        from .task_budgets import current
+        scope=current()
+        if scope and scope.phase()=='finish':
+            tools=[tool for tool in tools or[]if tool.get('function',{}).get('name')=='submit_deliverable']
+            messages=[*messages,dict(role='system',content='任务预算进入收尾：仅依据已经取得的材料整理结果，明确未完成和未知部分；不再开始新的外部工作或假报完成。保持用户要求的最终格式。')]
         endpoint=str(self.client.base_url).rstrip('/')+'/chat/completions'
         capacity=model_capacity.for_call(self.context_model_id,self.model,endpoint)if self.context_model_id else dict(source='unknown')
         request=dict(model=self.model,messages=messages)
@@ -165,7 +171,69 @@ class ExecutionLLM(LLM):
         except ContextAdmissionError as exc:
             self.last_context=exc.report;self._context_notice();raise
         self.last_context=report;self._context_notice()
-        result=super().chat(prepared['messages'],tools,on_delta,options=options,callbacks=callbacks)
+        call_id=None;result=None
+        if scope is not None:
+            from atlas.llm import ChatOptions
+            from .model_generation import binding,PARAMETERS
+            options=options or ChatOptions(sampling=self.sampling)
+            if options.should_cancel and options.should_cancel():
+                from atlas.llm import ChatCancelledError
+                raise ChatCancelledError(dict(message={},usage=None,duration_ms=0))
+            body=dict(options.extra_body or{});capability=binding(self.context_model_id,self.model,endpoint)
+            if scope.member['purpose']=='budget_probe':capability=None
+            if capability and capability.get('invalidated'):
+                from .task_budgets import BudgetExceeded
+                raise BudgetExceeded(scope.ledger.reason('provider_limit','此模型/路由的输出上限验证已失效，请先重新验证参数。'))
+            supplied=[key for key in PARAMETERS if key in body]
+            if len(supplied)>1:raise ValueError('同一调用不能同时指定两种输出上限参数。')
+            if capability and supplied and supplied[0]!=capability['parameter']:raise ValueError('该模型已验证的输出参数与本次显式参数不同；未发送。')
+            parameter=capability['parameter']if capability else supplied[0]if supplied else None
+            requested=body.get(parameter)if parameter else None
+            if requested is not None and(type(requested)is not int or requested<=0):raise ValueError('输出token上限必须为正整数。')
+            if parameter and report['input_tokens']is not None and type(capacity.get('window'))is int:
+                headroom=capacity['window']-report['input_tokens']
+                if headroom<=0:
+                    report.update(admitted=False,decision='no_output_room');self._context_notice()
+                    raise ContextAdmissionError('声明的模型窗口没有剩余生成空间，未发送请求。',report)
+                requested=min(requested,headroom)if requested is not None else headroom
+            call_id,cap=scope.ledger.reserve_call(scope.task,report['input_tokens'],phase=scope.phase(),
+                requested_output=requested,enforced=capability is not None and parameter==capability['parameter'],requested_parameter=parameter)
+            if parameter:body[parameter]=cap
+            original_cancel=options.should_cancel
+            import time
+            next_check=0;stopped=False
+            def cancelled():
+                nonlocal next_check,stopped
+                if original_cancel and original_cancel():return True
+                now=time.monotonic()
+                if now>=next_check:
+                    root=scope.ledger.read(scope.member['id']);next_check=now+.25
+                    stopped=root['status']!='active'
+                    if not stopped and scope.ledger.elapsed(root)>=root['limits']['time_ms']:stopped=scope.ledger.time_expired(scope.member['id'])is not None
+                return stopped
+            options=replace(options,extra_body=body or None,should_cancel=cancelled)
+            scope.notice()
+        try:
+            result=super().chat(prepared['messages'],tools,on_delta,options=options,callbacks=callbacks)
+        except BaseException as exc:
+            partial=getattr(exc,'partial',None)
+            if call_id:
+                finish=getattr(exc,'finish_reason',None)
+                violation=scope.ledger.settle(scope.task,call_id,partial.get('usage')if isinstance(partial,dict)else None,finish_reason=finish);scope.notice()
+                if finish=='length'and scope.member['purpose']!='budget_probe':
+                    exc.public_message='模型以length结束，已保留收到的片段与实际用量，未将其执行为完整结果。请查看本次请求输出上限及原始回执，再分段继续。'
+                if violation:
+                    from .model_generation import invalidate
+                    invalidate(self.context_model_id,self.model,endpoint,capability['parameter'])
+            raise
+        else:
+            if call_id:
+                violation=scope.ledger.settle(scope.task,call_id,result.get('usage'));scope.notice()
+                if violation:
+                    from .task_budgets import BudgetExceeded
+                    from .model_generation import invalidate
+                    invalidate(self.context_model_id,self.model,endpoint,capability['parameter'])
+                    raise BudgetExceeded(violation,result)
         self.last_context['provider_usage']=result.get('usage')
         return result
 

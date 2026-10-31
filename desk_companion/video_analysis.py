@@ -211,6 +211,8 @@ def analyze(request, emit, llm, source):
         video.atomic_write(path, saved)
         drafts.pop(cache_key, None)
         video.atomic_write(draft_path, drafts)
+        from .task_budgets import current
+        if current():current().progress('video_chunk',source.get('id',source.get('url','')),cache_key)
     for i, group in enumerate(groups):
         phase = f"片段 {i + 1}/{len(groups)} 提炼"
         cache_key = digest(group)
@@ -244,6 +246,8 @@ def analyze(request, emit, llm, source):
         from .web_search import web_search
         from urllib.parse import urlsplit
         for query in list(dict.fromkeys(queries))[:2]:
+            from .task_budgets import current
+            if current():current().tool()
             emit("tool_start", {"tool": "web_search", "read_only": True})
             try:
                 suffix = " (site:github.com OR site:arxiv.org OR site:modelcontextprotocol.io OR site:docs.cline.bot)"
@@ -279,6 +283,8 @@ def execute(request, emit):
     from .execution_context import ExecutionLLM as LLM
     from .model_catalog import require_active, require_item
     from .sampling import parse_sampling
+    from .task_budgets import current
+    if current():current().tool()
     emit("tool_start", {"tool": "read_video", "read_only": True})
     try:
         result = video.read_video(request["session_id"], request["video_url"], on_status=lambda s: emit("status", s))

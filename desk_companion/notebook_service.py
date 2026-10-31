@@ -8,6 +8,7 @@ import uuid
 from . import notebook
 from .notebook_platform import NotebookPlatform
 from .model_text import require_text
+from .task_budgets import budgeted_operation
 
 
 class NotebookService:
@@ -126,6 +127,7 @@ class NotebookService:
     def delete_notebook_file(self, session_id, note_id, name):
         return self._change(lambda: notebook.delete_note_file(session_id, note_id, name))
 
+    @budgeted_operation('notebook')
     def _generate(self, session_id, action):
         details = dict(session_id=session_id, stage='admission', change_state='not_changed',
                        steps={}, answer_complete=False)

@@ -156,9 +156,11 @@ def main():
     parser.add_argument('--project-sdk',choices=['disabled','official'],default='disabled')
     parser.add_argument('--project-timeout',type=int,default=600)
     parser.add_argument('--timeout',type=int,default=120)
+    parser.add_argument('--output-limit-bindings',type=Path,help='Explicit verified generation-binding SQLite snapshot for this isolated live cohort')
     args=parser.parse_args()
     if not 1<=args.limit<=len(CASES) or not 20<=args.timeout<=300 or not 1<=args.samples<=5:parser.error(f'limit 1..{len(CASES)}, timeout 20..300, samples 1..5')
     if args.output.exists():parser.error('--output must be a new directory; earlier failures are retained')
+    if args.output_limit_bindings and(not args.live or not args.output_limit_bindings.is_file()):parser.error('output-limit-bindings requires --live and an existing verified SQLite snapshot')
     selected=[s for s in CASES if not args.case or s['id'] in args.case][:args.limit]
     if not selected or set(args.case)-{s['id'] for s in CASES}:parser.error('unknown or empty case selection')
     projects=any(s.get('executor')=='project'for s in selected)
@@ -185,6 +187,12 @@ def main():
     NETWORK_PATH=profile/'model-network.json'
     NETWORK_PATH.write_text(json.dumps(policy),'utf-8')
     (profile/'model-capacity.json').write_text(json.dumps({model['id']:capacity}if capacity else{}),'utf-8')
+    if args.output_limit_bindings:
+        import sqlite3
+        from contextlib import closing
+        destination=profile/'memory/model_generation.sqlite3';destination.parent.mkdir()
+        with closing(sqlite3.connect(args.output_limit_bindings.resolve().as_uri()+'?mode=ro',uri=True))as source,closing(sqlite3.connect(destination))as target:
+            source.backup(target)
     previous=os.environ.get('DESK_COMPANION_DATA_DIR')
     os.environ['DESK_COMPANION_DATA_DIR']=str(profile)
     for key in ('DESK_TERMINAL_PORT','DESK_TERMINAL_TOKEN'):os.environ.pop(key,None)
@@ -196,6 +204,8 @@ def main():
                 source_commit='',semantic_scope='machine-verifiable fixed tasks; not a general capability guarantee')
     import subprocess
     report['source_commit']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
+    report['root_budget_policy_version']=1
+    report['verified_output_binding_snapshot']=bool(args.output_limit_bindings)
     report['capacity_snapshot']=dict(window=capacity.get('window'),output_reserve=capacity.get('output_reserve'),
         tokenizer_bound=bool(capacity.get('tokenizer_dir')),tokenizer_signature=capacity.get('tokenizer_signature'))
     import hashlib
@@ -210,6 +220,7 @@ def main():
             'desk_companion/project_tools.py','desk_companion/project_receipts.py','desk_companion/docker_sandboxes.py',
             'desk_companion/worker_rpc.py','desk_companion/bridge.py','desk_companion/local_api/host.py','desk_companion/local_api/server.py',
             'desk_companion/execution_context.py','desk_companion/model_capacity.py','desk_companion/model_tokenizer.py',
+            'desk_companion/task_budgets.py','desk_companion/model_generation.py',
             'desk_companion/context_pack.py','desk_companion/assistant.py','desk_companion/model_catalog.py',
             'desk_companion/json_document.py','desk_companion/feedback.py','desk_companion/feedback_review.py',
             'desk_companion/delivery_feedback.py','desk_companion/web_sources.py','desk_companion/project_workspace.py')
@@ -297,6 +308,7 @@ def main():
                 outcome,evidence=evaluate(spec,task,verification=verification)
                 if expired:outcome='timed_out'
                 row.update(outcome=outcome,evidence=evidence,answer=task.get('answer','').replace(model['api_key'],'[redacted]'),termination=task['state'],error=task.get('error','').replace(model['api_key'],'[redacted]'))
+                row['task_budget']=task.get('task_budget')or(verification or{}).get('task_budget')
                 if verification:
                     row['artifacts']=verification.get('artifacts',[])
                     if spec.get('executor')=='local_calendar':
@@ -331,6 +343,9 @@ def main():
         for row in report['cases']:
             if not refresh_call_evidence(row,listing,detail) and row['outcome'] in {'success','needs_input'}:
                 row.update(outcome='failed',error_type='EvidenceCollectionFailed')
+            from desk_companion.task_budgets import task_view
+            ids=row.get('task_ids')or([row['task_id']]if row.get('task_id')else[])
+            if ids:row['task_budget']=task_view(ids[0])
         complete=all(row.get('call_evidence_complete',False) for row in report['cases'] if row.get('task_id'))
         observed=[call for row in report['cases'] for call in row.get('calls',[]) if call.get('pid') and call.get('created')]
         alive=[call['id'] for call in observed if worker_alive(call)]

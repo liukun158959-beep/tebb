@@ -74,7 +74,7 @@ class TaskManager:
             self.cv.notify_all()
         return {"ok": True, "settings": self.settings}
 
-    def submit(self, text, session, channel="desktop", source=None, callback=None, task_limits=None, submission_key="", **request):
+    def submit(self, text, session, channel="desktop", source=None, callback=None, task_limits=None, submission_key="", _budget_root=None, _budget_root_member=False, _prior_budget_unknown=False, **request):
         if not isinstance(text, str) or not text.strip() or len(text) > 200000:
             raise ValueError("请填写有效问题。")
         if not isinstance(session, str) or not session:
@@ -109,6 +109,13 @@ class TaskManager:
             request.setdefault("sampling", {"reasoning_effort": "low", "temperature": .5, "top_p": 1})
             from .wiki_connection import load_settings as wiki_settings
             request.setdefault("video_archive_config", wiki_settings())
+            from .task_budgets import Ledger,default_tier
+            ledger=Ledger()
+            budget_root=_budget_root or ledger.create('task:'+task_id,
+                default_tier(request.get('kind',''),request.get('role'),request.get('workflow','')),limits['task_timeout']*1000,prior_usage_unknown=_prior_budget_unknown)
+            ledger.bind(budget_root,task_id,root_member=not _budget_root or _budget_root_member,
+                purpose=request.get('kind')or request.get('workflow')or'task')
+            request.pop('task_budget',None)  # Request data cannot grant membership.
             with self.db() as db:
                 db.execute("INSERT INTO tasks(id,session,channel,text,request,state,created,source) VALUES(?,?,?,?,?,'queued',?,?)",
                            (task_id, session, channel, text, json.dumps(request), time.time(), json.dumps(source or {})))
@@ -131,6 +138,8 @@ class TaskManager:
                 value["events"] = [{**dict(e), "data": json.loads(e["data"])} for e in db.execute(
                     "SELECT seq,kind,data,ts FROM events WHERE task=? ORDER BY seq", (task_id,))]
         value["elapsed"] = round((value["ended"] or time.time()) - value["started"], 1) if value["started"] else 0
+        from .task_budgets import task_view
+        value['task_budget']=task_view(task_id)
         return value
 
     @contextmanager
@@ -217,6 +226,9 @@ class TaskManager:
                 self.update(task_id, state="cancelling")
             else:
                 self.finish(task_id, "cancelled", "已从队列移除。")
+                from .task_budgets import Ledger
+                ledger=Ledger();member=ledger.member(task_id)
+                if member and ledger.read(member['id'])['owner'].startswith('task:'):ledger.finish(member['id'],'cancelled')
             self.cv.notify_all()
         return {"ok": True, "task": self.get(task_id)}
 
@@ -276,6 +288,8 @@ class TaskManager:
             if (phase['deadline']and observed>=phase['deadline'])or(phase['hard_deadline']and observed>=phase['hard_deadline']):
                 return dict(scope='call',stage=phase['kind']or'outside_call',tool=phase['tool'])
         try:
+            from .task_budgets import Ledger
+            ledger=Ledger();ledger.start(task_id)
             self.event(task_id, "status", "正在整理上下文，准备调用模型。")
             spawn_started = time.monotonic()
             spare=self.standby.take() if self.standby else None
@@ -352,6 +366,14 @@ class TaskManager:
                 if control["cancel"].is_set():
                     reason = "cancelled"
                     break
+                member=ledger.member(task_id)
+                root=ledger.read(member['id'])if member else None
+                wall=time.time()-(time.monotonic()-observed)
+                if root and observed<deadline and ledger.elapsed(root,wall)>=root['limits']['time_ms']and ledger.time_expired(member['id']):
+                    reason='timed_out';timeout_scope='root_budget';timeout_stage=phase['kind']or'outside_call'
+                    with ledger.change(member['id'])as budget:
+                        budget['stop_reason']=ledger.reason('time_ms','整个目标的执行时间预算已到。')
+                    break
                 with phase_lock:
                     expired=outcome.get('expiration')or expiration(observed)
                     if expired:outcome.setdefault('expiration',expired)
@@ -395,8 +417,8 @@ class TaskManager:
             else:
                 self.finish(task_id, "timed_out" if outcome.get("timed_out") else "failed", outcome.get("error", "任务进程意外退出，请检查模型配置。"))
                 self._save_partial(row, "failed")
-        except Exception:
-            self.finish(task_id, "failed", "无法启动独立任务，请检查后端日志或重启桌宠。")
+        except Exception as exc:
+            self.finish(task_id, "failed", getattr(exc,'public_message',"无法启动独立任务，请检查后端日志或重启桌宠。"))
         finally:
             try:
                 if row["channel"] != "collaboration":
@@ -409,7 +431,14 @@ class TaskManager:
                         if pipe:
                             pipe.close()
             finally:
-                self._settled(task_id, control, 'execution_done')
+                try:
+                    from .task_budgets import Ledger
+                    ledger=Ledger();member=ledger.member(task_id)
+                    if member:
+                        ledger.end(task_id)
+                        root=ledger.read(member['id'])
+                        if root['owner'].startswith('task:')and root.get('last_root_member')==task_id and root['status']not in{'blocked','cancelled'}:ledger.finish(member['id'])
+                finally:self._settled(task_id, control, 'execution_done')
 
     def _save_partial(self, row, reason):
         if row["channel"] == "collaboration":
@@ -445,8 +474,14 @@ class TaskManager:
                      and not e["data"].get("read_only", True)}
         request["completed_writes"] = list(set(request.get("completed_writes", [])) | (completed - {None}))
         source = {k: v for k, v in previous["source"].items() if k not in {"card_id", "reply_id", "card_seq", "sent", "delivery_state"}}
+        from .task_budgets import Ledger
+        ledger=Ledger();member=ledger.member(task_id)
+        budget={}
+        if member and previous['state']!='succeeded':
+            ledger.resume(member['id']);budget=dict(_budget_root=member['id'],_budget_root_member=member['root_member'])
+        elif not member and previous['state']!='succeeded':budget=dict(_prior_budget_unknown=True)
         return self.submit(text, previous["session"], previous["channel"], source={**source, "parent_task": task_id,
-                           "send_back": send_back}, callback=callback, resume_note=note, **{k:v for k,v in request.items() if k != "resume_note"})
+                           "send_back": send_back}, callback=callback, resume_note=note, **budget, **{k:v for k,v in request.items() if k != "resume_note"})
 
     def shutdown(self):
         with self.cv:

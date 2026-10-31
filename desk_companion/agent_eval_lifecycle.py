@@ -105,7 +105,8 @@ def execute(spec, *, profile, workspace, model_id, timeout, command=None, progre
                      root_state=root.get('state'),chain_state=root.get('chain',{}).get('state'),
                      runs=[{k:r.get(k) for k in ('id','parent','agent','kind','stage','state')} for r in runs],
                      task_states={ident:t['state'] for ident,t in tasks.items()})
-        result=dict(state=root['state'],answer=root.get('answer',''),error=root.get('chain',{}).get('error') or root.get('error',''),events=events)
+        result=dict(state=root['state'],answer=root.get('answer',''),error=root.get('chain',{}).get('error') or root.get('error',''),events=events,
+                    task_budget=root.get('task_budget'))
         return result,proof,list(tasks),list(calls.values())
     finally:
         if service:service.shutdown()

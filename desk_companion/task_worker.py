@@ -25,12 +25,18 @@ def main():
         transport.flush()
 
     # Atlas renderer、第三方库的调试输出不能混入事件协议。
-    with contextlib.redirect_stdout(sys.stderr):
+    from . import task_budgets
+    with contextlib.redirect_stdout(sys.stderr),task_budgets.installed(request['task_id'],emit):
         emit('worker_phase', {'stage': 'request_received'})
         from .agent_debug import install
         install({"task_id": request.get("task_id", ""), "session": request["session_id"], "channel": request.get("channel", "desktop"),
                  'model_id':request.get('model_id',''),'collab_run':request.get('collab_run',''),
                  'conversation':request.get('conversation',''),'phase':request.get('kind','')})
+        if request.get('workflow')=='budget_probe':
+            from .model_generation import verify
+            try:verify(request,emit)
+            except Exception as exc:emit('failure',dict(type=type(exc).__name__,message=getattr(exc,'public_message','输出上限验证未通过（'+type(exc).__name__+'），未保存新绑定；同路由同参数的旧验证将停用，请查看调用记录。')))
+            return
         if request.get("workflow") == "collaboration":
             from .collaboration_worker import execute
             try:
@@ -136,16 +142,22 @@ def main():
                 if not tool.isReadOnly and pending:
                     emit('unknown_operation_blocked',dict(tool=name,operation_ids=[op['operation_id']for op in pending]))
                     return '原写入/执行结果仍未知，本次操作未执行。按原编号只读核对，不重复创建或发送。'
+                try:task_budgets.current().tool(tool.isReadOnly,name)
+                except task_budgets.BudgetExceeded as exc:
+                    return dict(ok=False,error=exc.public_message,budget_denied=True,operation=dict(state='not_started'))
                 # Calendar writes own a cross-process board lease and short cache lock.
                 # Do not retain the global write lock across their remote IO.
                 if tool.isReadOnly or name == 'create_calendar_event':
                     output = original(name, arguments)
+                    task_budgets.record_progress(name,args,output)
                     archive.record(name, output)
                     return output
                 with WRITES:
                     if name == "save_video_summary":
                         archive.manual_save = True
-                    return original(name, arguments)
+                    output=original(name, arguments)
+                    task_budgets.record_progress(name,args,output)
+                    return output
             host.agent.tools.execute = execute
             emit('worker_phase', {'stage': 'agent_ready',
                                  'duration_ms': int((time.monotonic() - started) * 1000)})
@@ -175,7 +187,7 @@ def main():
         except Exception as exc:
             # 不通过网络泄露地址、凭证或堆栈，监控台给出可操作的类型。
             name = type(exc).__name__
-            emit("failure", {"type": name, "message": "任务处理失败（" + name + "），请检查模型、工具权限或网络。"})
+            emit("failure", {"type": name, "message": getattr(exc,'public_message',"任务处理失败（" + name + "），请检查模型、工具权限或网络。")})
 
 
 if __name__ == "__main__":

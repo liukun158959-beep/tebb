@@ -2,6 +2,7 @@ import { ClarificationCard } from './clarification-card';
 import { openProjectRuntime } from './project-runtime-events';
 import { ContextDebug } from './context-debug';
 import { DeliveryFeedback } from './delivery-feedback';
+import { TaskBudgetView } from './task-budget';
 import { pendingClarifications } from './clarification-state';
 import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { DEMO_STORAGE, RUN_LABELS, STEP_LABELS, demoReducer, initialDemo, restoreDemo, runActive,
@@ -304,6 +305,7 @@ export function ChatPrototype({ standalone = false, live, composeRequest, naviga
       <p className="cp-task-step">{real ? run.clarification || run.chain?.error || run.error || (run.state === "waiting" ? "前序成果就绪后接续执行" : run.status || "等待调度") : run.state === "waiting" ? "前序成果就绪后接续执行" : run.state === "cancelled" ? "进度已保留" : run.state === "succeeded" ? "成果结构样例已就绪" : STEP_LABELS[Math.min(run.step, 2)]}</p>
       {<p className="cp-run-usage">{run.model} · {run.chain?.calls ?? run.calls ?? 0} 次调用（整链）<br />{(run.input_tokens || run.output_tokens) ? `输入 ${run.input_tokens || 0} / 输出 ${run.output_tokens || 0} tokens` : "暂无用量回执"}</p>}
       {real && run.feedback_check && <DeliveryFeedback report={run.feedback_check}/>}
+      {real && <TaskBudgetView budget={run.task_budget}/>}
       {real && run.delivery_check && !run.feedback_check && <p className={run.delivery_check.ok ? 'cp-muted' : 'cp-error'}>交付检查 · {run.delivery_check.ok ? '已提交成果，请审阅' : `尚未完成：${[...(run.delivery_check.missing || []),...(run.delivery_check.missing_sources || [])].join('、') || '待修订'}`}</p>}
       {real && run.citation_check && <details><summary>来源核验 · {run.citation_check.ok ? "链接匹配" : "需修订"} · 已读 {run.citation_check.pages_read} 页</summary>
         <p className="cp-muted">仅核对来源读取记录；事实与结论仍需审阅。</p>

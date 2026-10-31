@@ -25,7 +25,7 @@ test('monitor stops only selected task, continues same conversation and sends on
     return { ok: true };
   };
   const original = mod.require.bind(mod);
-  mod.require = id => id === './page-stack' ? { usePageActive: () => true } : id === './api' ? { rpc } : id === './video' ? { TaskVideos: () => null, VideoSettings: () => null } : id === './Markdown' ? {
+  mod.require = id => id === './task-budget' ? require('./component-fixture.cjs').loader({})('task-budget') : id === './page-stack' ? { usePageActive: () => true } : id === './api' ? { rpc } : id === './video' ? { TaskVideos: () => null, VideoSettings: () => null } : id === './Markdown' ? {
     Markdown: ({ text }) => React.createElement('p', null, text) } : original(id);
   mod._compile(compiled, filename);
   global.window = { setInterval: () => 1, clearInterval() {} };

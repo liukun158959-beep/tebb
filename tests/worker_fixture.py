@@ -4,6 +4,7 @@ import importlib.abc
 import json
 import os
 import sys
+import uuid
 
 
 class NoProviderSDK(importlib.abc.MetaPathFinder):
@@ -21,6 +22,22 @@ from desk_companion.task_worker import main
 from desk_companion.paths import data_root
 
 original = assistant.build_agent
+fixture_roots=[]
+original_stdin=sys.stdin
+
+class RegisteredInput:
+    """Standby still warms before reading; standalone fixtures emulate admission."""
+    def readline(self):
+        from desk_companion.task_budgets import Ledger,default_tier
+        request=json.loads(original_stdin.readline())
+        ident=request.setdefault('task_id',uuid.uuid4().hex);ledger=Ledger()
+        if not ledger.member(ident):
+            root=ledger.create('offline-fixture:'+ident,default_tier(request.get('kind',''),request.get('role'),request.get('workflow','')))
+            ledger.bind(root,ident,root_member=True,purpose=request.get('kind')or'task');ledger.start(ident)
+            fixture_roots.append((ledger,root,ident))
+        return json.dumps(request,ensure_ascii=False)+'\n'
+
+sys.stdin=RegisteredInput()
 
 def video_llm(**kwargs):
     import json
@@ -79,4 +96,6 @@ with patch.dict(sys.modules, {"desk_companion.collaboration_llm": SimpleNamespac
      patch("desk_companion.execution_context.ExecutionLLM", side_effect=video_llm), \
      patch.object(video, "extract", extract_video), \
      patch("desk_companion.feishu_auth.create_markdown_doc", create_note):
-    main()
+    try:main()
+    finally:
+        for ledger,root,ident in fixture_roots:ledger.end(ident);ledger.finish(root)

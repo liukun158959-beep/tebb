@@ -5,6 +5,7 @@ import json
 
 from .workflow_graph import KINDS, WRITES, ready_node, resolve, validate
 from .workflows import WorkflowStore
+from .task_budgets import current
 
 
 def execute(request, emit, *, store=None, adapter=None, check_target=None):
@@ -27,6 +28,7 @@ def execute(request, emit, *, store=None, adapter=None, check_target=None):
             node, active = ready_node(graph, order, run['receipts'])
             if node is None:
                 store.set_run(ident, attempt=attempt, require_running=True, state='completed', error='')
+                if current():current().ledger.finish(current().member['id'])
                 emit('result', '工作流已完成，结果与各节点回执已保存。')
                 return
             if not active:
@@ -35,14 +37,17 @@ def execute(request, emit, *, store=None, adapter=None, check_target=None):
             previous = run['receipts'].get(node['id'], {})
             if previous.get('state') in {'unknown', 'pending'}:
                 store.set_run(ident, attempt=attempt, require_running=True, state='unknown', error='原写入结果待核对，未重放。')
+                if current():current().ledger.waiting(current().member['id'],True)
                 emit('failure', '原节点回执待核对。')
                 return
             if node['kind'] in WRITES and node['id'] not in run['approved']:
                 store.set_run(ident, attempt=attempt, require_running=True, state='waiting_approval', error='确认该节点的飞书目标和内容后才能执行。')
+                if current():current().ledger.waiting(current().member['id'],True)
                 emit('result', '已停在写入节点，等待明确确认目标与内容。')
                 return
             outputs = {key: r['output'] for key, r in run['receipts'].items() if r['state'] == 'confirmed'}
             inputs = resolve(node['config'], outputs)
+            if current():current().tool(node['kind']not in WRITES,'workflow_'+node['kind'])
             # Preflight is read-only and outside storage transactions.
             if node['kind'] in WRITES:
                 check_target(node['kind'], inputs)
@@ -56,6 +61,9 @@ def execute(request, emit, *, store=None, adapter=None, check_target=None):
                 if not isinstance(output, dict) or set(output) != set(KINDS[node['kind']][2]) or len(json.dumps(output, ensure_ascii=False).encode()) > 500000:
                     raise ValueError('节点未返回完整、有效的输出。')
                 store.receipt(ident, node, 'confirmed', output=output, attempt=attempt)
+                if current():
+                    import hashlib
+                    current().progress('workflow_node',ident+':'+node['id'],hashlib.sha256(json.dumps(output,sort_keys=True).encode()).hexdigest())
                 emit('tool_end', dict(tool='workflow_' + node['kind'], node_id=node['id'], status='success', result=output,
                                       read_only=node['kind'] not in WRITES, fingerprint=receipt['receipt_key']))
             except Exception as exc:
@@ -63,17 +71,20 @@ def execute(request, emit, *, store=None, adapter=None, check_target=None):
                 error = str(exc) if isinstance(exc, (ValueError, WriteRejected)) else f'节点执行未完成（{type(exc).__name__}），请查看调用记录并核对原回执。'
                 store.receipt(ident, node, 'unknown' if unknown else 'failed', error=error, attempt=attempt)
                 store.set_run(ident, attempt=attempt, require_running=True, state='unknown' if unknown else 'failed', error=error)
+                if current():current().ledger.waiting(current().member['id'],True)
                 emit('tool_end', dict(tool='workflow_' + node['kind'], node_id=node['id'], status='failed', error=error,
                                       read_only=node['kind'] not in WRITES, fingerprint=receipt['receipt_key']))
                 emit('failure', error)
                 return
             if run['mode'] == 'step':
                 store.set_run(ident, attempt=attempt, require_running=True, state='paused', error='')
+                if current():current().ledger.waiting(current().member['id'],True)
                 emit('result', '当前步骤已完成，继续前可检查输入和输出。')
                 return
     except Exception as exc:
         # An error persisting a successful write must not turn it into a retryable failure.
-        current = store.run(ident)
-        unknown = any(r['state'] == 'pending' and r['kind'] in WRITES for r in current['receipts'].values())
+        snapshot = store.run(ident)
+        unknown = any(r['state'] == 'pending' and r['kind'] in WRITES for r in snapshot['receipts'].values())
         store.set_run(ident, attempt=attempt, require_running=True, state='unknown' if unknown else 'failed', error=f'工作流未完成（{type(exc).__name__}）。请核对节点回执。')
+        if current():current().ledger.waiting(current().member['id'],True)
         emit('failure', f'工作流未完成（{type(exc).__name__}），未自动重放。')

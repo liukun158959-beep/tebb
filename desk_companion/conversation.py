@@ -12,6 +12,7 @@ from .facts import bind_turn_user
 from .logutil import log
 from .memory import TZ, append_chat
 from .usage import append_usage, cost_cny
+from .task_budgets import budgeted_operation
 
 
 class ConversationService:
@@ -181,6 +182,7 @@ class ConversationService:
         self.knowledge_usage = (inn, out)
         self._append_usage(model, inn, out, run_id)
 
+    @budgeted_operation('conversation')
     def run_chat(
         self,
         text: str,

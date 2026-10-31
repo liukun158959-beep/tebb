@@ -267,8 +267,12 @@ class WorkflowService:
         key = f'workflow:{run["id"]}:{run["attempt"]}'
         task_id = submission_task_id(key)
         self.store.set_run(run['id'], attempt=run['attempt'], task_id=task_id)
+        from .task_budgets import Ledger
+        ledger=Ledger();budget_root=ledger.create('workflow:'+run['id'],'research',900000,prior_usage_unknown=run['attempt']>0)
+        ledger.resume(budget_root)
         try:
             self.tasks().submit('工作流：' + run['name'], 'workflow:' + run['workflow'], channel='automation',
+                _budget_root=budget_root,_budget_root_member=True,
                 source=dict(workflow_run=run['id'], workflow_id=run['workflow']), submission_key=key,
                 workflow='automation_graph', workflow_run=run['id'], workflow_attempt=run['attempt'],
                 task_limits=dict(task_timeout=900, call_timeout=120))
@@ -289,5 +293,11 @@ class WorkflowService:
                 task = dict(state='interrupted')
             if task['state'] in {'failed', 'cancelled', 'timed_out', 'interrupted', 'succeeded'}:
                 self.store.observe_terminal(ident, run['attempt'], task['state'])
-                return self.store.run(ident)
+                run=self.store.run(ident)
+        from .task_budgets import Ledger
+        ledger=Ledger();budget_root=ledger.for_owner('workflow:'+run['id'])
+        if budget_root:
+            if run['state']in{'paused','waiting_approval','unknown'}:ledger.waiting(budget_root,True)
+            elif run['state']in{'completed','failed','interrupted','cancelled'}:ledger.finish(budget_root)
+        run['task_budget']=ledger.view(budget_root)if budget_root else None
         return run

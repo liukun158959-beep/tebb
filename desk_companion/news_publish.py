@@ -9,6 +9,7 @@ from pathlib import Path
 from .feishu_tools import _run_lark
 from .news import FIELDS, digest, display_title, phase, runs_root
 from .paths import data_root
+from .task_budgets import BudgetExceeded
 
 
 class PublishError(RuntimeError):
@@ -176,6 +177,9 @@ def create_document(run, target, save, emit):
         try:
             result = phase(emit, "write", "news_create_document", lambda: cli(cfg, ["docs", "+create", "--doc-format", "xml",
                 "--content", content, "--parent-token", target["node_token"]], timeout=90))
+        except BudgetExceeded:
+            run['receipts'].pop('doc_pending',None);save()
+            raise
         except PublishError as exc:
             if exc.confirmed:
                 run["receipts"].pop("doc_pending", None)
@@ -251,6 +255,9 @@ def ensure_record(run, item, token, save, emit):
     try:
         result = phase(emit, "write", "news_archive_record", lambda: cli(cfg, ["base", "+record-upsert", "--base-token", token,
                 "--table-id", cfg["table_id"], "--json", json.dumps(fields, ensure_ascii=False)]))
+    except BudgetExceeded:
+        pending.remove(key);save()
+        raise
     except PublishError as exc:
         if exc.confirmed:
             pending.remove(key)
@@ -331,9 +338,13 @@ def publish(run, save, emit, *, send_group=True):
         run["receipts"]["message_pending_at"] = pending or time.time()
         save()
         emit("status", "正在向目标群推送本期图文资讯卡片。")
-        result = phase(emit, "write", "news_send_card", lambda: cli(cfg, ["im", "+messages-send", "--chat-id", cfg["chat_id"],
-            "--msg-type", "interactive", "--content", json.dumps(news_card(run, run["receipts"]["image_key"]), ensure_ascii=False),
-            "--idempotency-key", "dc-news-" + run["id"]], identity="bot"))
+        try:
+            result = phase(emit, "write", "news_send_card", lambda: cli(cfg, ["im", "+messages-send", "--chat-id", cfg["chat_id"],
+                "--msg-type", "interactive", "--content", json.dumps(news_card(run, run["receipts"]["image_key"]), ensure_ascii=False),
+                "--idempotency-key", "dc-news-" + run["id"]], identity="bot"))
+        except BudgetExceeded:
+            if not pending:run['receipts'].pop('message_pending_at',None);save()
+            raise
         mid = result.get("message_id") or result.get("data", {}).get("message_id")
         if not mid:
             raise PublishError("群卡片发送没有返回消息 ID，未确认成功。")

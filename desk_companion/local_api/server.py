@@ -39,7 +39,7 @@ RPC_METHODS = frozenset({
     "load_onboarding", "complete_onboarding", "save_onboarding_progress", "report_pet_status", "check_updates",
     "load_pet_preferences", "save_pet_preferences",
     "list_agent_tasks", "get_agent_task", "cancel_agent_task", "continue_agent_task", "save_agent_task_settings", "load_task_progress",
-    "list_debug_calls", "get_debug_call", "set_debug_recording", "explain_debug_call", "load_context_debug", "save_context_capacity",
+    "list_debug_calls", "get_debug_call", "set_debug_recording", "explain_debug_call", "load_context_debug", "save_context_capacity", "verify_model_output_limit", "load_model_output_limit",
     "load_board", "delete_agenda", "delete_task", "create_agenda", "load_log_errors", "load_skills",
     "load_persona", "save_persona",
     "load_model", "save_model", "test_model",

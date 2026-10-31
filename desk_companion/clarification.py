@@ -116,6 +116,7 @@ def poll_options(run, manager, path):
         stop_options(run,manager);return
     if generation['state']=='pending':
         generation['task']=manager.submit(run['input'],'clarification-'+run['id'],'collaboration',
+            _budget_root=run.get('budget_id'),_budget_root_member=not run.get('parent'),
             submission_key='clarification:'+generation['id'],workflow='collaboration',collab_path=str(path),collab_run=run['id'],
             kind='clarify_options',role={**run['agent_config'],'tools':[]},model_id=run['model_id'],
             context=run.get('context',[])[-4:],question=run.get('clarification',run.get('answer','')),

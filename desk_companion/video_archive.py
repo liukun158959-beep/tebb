@@ -37,6 +37,12 @@ class VideoArchive:
             if value.get("subtitle_status") != "available" or value.get("truncated") or len(offsets) != len(value.get("segments", [])) or not offsets:
                 self.emit("status", "可用字幕尚未完整读取，本次未自动保存视频笔记。")
                 continue
+            from .task_budgets import current,BudgetExceeded
+            try:
+                if current():current().tool(False,'archive_video_notes')
+            except BudgetExceeded:
+                self.emit('status','任务预算已到，未开始自动保存；视频答案已保留，可先核对再手动保存。')
+                continue
             self.emit("status", "视频笔记已生成，正在自动保存到飞书知识库。")
             self.emit("tool_start", {"tool": "archive_video_notes", "read_only": False})
             try:

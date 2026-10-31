@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 from . import board_data
 from .model_text import require_text
+from .task_budgets import budgeted_operation
 
 
 SUMMARY_ASK = """【本周复盘】不要调用工具。只根据后面的本周材料写中文 Markdown，不要编造材料里没有的事。
@@ -68,6 +69,7 @@ class WeeklyReviewService:
                 with self.sessions.selected_session():
                     conversation.running = False
 
+    @budgeted_operation('weekly_review','research')
     def generate_week_review(self):
         def run(details):
             conversation = self.sessions.conversation

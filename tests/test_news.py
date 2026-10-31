@@ -31,6 +31,15 @@ def fixture():
 
 
 class NewsTests(unittest.TestCase):
+    def test_budget_denial_before_record_send_clears_only_the_new_pending_marker(self):
+        from desk_companion.task_budgets import BudgetExceeded
+        run=fixture();run['doc_url']='https://example.feishu.cn/docx/doc'
+        denied=BudgetExceeded(dict(message='quota',dimension='tool_calls'))
+        with patch.object(news_publish,'find_record',return_value=None),patch.object(news_publish,'phase',side_effect=denied),patch.object(news_publish,'cli')as cli:
+            with self.assertRaises(BudgetExceeded):
+                news_publish.ensure_record(run,run['report']['items'][0],'base',lambda **kw:None,lambda *_:None)
+        cli.assert_not_called();self.assertEqual(run['receipts']['records_pending'],[])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

@@ -270,6 +270,21 @@ class Bridge:
             self._host._focused_task = task_id
         return {"ok": True, "task": task, "history": list_chat(task["session"])}
 
+    def verify_model_output_limit(self, model_id: str, parameter: str='max_completion_tokens',request_id: str='') -> dict:
+        from .model_catalog import require_item
+        from .model_generation import PARAMETERS
+        require_item(model_id)
+        if parameter not in PARAMETERS:raise ValueError('输出参数无效。')
+        if not isinstance(request_id,str)or not 1<=len(request_id)<=80:raise ValueError('请提供稳定的验证请求编号，断连后核对同一编号。')
+        task=self._host.tasks.submit('验证模型输出上限（两次有限探针）：'+parameter,'model-budget-'+model_id,'debug',
+            submission_key='model-output:'+model_id+':'+request_id,
+            workflow='budget_probe',model_id=model_id,parameter=parameter,task_limits=dict(task_timeout=90,call_timeout=30))
+        return dict(ok=True,task_id=task)
+
+    def load_model_output_limit(self,model_id: str) -> dict:
+        from .model_generation import public
+        return public(model_id)
+
     def cancel_agent_task(self, task_id: str) -> dict:
         return self._host.tasks.cancel(task_id)
 

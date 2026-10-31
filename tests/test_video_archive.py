@@ -18,6 +18,16 @@ CFG = {"auto_video_save": True, "wiki_url": WIKI, "video_parent_url": PARENT,
 
 
 class ArchiveTests(unittest.TestCase):
+    def test_budget_denial_precedes_export_pending_and_preserves_note(self):
+        from desk_companion.task_budgets import Ledger,installed
+        self.archive.record('read_video',self.source)
+        ledger=Ledger();root=ledger.create('archive-negative','probe');ledger.bind(root,'archive-task',root_member=True)
+        with installed('archive-task'),patch('desk_companion.feishu_auth.create_markdown_doc')as create:
+            self.archive.finish('已生成笔记')
+        create.assert_not_called()
+        self.assertEqual(video.get_source('session',self.source['source_id']).get('exports',{}),{})
+        self.assertIn('未开始自动保存',str(self.events))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
