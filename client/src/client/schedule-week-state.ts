@@ -11,14 +11,14 @@ export const timeCompleted=(op?:ScheduleOperation|null)=>!!op&&['retimed','obser
 export const timeEditable=(event?:CalendarEvent)=>!!event&&event.editable===true&&event.verification==='confirmed'
   &&(event.sync_state==='local'||!!event.edit_checked_at&&Date.now()-new Date(event.edit_checked_at).getTime()<300000);
 export const minutesInDay=(iso:string)=>{const s=beijingStamp(iso);return Number(s.slice(11,13))*60+Number(s.slice(14,16));};
-export function validTimeDraft(event:CalendarEvent,draft:TimeDraft){
+export function validTimeDraft(event:Pick<CalendarEvent,'start'|'end'>,draft:TimeDraft){
   const a=Date.parse(draft.start),b=Date.parse(draft.end),duration=b-a,old=Date.parse(event.end)-Date.parse(event.start);
   if(!Number.isFinite(a)||!Number.isFinite(b)||a>=b)return '结束时间须晚于开始时间。';
   if(beijingDay(draft.start)!==beijingDay(draft.end))return '本批起止须在同一北京时间日期。';
   if(duration<900000&&duration!==old)return '缩放最短15分钟，原有短日程可保持原时长移动。';
   return '';
 }
-export function dragTimeDraft(event:CalendarEvent,mode:'move'|'start'|'end',minuteDelta:number,days:number):TimeDraft{
+export function dragTimeDraft(event:Pick<CalendarEvent,'start'|'end'>,mode:'move'|'start'|'end',minuteDelta:number,days:number):TimeDraft{
   const minute=minutesInDay(mode==='end'?event.end:event.start);
   const snapped=Math.round((minute+minuteDelta)/15)*15;
   const target=Date.parse(absoluteTime(beijingDay(mode==='end'?event.end:event.start)+'T00:00'))+snapped*60000;

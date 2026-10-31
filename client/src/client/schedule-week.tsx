@@ -18,7 +18,8 @@ import { ScheduleWeekController, dragTimeDraft, pointerTimeDraft, minutesInDay, 
 import type { ScheduleTarget } from './schedule';
 import { LocalCalendarController, type SyncBatch } from './local-calendar-state';
 import { CalendarEventEditor, type CalendarDraft } from './calendar-event-editor';
-import { CalendarDragSurface, CalendarDragContent } from './calendar-drag';
+import { CalendarDragSurface, CalendarDragContent, type CalendarDragSource, type CalendarItem } from './calendar-drag';
+import { CalendarItemSource } from './calendar-item-source';
 import { WorkspaceDialog } from './workspace-dialog';
 import type { DragStartEvent } from '@dnd-kit/core';
 import './schedule-week.css';
@@ -47,7 +48,8 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
   const lastBlankClick=useRef<{start:string;at:number}|null>(null),blankDoubleTimer=useRef<number|undefined>();
   const root=useRef<HTMLElement|null>(null),calendar=useRef<FullCalendar|null>(null),details=useRef<HTMLElement|null>(null);
   const draftRoot=useRef<HTMLDivElement|null>(null);
-  const [day,setDay]=useState(target.day||beijingDay()),[narrow,setNarrow]=useState(false);
+  const [day,setDay]=useState(target.day||beijingDay()),[paneWidth,setPaneWidth]=useState(Number.POSITIVE_INFINITY);
+  const narrow=paneWidth<680;
   const [selected,setSelected]=useState(target.event_id&&target.calendar_id?calendarKey(target as {calendar_id:string;event_id:string}):'');
   const [form,setForm]=useState<Form|null>(null),[picker,setPicker]=useState<'start'|'end'|null>(null),[formError,setFormError]=useState('');
   const [leave,setLeave]=useState<null|(()=>void)>(null),[keyboard,setKeyboard]=useState<KeyboardDraft|null>(null),[announcement,setAnnouncement]=useState('');
@@ -55,9 +57,10 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
   const [detailsOpen,setDetailsOpen]=useState(!!target.event_id),[draft,setDraft]=useState<CalendarDraft|null>(null),[draftError,setDraftError]=useState('');
   const [bulk,setBulk]=useState(false),[batchChoice,setBatchChoice]=useState<SyncBatch|null>(null),[resolveId,setResolveId]=useState('');
   const [bulkPreview,setBulkPreview]=useState<CalendarEvent[]>([]);
-  const [popover,setPopover]=useState({left:12,top:150});
+  const [popover,setPopover]=useState<{left:number;top:number;maxHeight?:number}>({left:12,top:150});
   const dragElement=useRef<HTMLElement|null>(null);
   const dragPointer=useRef<{x:number;y:number}|null>(null),grabOffset=useRef(0);
+  const draggedRange=useRef<TimeDraft|null>(null);
   const cancelPointer=useRef(false),pointerActive=useRef(false),keyboardRef=useRef(keyboard);keyboardRef.current=keyboard;
   const locateInitial=useRef(!!target.event_id),changes=useRef(onChange);changes.current=onChange;
   const [version,redraw]=useReducer(value=>value+1,0);
@@ -73,6 +76,7 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
   const busy=controller.pending.has(selected),blocked=controller.blocked(selected),checking=controller.checking.has(selected);
   const initialForm=event&&event.start.includes('T')&&Number.isFinite(Date.parse(event.start))&&Number.isFinite(Date.parse(event.end))?{key:selected,start:beijingStamp(event.start),end:beijingStamp(event.end),summary:event.summary}:null;
   const dirty=!!draft?.existing&&(!!draft.summary.trim()||!!draft.item_id||draft.sync)||!!form&&!!initialForm&&(form.start!==initialForm.start||form.end!==initialForm.end||form.key!==initialForm.key||form.summary!==initialForm.summary);
+  const itemDraftBlocked=!!draft||!!form||!!keyboard||local.busy||!!local.unknown||controller.pending.size>0||controller.unknown.size>0;
   useEffect(()=>{onNavigationGuard?.(guard);return()=>onNavigationGuard?.(null);},[onNavigationGuard,dirty,form,selected,draft,local.busy,local.unknown]);
   useEffect(()=>{if(!active)return;const before=(event:Event)=>{if(dirty||local.unknown&&draft){event.preventDefault();guard((event as CustomEvent<{navigate:()=>void}>).detail.navigate);}};window.addEventListener?.('tebb-before-navigate',before);return()=>window.removeEventListener?.('tebb-before-navigate',before);},[active,dirty,form,selected,draft,local.unknown,local.busy]);
   useEffect(()=>controller.subscribe(redraw),[controller]);
@@ -82,7 +86,7 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
   useEffect(()=>{if(!active)return;controller.setPeriod(view==='month'?'month':'week');let live=true;void(async()=>{await controller.read(day);if(live)await controller.read(day,true);})();
     const timer=window.setInterval(()=>{if(!controller.loading)void controller.read(day);},5000);return()=>{live=false;window.clearInterval(timer);};},[active,controller,monday,view,day.slice(0,7)]);
   useEffect(()=>{if(active&&revision!==undefined)void controller.read(day);},[active,controller,revision]);
-  useEffect(()=>{if(!root.current||typeof ResizeObserver==='undefined')return;const observer=new ResizeObserver(entries=>setNarrow(entries[0].contentRect.width<680));observer.observe(root.current);return()=>observer.disconnect();},[]);
+  useEffect(()=>{if(!root.current||typeof ResizeObserver==='undefined')return;const observer=new ResizeObserver(entries=>setPaneWidth(entries[0].contentRect.width));observer.observe(root.current);return()=>observer.disconnect();},[]);
   useEffect(()=>{calendar.current?.getApi().changeView(view==='month'?'dayGridMonth':view==='day'?'timeGridDay':'timeGridWeek',day);},[day,view]);
   useEffect(()=>{if(active)void controller.prepareVisible();},[active,controller,controller.page.checked_at,controller.page.events]);
   useEffect(()=>{root.current?.querySelectorAll<HTMLElement>('[data-week-event]').forEach(element=>{
@@ -101,7 +105,10 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
     return()=>{live=false;};
   },[active,controller,selected,controller.page.checked_at]);
   useEffect(()=>{if(!locateCount)return;const id=window.requestAnimationFrame?.(()=>{const element=[...(root.current?.querySelectorAll<HTMLElement>('[data-week-event]')||[])].find(node=>node.dataset.weekEvent===selected);element?.scrollIntoView?.({block:'nearest',behavior:reduce?'instant':'smooth'});element?.focus({preventScroll:true});});return()=>{if(id!==undefined)window.cancelAnimationFrame?.(id);};},[locateCount,narrow,day,reduce]);
-  useEffect(()=>{if(!draft)return;const previous=document.activeElement as HTMLElement|null;draftRoot.current?.querySelector<HTMLElement>('input')?.focus();return()=>{if(previous?.isConnected)previous.focus();};},[!!draft]);
+  useEffect(()=>{if(!draft)return;const previous=document.activeElement as HTMLElement|null;
+    draftRoot.current?.scrollIntoView?.({block:'nearest',behavior:reduce?'instant':'smooth'});
+    draftRoot.current?.querySelector<HTMLElement>('input')?.focus({preventScroll:true});
+    return()=>{if(previous?.isConnected)previous.focus();};},[!!draft,narrow,reduce]);
   useEffect(()=>{if(!leave)return;const previous=document.activeElement as HTMLElement|null;root.current?.querySelector<HTMLElement>('[role=alertdialog] button')?.focus();return()=>{if(previous?.isConnected)previous.focus();};},[!!leave]);
   useEffect(()=>{
     if(!active)return;
@@ -136,7 +143,7 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
     void apply(source,draft);
   }
   function startPointer(){controller.beginInteraction();cancelPointer.current=false;pointerActive.current=true;setPointerCancelled(false);setKeyboard(null);}
-  function stopPointer(){controller.endInteraction();window.setTimeout(()=>{pointerActive.current=false;cancelPointer.current=false;setPointerCancelled(false);},0);}
+  function stopPointer(){controller.endInteraction();draggedRange.current=null;window.setTimeout(()=>{pointerActive.current=false;cancelPointer.current=false;setPointerCancelled(false);},0);}
   function keyboardMove(e:KeyboardEvent<HTMLElement>){
     if(e.key==='Escape'){
       if(pointerActive.current){cancelPointer.current=true;setPointerCancelled(true);setAnnouncement('已取消拖动，未发送修改。');e.preventDefault();e.stopPropagation();return;}
@@ -185,8 +192,13 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
     status:'confirmed',eligible:true,reason:'',verification:'confirmed',error:'',checked_at:new Date().toISOString(),editable:true,
     sync_state:'local' as const,edit_checked_at:new Date().toISOString()};}catch{return null;}},[draft]);
   function pulse(){if(reduce)return;window.requestAnimationFrame?.(()=>{root.current?.querySelector<HTMLElement>('.sw-draft')?.animate?.([{transform:'translateY(0)'},{transform:'translateY(-4px)'},{transform:'translateY(0)'}],{duration:260,easing:'ease-out'});});}
-  function beginDraft(start:string,end?:string){guard(()=>{setDetailsOpen(false);setForm(null);setDraftError('');
-    setDraft({id:crypto.randomUUID(),summary:'',start:beijingStamp(start),end:beijingStamp(end||new Date(Date.parse(start)+3600000).toISOString()),item_id:target.item_id||'',sync:false});pulse();});}
+  function beginDraft(start:string,end?:string,source?:CalendarItem){guard(()=>{setDetailsOpen(false);setForm(null);setDraftError('');
+    setDraft({id:crypto.randomUUID(),summary:source?.title||'',start:beijingStamp(start),end:beijingStamp(end||new Date(Date.parse(start)+3600000).toISOString()),item_id:source?source.id:target.item_id||'',sync:false});pulse();});}
+  function arrangeItem(source:CalendarItem){
+    if(itemDraftBlocked||source.archived)return;
+    beginDraft(day+'T09:00:00+08:00',undefined,source);
+    setAnnouncement(`已为“${source.title}”打开草稿，保存后才会创建日程。`);
+  }
   function doubleBlank(event:MouseEvent<HTMLElement>){
     const node=event.target as HTMLElement,at=event.timeStamp;
     if(event.button!==0||!node.closest('.sw-calendar')||node.closest('.fc-event, .fc-col-header-cell, .fc-daygrid-day-number')||!node.closest('.fc-timegrid-slot-lane, .fc-timegrid-col, .fc-daygrid-day'))return;
@@ -228,17 +240,22 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
   function positionPopover(){if(!root.current||narrow||!detailsOpen&&!draft)return;const key=draft?draft.existing?calendarKey(draft.existing):'tebb-draft/'+draft.id:selected;
     const node=[...root.current.querySelectorAll<HTMLElement>('[data-week-event]')].find(el=>el.dataset.weekEvent===key);
     const calendarNode=root.current.querySelector<HTMLElement>('.sw-calendar'),panel=root.current.querySelector<HTMLElement>('.sw-event-editor,.sw-details');if(!calendarNode||!panel)return;
-    const base=root.current.getBoundingClientRect(),rect=(node||calendarNode).getBoundingClientRect(),bounds=calendarNode.getBoundingClientRect(),width=Math.min(330,base.width-24);
+    const base=root.current.getBoundingClientRect(),rect=(node||calendarNode).getBoundingClientRect(),width=Math.min(330,base.width-24);
+    const viewport=scrollHost(calendarNode).getBoundingClientRect();
+    const visibleTop=Math.max(base.top,viewport.top,0)+12,visibleBottom=Math.min(base.bottom,viewport.bottom,window.innerHeight)-12;
+    const maxHeight=Math.max(120,visibleBottom-visibleTop),height=Math.min(panel.offsetHeight,maxHeight);
     const left=rect.right-base.left+12+width<=base.width?rect.right-base.left+12:rect.left-base.left-width-12;
-    const next={left:Math.max(12,Math.min(base.width-width-12,left)),top:Math.max(bounds.top-base.top+12,Math.min(rect.top-base.top,bounds.bottom-base.top-panel.offsetHeight-12))};
-    setPopover(old=>old.left===next.left&&old.top===next.top?old:next);
+    const next={left:Math.max(12,Math.min(base.width-width-12,left)),top:Math.max(visibleTop-base.top,Math.min(rect.top-base.top,visibleBottom-base.top-height)),maxHeight};
+    setPopover(old=>old.left===next.left&&old.top===next.top&&old.maxHeight===next.maxHeight?old:next);
   }
   useLayoutEffect(()=>positionPopover(),[selected,detailsOpen,draft,version,narrow]);
   useEffect(()=>{const node=root.current;if(!node)return;node.addEventListener('scroll',positionPopover,true);window.addEventListener?.('resize',positionPopover);return()=>{node.removeEventListener('scroll',positionPopover,true);window.removeEventListener?.('resize',positionPopover);};},[selected,detailsOpen,draft,narrow]);
-  function projectedDrag(source:CalendarEvent,delta:{x:number;y:number}):TimeDraft|null{
+  function projectedDrag(source:Pick<CalendarEvent,'start'|'end'>,delta:{x:number;y:number}):TimeDraft|null{
     const rows=[...(root.current?.querySelectorAll<HTMLElement>('.fc-timegrid-slots .fc-timegrid-slot-lane[data-time]')||[])];
     const hour=rows.length>1?(rows[1].getBoundingClientRect().top-rows[0].getBoundingClientRect().top)*2:50;
     const sourceRect=dragElement.current?.getBoundingClientRect();const x=dragPointer.current?.x??((sourceRect?.left||0)+(sourceRect?.width||0)/2+delta.x);
+    const calendarBounds=root.current?.querySelector<HTMLElement>('.sw-calendar')?.getBoundingClientRect();
+    if(calendarBounds&&(x<Math.max(0,calendarBounds.left)||x>=Math.min(window.innerWidth,calendarBounds.right)))return null;
     const col=[...(root.current?.querySelectorAll<HTMLElement>('.fc-timegrid-col[data-date]')||[])].find(el=>{const rect=el.getBoundingClientRect();return x>=rect.left&&x<rect.right;});
     const viewport=root.current?scrollHost(root.current).getBoundingClientRect():null;
     if(!col)return null;const bounds=col.getBoundingClientRect();
@@ -249,20 +266,32 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
       const start=Date.parse(destination+'T00:00:00+08:00')+minute*60000;return {start:new Date(start).toISOString(),end:new Date(start+Date.parse(source.end)-Date.parse(source.start)).toISOString()};}
     return dragTimeDraft(source,'move',Math.round(delta.y/(hour||50)*60/15)*15,offset);
   }
-  function dragStart(source:CalendarEvent,event:DragStartEvent){
-    startPointer();dragElement.current=[...(root.current?.querySelectorAll<HTMLElement>('[data-week-event]')||[])].find(el=>el.dataset.weekEvent===calendarKey(source))||null;
-    const origin=event.activatorEvent as PointerEvent;dragPointer.current=Number.isFinite(origin.clientX)?{x:origin.clientX,y:origin.clientY}:null;grabOffset.current=dragPointer.current&&dragElement.current?dragPointer.current.y-dragElement.current.getBoundingClientRect().top:0;
-    setAnnouncement('已拿起日程，松手放下；Escape取消。');}
-  function dragProjection(source:CalendarEvent,delta:{x:number;y:number}){
-    const time=projectedDrag(source,delta);if(!time)return null;
+  function dragStart(source:CalendarDragSource,event:DragStartEvent){
+    startPointer();
+    const rows=root.current?.querySelectorAll<HTMLElement>(source.kind==='event'?'[data-week-event]':'[data-calendar-item]')||[];
+    dragElement.current=[...rows].find(el=>source.kind==='event'?el.dataset.weekEvent===calendarKey(source.event):el.dataset.calendarItem===source.item.id)||null;
+    const start=day+'T09:00:00+08:00';draggedRange.current=source.kind==='event'?source.event:{start,end:new Date(Date.parse(start)+3600000).toISOString()};
+    const origin=event.activatorEvent as PointerEvent;dragPointer.current=Number.isFinite(origin.clientX)?{x:origin.clientX,y:origin.clientY}:null;
+    grabOffset.current=source.kind==='event'&&dragPointer.current&&dragElement.current?dragPointer.current.y-dragElement.current.getBoundingClientRect().top:0;
+    setAnnouncement(source.kind==='item'?'已拿起事项，放入时间轴后确认；保存前不会创建。':'已拿起日程，松手放下；Escape取消。');}
+  function dragProjection(source:CalendarDragSource,delta:{x:number;y:number}){
+    const range=source.kind==='event'?source.event:draggedRange.current;if(!range)return null;
+    const time=projectedDrag(range,delta);if(!time||validTimeDraft(range,time))return null;
     const col=root.current?.querySelector<HTMLElement>(`.fc-timegrid-col[data-date="${beijingDay(time.start)}"]`),slot=root.current?.querySelector<HTMLElement>('.fc-timegrid-slot-lane[data-time]');
     if(!col||!slot)return null;const rect=col.getBoundingClientRect(),half=slot.getBoundingClientRect().height;
     return {time,style:{position:'fixed' as const,left:rect.left+3,top:rect.top+(minutesInDay(time.start)-0)/30*half,width:rect.width-7,height:(Date.parse(time.end)-Date.parse(time.start))/1800000*half}};
   }
-  function dragCommit(source:CalendarEvent,next:TimeDraft|null){if(cancelPointer.current)return;
-    if(!next){setAnnouncement('无效落点，已取消拖动。');return;}
-    if(source.calendar_id==='tebb-draft'){if(validTimeDraft(source,next)){setAnnouncement('此位置不符合时间规则，草稿未移动。');return;}setDraft(previous=>previous?{...previous,start:beijingStamp(next.start),end:beijingStamp(next.end)}:previous);pulse();return;}
-    void apply(source,next);}
+  function dragCommit(source:CalendarDragSource,next:TimeDraft|null){if(cancelPointer.current)return;
+    if(!next){setAnnouncement(source.kind==='item'?'请选择当日可容纳一小时的时间轴位置，未创建草稿。':'无效落点，已取消拖动。');return;}
+    if(source.kind==='item'){
+      const current=controller.page.items.find(item=>item.id===source.item.id&&!item.archived);
+      if(!draggedRange.current||validTimeDraft(draggedRange.current,next)){setAnnouncement('此位置不符合当日时间规则，未创建草稿。');return;}
+      if(view==='month'||itemDraftBlocked||!current){setAnnouncement('事项或编辑状态已变化，未创建草稿。');return;}
+      beginDraft(next.start,next.end,current);setAnnouncement(`已为“${current.title}”打开草稿，保存后才会创建日程。`);return;
+    }
+    const event=source.event;
+    if(event.calendar_id==='tebb-draft'){if(validTimeDraft(event,next)){setAnnouncement('此位置不符合时间规则，草稿未移动。');return;}setDraft(previous=>previous?{...previous,start:beijingStamp(next.start),end:beijingStamp(next.end)}:previous);pulse();return;}
+    void apply(event,next);}
   async function resolveSync(operationId:string,localId:string,resolution:'link'|'absent'){
     if(resolution==='absent'&&!window.confirm('已核对原飞书身份，并确认没有创建出有效日程？不会自动重发。'))return;
     await local.change({type:'resolve_sync',local_id:localId,operation_id:operationId,resolution,confirmed:resolution==='absent',event_id:resolveId});
@@ -300,7 +329,7 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
       <button type="button" onClick={()=>guard(()=>onDay({day,item_id:item?.id||target.item_id,...(event?{calendar_id:event.calendar_id,event_id:event.event_id}:{})}))}>关联事项</button>
       {extraActions}{closeLabel&&<button type="button" onClick={()=>guard(onClose)}>{closeLabel}</button>}
     </div>
-    {narrow&&view==='week'&&<p className="sc-caption">七天周视图 · 在日历内左右滑动查看</p>}
+    {paneWidth<982&&view==='week'&&<p className="sc-caption">七天周视图 · 在日历内左右滑动，或聚焦时间轴后用左右键查看</p>}
     {(controller.error||local.error&&!draft&&!bulk)&&<UiFeedback state="error" title={[controller.error,!draft&&!bulk&&local.error].filter(Boolean).join(' · ')} className="sc-error"/>}
     {controller.loading&&!controller.page.events_valid&&<UiFeedback state="loading" title="正在读取日程…"/>}
     {!controller.loading&&!local.loading&&!local.busy&&!local.unknown&&!controller.error&&!local.error&&controller.page.events_valid&&!visible.length&&<UiFeedback state="empty" title="当前区间没有已读日程">可切换日期，或新建日程草稿。</UiFeedback>}
@@ -316,7 +345,10 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
     </section>)}</div>}
     <div className="sw-live" role="status" aria-live="polite">{announcement||controller.notice|| (checking?'正在核对组织者、权限和完整参与人…':'双击空白新建日程，单击日程查看详情；普通个人日程可长按拖动改期。')}</div>
     <CalendarDragSurface reduce={!!reduce} onPending={pending=>pending?controller.beginInteraction():controller.endInteraction()} onStart={dragStart} project={dragProjection} onCommit={dragCommit} onFinish={cancelled=>{stopPointer();if(cancelled)setAnnouncement('已取消拖动。');}}>
-    <div className={`sw-calendar sw-${view}`}>{calendarView}</div></CalendarDragSurface>
+    <div className={`sw-calendar-layout${view!=='month'?' sw-with-items':''}`}>
+      {view!=='month'&&<CalendarItemSource items={controller.page.items} disabled={itemDraftBlocked} loading={controller.loading} onArrange={arrangeItem}/>}
+      <div className={`sw-calendar sw-${view}`} role="region" aria-label="日程时间轴" tabIndex={0}>{calendarView}</div>
+    </div></CalendarDragSurface>
     {detailsOpen&&event&&<section className="sw-details" ref={details} role="dialog" aria-modal="false" style={narrow?undefined:popover} aria-label="日程时间详情"><button type="button" className="sw-popover-close" aria-label="关闭日程详情" onClick={()=>guard(()=>setDetailsOpen(false))}>×</button>
       <div className="sw-detail-heading"><h2>{event?.summary||'选择一场日程'}</h2>{event&&<button type="button" onClick={()=>locate(event)}>定位日程</button>}{item&&<button type="button" onClick={()=>guard(()=>onReturn(item.id))}>↗ {item.title}{item.archived?' · 已归档':''}</button>}</div>
       {event&&<><p className="sc-caption">{eventTime(event)} · {eventHealth(event)}{checking?' · 编辑资格核对中':!timeEditable(event)?' · '+(event.edit_reason||'请重新核对编辑资格'):''}</p>

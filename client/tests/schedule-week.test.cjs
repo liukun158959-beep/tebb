@@ -152,6 +152,48 @@ test('the day and week demo share creations, associations and revised event iden
   assert.equal(work.items[0].schedules.events.find(e=>e.event_id===current.event_id).start,result.operation.event.start);
 });
 
+test('item arrangement and dropping share a confirmation draft; cancellation and invalid drops write nothing',async()=>{
+  global.crypto=require('node:crypto').webcrypto;
+  global.window={setInterval:()=>1,clearInterval(){},setTimeout,clearTimeout,localStorage:memory()};
+  global.document={addEventListener(){},removeEventListener(){}};
+  let drag,source,editor,writes=[],saved=[];
+  const item={id:'work-192',title:'准备项目环境',version:4,archived:false};
+  const Calendar=React.forwardRef((props,ref)=>{React.useImperativeHandle(ref,()=>({getApi:()=>({changeView(){},updateSize(){}})}));return React.createElement('div');});
+  const Week=load('schedule-week.tsx',{'./api':{},'./page-stack':{usePageActive:()=>true},'./schedule-state':shared,'./schedule-week-state':state,
+    './schedule-week.css':{},'./calendar-interaction.css':{},'./local-calendar-state':load('local-calendar-state.ts'),
+    './calendar-event-editor':{CalendarEventEditor:props=>{editor=props;return React.createElement('div',{'data-editor':true});}},
+    './workspace-dialog':{WorkspaceDialog:({children})=>React.createElement('div',{},children)},
+    './calendar-drag':{CalendarDragSurface:props=>{drag=props;return React.createElement('div',{},props.children);},CalendarDragContent:({children})=>children},
+    './calendar-item-source':{CalendarItemSource:props=>{source=props;return React.createElement('aside',{'data-items':true});}},
+    '@fullcalendar/react':{default:Calendar},'@fullcalendar/timegrid':{},'@fullcalendar/daygrid':{},'@fullcalendar/interaction':{},'@fullcalendar/luxon3':{},'@fullcalendar/core/locales/zh-cn':{},
+    'framer-motion':{useReducedMotion:()=>true},'./datetime-field':{DateTimeField:()=>null}}).ScheduleWeekPane;
+  const transport=async(method,args)=>{
+    if(method==='load_schedule_week'||method==='load_schedule_month')return page(saved,{items:[item]});
+    if(method==='load_local_calendar')return {ok:true,events:saved,operations:[],batches:[]};
+    assert.equal(method,'change_local_calendar');writes.push(args.action);
+    const current=event(args.action.local_id,{calendar_id:'tebb-local',local_id:args.action.local_id,local_version:1,sync_state:'local',summary:args.action.summary,start:args.action.start,end:args.action.end});saved=[current];
+    return {ok:true,event:current,change_state:'committed',operation:{id:args.action.request_id,state:'saved',event:current}};
+  };
+  const props={info:null,transport,target:{day},onClose(){},onReturn(){},onDay(){},onChange(){}};let view;
+  await act(async()=>{view=create(React.createElement(Week,props));});
+  act(()=>source.onArrange(item));
+  assert.equal(editor.value.summary,item.title);assert.equal(editor.value.item_id,item.id);assert.equal(editor.value.sync,false);
+  assert.equal(editor.value.start,day+'T09:00');assert.equal(editor.value.end,day+'T10:00');assert.equal(writes.length,0);
+  act(()=>editor.onClose());assert.equal(view.root.findAllByProps({'data-editor':true}).length,0);assert.equal(writes.length,0);
+  const lifted={kind:'item',item};
+  function start(){act(()=>drag.onStart(lifted,{activatorEvent:{}}));}
+  start();act(()=>drag.onCommit(lifted,null));act(()=>drag.onFinish(false));assert.equal(writes.length,0);assert.equal(view.root.findAllByProps({'data-editor':true}).length,0);
+  start();act(()=>drag.onCommit(lifted,{start:time('23:30'),end:shared.addCalendarDays(day,1)+'T00:30:00+08:00'}));act(()=>drag.onFinish(false));assert.equal(writes.length,0);assert.equal(view.root.findAllByProps({'data-editor':true}).length,0);
+  start();act(()=>drag.onFinish(true));assert.equal(writes.length,0);
+  start();act(()=>drag.onCommit(lifted,{start:time('09:15'),end:time('10:15')}));act(()=>drag.onFinish(false));
+  assert.equal(editor.value.start,day+'T09:15');assert.equal(editor.value.end,day+'T10:15');assert.equal(editor.value.item_id,item.id);assert.equal(writes.length,0);assert.equal(source.disabled,true);
+  const localId=editor.value.id;await act(async()=>editor.onSave());
+  assert.equal(writes.length,1);assert.equal(writes[0].type,'create');assert.equal(writes[0].local_id,localId);assert.equal(writes[0].item_id,item.id);assert.equal(writes[0].summary,item.title);
+  assert.equal(item.version,4);assert.equal(view.root.findAllByProps({'data-editor':true}).length,0);
+  await act(async()=>view.update(React.createElement(Week,{...props,view:'month'})));assert.equal(view.root.findAllByProps({'data-items':true}).length,0);
+  await act(async()=>view.unmount());
+});
+
 test('real week component keeps FullCalendar time-zone/gesture gates and guards dirty form navigation',async()=>{
   global.crypto=require('node:crypto').webcrypto;
   global.window={setInterval:()=>1,clearInterval(){},setTimeout,clearTimeout,localStorage:memory()};
@@ -162,6 +204,7 @@ test('real week component keeps FullCalendar time-zone/gesture gates and guards 
     './calendar-interaction.css':{},'./local-calendar-state':load('local-calendar-state.ts'),
     './calendar-event-editor':{CalendarEventEditor:props=>React.createElement('div',{'data-editor':true,editor:props})},'./workspace-dialog':{WorkspaceDialog:({children})=>React.createElement('div',{},children)},
     './calendar-drag':{CalendarDragSurface:({children})=>React.createElement('div',{},children),CalendarDragContent:({children})=>React.createElement('div',{},children)},
+    './calendar-item-source':{CalendarItemSource:props=>React.createElement('aside',{'data-items':true,source:props})},
     '@fullcalendar/react':{default:Calendar},'@fullcalendar/timegrid':{},'@fullcalendar/daygrid':{},'@fullcalendar/interaction':{},'@fullcalendar/luxon3':{},'@fullcalendar/core/locales/zh-cn':{},
     'framer-motion':{useReducedMotion:()=>true},'./datetime-field':{DateTimeField:props=>React.createElement('input',{'aria-label':props.marker,value:props.value,onChange:e=>props.onChange(e.target.value)})}}).ScheduleWeekPane;
   const current=event();let view;

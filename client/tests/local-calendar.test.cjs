@@ -59,15 +59,29 @@ test('drag preview never registers a calendar event, does not rerender the grid,
   DndContext:props=>{callbacks=props;return React.createElement('div',{},props.children);},DragOverlay:({children})=>React.createElement('aside',{},children),
   PointerSensor(){},useSensor:()=>({}),useSensors:()=>[],useDraggable:()=>({})}});
  function Grid(){gridRenders++;return React.createElement('div',{'data-grid':true});}
- const source=event('same'),children=React.createElement(Grid);let view;
- await act(async()=>{view=create(React.createElement(CalendarDragSurface,{children,reduce:true,onStart(){},project:(source,delta)=>({time:{start:source.start,end:source.end},style:{top:delta.y,left:0}}),onCommit:(source,time)=>commits.push([source,time]),onFinish(){}}));});
+ const source={kind:'event',event:event('same')},children=React.createElement(Grid);let view;
+ await act(async()=>{view=create(React.createElement(CalendarDragSurface,{children,reduce:true,onStart(){},project:(source,delta)=>({time:{start:source.event.start,end:source.event.end},style:{top:delta.y,left:0}}),onCommit:(source,time)=>commits.push([source,time]),onFinish(){}}));});
  for(let i=0;i<3;i++){
-  act(()=>callbacks.onDragStart({active:{data:{current:{event:source}}}}));
+  act(()=>callbacks.onDragStart({active:{data:{current:{source}}}}));
   for(let y=0;y<8;y++)act(()=>callbacks.onDragMove({delta:{x:0,y}}));
   assert.equal(view.root.findAllByProps({'data-calendar-drop-preview':true}).length,1);assert.equal(gridRenders,1);
   act(()=>callbacks.onDragEnd({delta:{x:0,y:8}}));assert.equal(view.root.findAllByProps({'data-calendar-drop-preview':true}).length,0);
  }
  assert.equal(commits.length,3);assert(commits.every(([e])=>e===source));await act(async()=>view.unmount());global.document=saved;
+});
+
+test('item source searches unarchived titles and offers the same item through drag and keyboard arrangement',async()=>{
+ const registered=[];let arranged;
+ const {CalendarItemSource}=load('calendar-item-source.tsx',{'./calendar-item-source.css':{},'@dnd-kit/core':{useDraggable:options=>{
+   registered.push(options);return {setNodeRef(){},setActivatorNodeRef(){},attributes:{},listeners:{},isDragging:false};}}});
+ const items=[{id:'active-a',title:'Node 项目',version:1,archived:false},{id:'active-b',title:'Python 项目',version:2,archived:false},{id:'old',title:'归档项目',version:1,archived:true}];let view;
+ await act(async()=>{view=create(React.createElement(CalendarItemSource,{items,disabled:false,loading:false,onArrange:item=>arranged=item}));});
+ assert.equal(view.root.findAllByType('li').length,2);assert(registered.every(row=>row.data.source.kind==='item'&&row.data.source.item.id!=='old'));
+ act(()=>view.root.findByProps({'aria-label':'搜索可安排事项'}).props.onChange({target:{value:'NODE'}}));
+ assert.equal(view.root.findAllByType('li').length,1);act(()=>view.root.findByProps({'aria-label':'安排时间：Node 项目'}).props.onClick());assert.equal(arranged,items[0]);
+ await act(async()=>view.update(React.createElement(CalendarItemSource,{items,disabled:true,loading:false,onArrange(){}})));
+ assert(view.root.findAllByType('button').every(button=>button.props.disabled));assert.equal(registered.at(-1).disabled,true);
+ await act(async()=>view.unmount());
 });
 
 test('interaction suspends stale reads and inspection, while pending saves cannot trigger a permission downgrade',async()=>{
