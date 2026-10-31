@@ -1,3 +1,4 @@
+@import './ui-controls.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -247,65 +248,6 @@ a.md-link {
 .md table { border-collapse: collapse; margin: 0.5em 0; display: block; overflow-x: auto; }
 .md th, .md td { border: 1px solid hsl(var(--border)); padding: 0.2em 0.5em; }
 
-/* 操作按钮：圆角写死，不吃 --radius（设计系统是 0）。颜色只走主题 token。 */
-.desk-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.25rem;
-  border-radius: 10px;
-  border: 1px solid hsl(var(--primary) / 0.55);
-  background: hsl(var(--primary) / 0.16);
-  color: hsl(var(--primary));
-  padding: 0.3rem 0.7rem;
-  font-size: 12px;
-  line-height: 1.25;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background-color 120ms ease, border-color 120ms ease, filter 120ms ease;
-}
-.desk-btn:hover:not(:disabled):not(.desk-btn-solid):not(.desk-btn-danger):not(.desk-btn-danger-solid) {
-  background: hsl(var(--primary) / 0.28);
-  border-color: hsl(var(--primary));
-}
-.desk-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.desk-btn-lg {
-  padding: 0.5rem 0.9rem;
-  font-size: 14px;
-}
-.desk-btn-solid {
-  background: hsl(var(--primary));
-  border-color: hsl(var(--primary));
-  color: hsl(var(--primary-foreground));
-  font-weight: 650;
-}
-.desk-btn-solid:hover:not(:disabled) {
-  background: hsl(var(--primary));
-  filter: brightness(1.08);
-}
-.desk-btn-danger {
-  border-color: hsl(var(--destructive) / 0.65);
-  background: hsl(var(--destructive) / 0.12);
-  color: hsl(var(--destructive));
-  font-weight: 650;
-}
-.desk-btn-danger:hover:not(:disabled) {
-  background: hsl(var(--destructive) / 0.22);
-  border-color: hsl(var(--destructive));
-  filter: none;
-}
-.desk-btn-danger-solid {
-  background: hsl(var(--destructive));
-  border-color: hsl(var(--destructive));
-  color: hsl(var(--destructive-foreground));
-}
-.desk-btn-danger-solid:hover:not(:disabled) {
-  background: hsl(var(--destructive));
-  filter: brightness(1.08);
-}
 .desk-chip {
   display: inline-flex;
   align-items: center;

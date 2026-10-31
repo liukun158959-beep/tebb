@@ -1,0 +1,85 @@
+/* 操作按钮：圆角写死，不吃 --radius（设计系统是 0）。颜色只走主题 token。 */
+.desk-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  border-radius: 10px;
+  border: 1px solid hsl(var(--primary) / 0.55);
+  background: hsl(var(--primary) / 0.16);
+  color: hsl(var(--primary));
+  padding: 0.3rem 0.7rem;
+  font-size: 12px;
+  line-height: 1.25;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, filter 120ms ease;
+}
+.desk-btn:hover:not(:disabled):not(.desk-btn-solid):not(.desk-btn-danger):not(.desk-btn-danger-solid) {
+  background: hsl(var(--primary) / 0.28);
+  border-color: hsl(var(--primary));
+}
+.desk-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.desk-btn-lg {
+  padding: 0.5rem 0.9rem;
+  font-size: 14px;
+}
+.desk-btn-solid {
+  background: hsl(var(--primary));
+  border-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  font-weight: 650;
+}
+.desk-btn-solid:hover:not(:disabled) {
+  background: hsl(var(--primary));
+  filter: brightness(1.08);
+}
+.desk-btn-danger {
+  border-color: hsl(var(--destructive) / 0.65);
+  background: hsl(var(--destructive) / 0.12);
+  color: hsl(var(--destructive));
+  font-weight: 650;
+}
+.desk-btn-danger:hover:not(:disabled) {
+  background: hsl(var(--destructive) / 0.22);
+  border-color: hsl(var(--destructive));
+  filter: none;
+}
+.desk-btn-danger-solid {
+  background: hsl(var(--destructive));
+  border-color: hsl(var(--destructive));
+  color: hsl(var(--destructive-foreground));
+}
+.desk-btn-danger-solid:hover:not(:disabled) {
+  background: hsl(var(--destructive));
+  filter: brightness(1.08);
+}
+/* Shared controls own state styles; page styles keep geometry and domain layout. */
+.desk-btn[data-ui-control]:focus-visible { outline:2px solid hsl(var(--ui-focus,var(--primary)));outline-offset:3px; }
+.desk-btn[data-ui-control]:active:not(:disabled) { filter:brightness(.94); }
+.desk-btn[data-ui-control][aria-pressed=true] { box-shadow:inset 0 0 0 1px currentColor;font-weight:650; }
+.desk-btn[data-ui-control][aria-busy=true] { cursor:progress; }
+.ui-field { display:grid;gap:var(--ui-space-xs,4px);min-width:0; }
+.ui-field>label { font-size:var(--ui-text-sm,12px);font-weight:600; }
+.ui-field>:where(input:not([type=checkbox]):not([type=radio]),select,textarea) { box-sizing:border-box;width:100%;min-width:0;padding:8px 10px;border:1px solid hsl(var(--border));border-radius:var(--ui-radius,10px);background:hsl(var(--background));color:hsl(var(--foreground));font:inherit;font-size:var(--ui-text-sm,12px); }
+.ui-field-help,.ui-field-error { margin:0;font-size:var(--ui-text-sm,12px);line-height:1.5; }
+.ui-field-help { color:hsl(var(--muted-foreground)); }
+.ui-field-error { color:hsl(var(--ui-status-danger,var(--destructive))); }
+.ui-field[data-ui-control]>[aria-invalid=true] { border-color:hsl(var(--ui-status-danger,var(--destructive))); }
+.ui-field>input:focus-visible,.ui-field>select:focus-visible,.ui-field>textarea:focus-visible { outline:2px solid hsl(var(--ui-focus,var(--primary)));outline-offset:2px; }
+.ui-feedback { padding:var(--ui-space-md,12px);border:1px solid hsl(var(--border));border-radius:var(--ui-radius,10px);font-size:var(--ui-text-sm,12px);line-height:1.5; }
+.ui-feedback-title { font-weight:600; }
+.ui-feedback-detail { margin-top:var(--ui-space-xs,4px);color:hsl(var(--foreground)); }
+.ui-feedback[data-ui-feedback=success] { color:hsl(var(--ui-status-success,151 30% 31%)); }
+.ui-feedback[data-ui-feedback=error] { color:hsl(var(--ui-status-danger,var(--destructive))); }
+.ui-feedback[data-ui-feedback=conflict],.ui-feedback[data-ui-feedback=unconfirmed] { color:hsl(var(--ui-status-warning,40 45% 33%));border-style:dashed; }
+.ui-feedback[data-ui-feedback=empty],.ui-feedback[data-ui-feedback=no_results] { color:hsl(var(--muted-foreground)); }
+.ui-contract-sample { margin:12px 0;padding:12px;border:1px dashed hsl(var(--border));border-radius:var(--ui-radius,10px); }
+.ui-contract-sample>summary { cursor:pointer; }
+.ui-contract-buttons { display:flex;flex-wrap:wrap;gap:8px;margin:12px 0; }
+.ui-contract-feedback { display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin-top:12px; }
+@media(prefers-reduced-motion:reduce) { .desk-btn[data-ui-control] { transition:none; } }
+@media(forced-colors:active) { .desk-btn[data-ui-control]:focus-visible,.ui-field>input:focus-visible,.ui-field>select:focus-visible,.ui-field>textarea:focus-visible { outline-color:Highlight; } .ui-feedback { color:CanvasText;border-color:CanvasText; } }

@@ -90,9 +90,9 @@ test('real component creates, moves, archives, restores and preserves its edit f
   const wrapper=tag=>React.forwardRef((props,ref)=>React.createElement(tag,{...props,ref},props.children));
   const dnd={DndContext:props=>{dragProps=props;return React.createElement('div',{},props.children);},DragOverlay:()=>null,
     KeyboardSensor(){},PointerSensor(){},closestCenter(){},pointerWithin:()=>[],useDraggable:()=>({setNodeRef(){},setActivatorNodeRef(){},attributes:{},listeners:{},isDragging:false}),useDroppable:()=>({setNodeRef(){},isOver:false}),useSensor(){},useSensors:()=>[]};
-  let projectRemoved=false;
+  let projectRemoved=false,disconnectFirstWrite=true;
   const componentState={...state,WorkBoardController:class extends state.WorkBoardController {
-    constructor(transport){super(async(method,args)=>{const page=await transport(method,args);return projectRemoved?{...page,projects:[],items:page.items.map(item=>({...item,project_id:'',project_name:'',version:item.version+1}))}:page;});}
+    constructor(transport){super(async(method,args)=>{const page=await transport(method,args);if(method==='change_work_item'&&disconnectFirstWrite){disconnectFirstWrite=false;throw Error('receipt connection closed');}return projectRemoved?{...page,projects:[],items:page.items.map(item=>({...item,project_id:'',project_name:'',version:item.version+1}))}:page;});}
   }};
   const {WorkBoardPane}=load('work-board.tsx',{'./api':{},'./page-stack':{usePageActive:()=>true},'./work-board-state':componentState,'./schedule-state':scheduleState,'./schedule':{SchedulePane:props=>{scheduleProps=props;return null;}},
     './schedule-week':{ScheduleWeekPane:props=>{weekProps=props;return null;}},
@@ -103,7 +103,11 @@ test('real component creates, moves, archives, restores and preserves its edit f
   await act(async()=>view.root.findByType('form').props.onSubmit({preventDefault(){}}));
   const rendered=()=>JSON.stringify(view.toJSON());assert(rendered().includes('请输入事项标题'));
   act(()=>view.root.findByProps({'aria-label':'事项标题'}).props.onChange({target:{value:'真实组件新事项'}}));
+  assert(!rendered().includes('请输入事项标题'),'correcting the locally validated title clears only that field error');
   await act(async()=>view.root.findByType('form').props.onSubmit({preventDefault(){}}));assert(rendered().includes('真实组件新事项'));
+  const waiting=button('等待核对原操作');assert(waiting.props.disabled);assert.equal(waiting.props['aria-busy'],undefined,'an unknown receipt is blocked, not still busy');
+  assert.equal(view.root.findByProps({'aria-label':'事项标题'}).props.value,'真实组件新事项');
+  await act(async()=>button('刷新核对').props.onClick());
   const article=()=>view.root.findAllByType('article').find(a=>a.props['data-work-card']?.startsWith('demo-new'));
   const id=article().props['data-work-card'];await act(async()=>{dragProps.onDragEnd({active:{id},over:{id:'review'}});});
   assert.equal(article().props['data-state'],'review');

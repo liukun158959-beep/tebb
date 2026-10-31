@@ -8,6 +8,7 @@ import zhLocale from '@fullcalendar/core/locales/zh-cn';
 import type { EventDropArg, EventInput } from '@fullcalendar/core';
 import { useReducedMotion } from 'framer-motion';
 import { rpc, type BackendInfo } from './api';
+import { UiButton, UiFeedback } from './ui-controls';
 import { DateTimeField } from './datetime-field';
 import { usePageActive } from './page-stack';
 import { absoluteTime, addCalendarDays, beijingDay, beijingStamp, calendarKey, calendarWeekStart, eventHealth, eventTime,
@@ -45,6 +46,7 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
   const active=usePageActive(),reduce=useReducedMotion();
   const lastBlankClick=useRef<{start:string;at:number}|null>(null),blankDoubleTimer=useRef<number|undefined>();
   const root=useRef<HTMLElement|null>(null),calendar=useRef<FullCalendar|null>(null),details=useRef<HTMLElement|null>(null);
+  const draftRoot=useRef<HTMLDivElement|null>(null);
   const [day,setDay]=useState(target.day||beijingDay()),[narrow,setNarrow]=useState(false);
   const [selected,setSelected]=useState(target.event_id&&target.calendar_id?calendarKey(target as {calendar_id:string;event_id:string}):'');
   const [form,setForm]=useState<Form|null>(null),[picker,setPicker]=useState<'start'|'end'|null>(null),[formError,setFormError]=useState('');
@@ -99,7 +101,8 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
     return()=>{live=false;};
   },[active,controller,selected,controller.page.checked_at]);
   useEffect(()=>{if(!locateCount)return;const id=window.requestAnimationFrame?.(()=>{const element=[...(root.current?.querySelectorAll<HTMLElement>('[data-week-event]')||[])].find(node=>node.dataset.weekEvent===selected);element?.scrollIntoView?.({block:'nearest',behavior:reduce?'instant':'smooth'});element?.focus({preventScroll:true});});return()=>{if(id!==undefined)window.cancelAnimationFrame?.(id);};},[locateCount,narrow,day,reduce]);
-  useEffect(()=>{if(!leave)return;root.current?.querySelector<HTMLElement>('[role=alertdialog] button')?.focus();},[!!leave]);
+  useEffect(()=>{if(!draft)return;const previous=document.activeElement as HTMLElement|null;draftRoot.current?.querySelector<HTMLElement>('input')?.focus();return()=>{if(previous?.isConnected)previous.focus();};},[!!draft]);
+  useEffect(()=>{if(!leave)return;const previous=document.activeElement as HTMLElement|null;root.current?.querySelector<HTMLElement>('[role=alertdialog] button')?.focus();return()=>{if(previous?.isConnected)previous.focus();};},[!!leave]);
   useEffect(()=>{
     if(!active)return;
     // FullCalendar's pointer capture can leave focus outside the calendar root.
@@ -293,13 +296,14 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
     {viewTabs}<div className="sw-toolbar"><button type="button" aria-label={view==='month'?'上一月':view==='day'?'上一天':'上一周'} onClick={()=>guard(()=>setDay(view==='month'?new Date(Date.UTC(Number(day.slice(0,4)),Number(day.slice(5,7))-2,1)).toISOString().slice(0,10):addCalendarDays(day,view==='day'?-1:-7)))}>‹</button><button type="button" aria-label={view==='month'?'下一月':view==='day'?'下一天':'下一周'} onClick={()=>guard(()=>setDay(view==='month'?new Date(Date.UTC(Number(day.slice(0,4)),Number(day.slice(5,7)),1)).toISOString().slice(0,10):addCalendarDays(day,view==='day'?1:7)))}>›</button>
       <strong>{view==='month'?day.slice(0,7).replace('-','年')+'月':view==='day'?day.replaceAll('-','.'):`${monday.replaceAll('-','.')} — ${addCalendarDays(monday,6).slice(5).replace('-','.')}`}</strong><button type="button" onClick={()=>guard(()=>setDay(beijingDay()))}>今天</button>
       <label>定位日期<input type="date" aria-label="周日程定位日期" value={day} onChange={e=>{if(e.target.value)guard(()=>setDay(e.target.value));}}/></label>
-      <button type="button" disabled={controller.loading} onClick={()=>{void controller.read(day,true);void local.read();}}>{controller.loading?'读取中…':'读取核对'}</button>
+      <UiButton busy={controller.loading} busyLabel="读取中…" onClick={()=>{void controller.read(day,true);void local.read();}}>读取核对</UiButton>
       <button type="button" onClick={()=>guard(()=>onDay({day,item_id:item?.id||target.item_id,...(event?{calendar_id:event.calendar_id,event_id:event.event_id}:{})}))}>关联事项</button>
       {extraActions}{closeLabel&&<button type="button" onClick={()=>guard(onClose)}>{closeLabel}</button>}
     </div>
     {narrow&&view==='week'&&<p className="sc-caption">七天周视图 · 在日历内左右滑动查看</p>}
-    {!draft&&!bulk&&local.error&&<p className="sc-error" role="alert">{local.error}</p>}
-    {controller.error&&<p className="sc-error" role="alert">{controller.error}</p>}
+    {(controller.error||local.error&&!draft&&!bulk)&&<UiFeedback state="error" title={[controller.error,!draft&&!bulk&&local.error].filter(Boolean).join(' · ')} className="sc-error"/>}
+    {controller.loading&&!controller.page.events_valid&&<UiFeedback state="loading" title="正在读取日程…"/>}
+    {!controller.loading&&!local.loading&&!local.busy&&!local.unknown&&!controller.error&&!local.error&&controller.page.events_valid&&!visible.length&&<UiFeedback state="empty" title="当前区间没有已读日程">可切换日期，或新建日程草稿。</UiFeedback>}
     {target.event_id&&controller.page.events_valid&&!controller.loading&&!controller.page.events.some(e=>e.event_id===target.event_id)&&<p className="sc-warning" role="status">当前区间未找到目标日程，请核对日期、访问权限或远端是否已删除；不会用另一场日程替代。</p>}
     {!controller.page.events_valid&&<p className="sc-warning">{controller.page.events_error||'尚未完成本周远端核对。'}{visible.length?' 下方保留上次信息，不能据此判断没有安排。':''}</p>}
     {!!unknownDate.length&&<div className="sw-outside">{unknownDate.map(row=><button type="button" key={calendarKey(row)} onClick={()=>choose(calendarKey(row))}>{row.summary} · 时间未核实</button>)}</div>}
@@ -330,7 +334,7 @@ export function ScheduleWeekPane({info,debug=false,transport,target,revision,onC
         <div className="sc-actions"><button type="submit" className="wb-primary" disabled={!dirty||blocked}>保存时间</button><button type="button" disabled={busy} onClick={()=>{setForm(null);setPicker(null);setFormError('');}}>放弃表单</button></div>
       </form>}
     </section>}
-    {draft&&<div className="sw-editor-anchor" style={narrow?undefined:popover}><CalendarEventEditor value={draft} items={controller.page.items} busy={local.busy} blocked={!!local.unknown} error={draftError||local.error}
+    {draft&&<div className="sw-editor-anchor" ref={draftRoot} style={narrow?undefined:popover}><CalendarEventEditor value={draft} items={controller.page.items} busy={local.busy} blocked={!!local.unknown} error={draftError||local.error}
       onChange={setDraftFields} onSave={()=>void saveDraft()} onClose={()=>guard(()=>setDraft(null))}/></div>}
     {local.unknown&&<section className="sc-warning" aria-label="日程保存待核对"><p>原请求结果未确认：{local.unknown.request_id}。请读取核对，不要重新创建。</p><button type="button" onClick={()=>void local.read()}>读取原编号</button>
       {['create','update'].includes(local.unknown.type)&&<button type="button" disabled={local.busy} onClick={()=>{const marker=local.unknown!;if(window.confirm('已核对当前本地日程，登记当前状态并结束原请求等待？'))void local.change({type:'resolve_save',local_id:marker.local_id,operation_id:marker.request_id,confirmed:true});}}>核对当前本地记录并结束等待</button>}

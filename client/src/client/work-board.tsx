@@ -5,6 +5,7 @@ import { motion, useReducedMotion } from 'framer-motion';
 import { rpc, type BackendInfo } from './api';
 import { usePageActive } from './page-stack';
 import { Markdown } from './Markdown';
+import { UiButton, UiContractSample, UiFeedback, UiField } from './ui-controls';
 import { SchedulePane, type ScheduleTarget } from './schedule';
 import { beijingStamp } from './schedule-state';
 import { WorkBoardController, WORK_STATES, demoWorkTransport, workStateLabel, runStateLabel,
@@ -42,11 +43,11 @@ function ItemCard({item,controller,onSelect,onMove,onSchedule,overlay=false}:{it
     {controller.rowErrors.get(item.id)&&<p className="wb-row-error" role="alert">{controller.rowErrors.get(item.id)}</p>}
   </motion.article>;
 }
-function Column({state,label,children,count}:{state:WorkState;label:string;children:React.ReactNode;count:number}) {
+function Column({state,label,children,count,settled}:{state:WorkState;label:string;children:React.ReactNode;count:number;settled:boolean}) {
   const drop=useDroppable({id:state});
   return <section ref={drop.setNodeRef} className={`wb-column${drop.isOver?' wb-drop-target':''}`} data-work-column={state} aria-label={label}>
-    <header><span className={`wb-state-dot ${state}`}/><h2>{label}</h2><span className="wb-count">{count}</span></header>{children}
-    {!count&&<div className="wb-empty-column">暂无事项</div>}{drop.isOver&&<div className="wb-drop-slot">移至{label}</div>}
+    <header><span className={`wb-state-dot ${state}`}/><h2>{label}</h2><span className="wb-count">{settled?count:'—'}</span></header>{children}
+    {settled&&!count&&<div className="wb-empty-column">暂无事项</div>}{drop.isOver&&<div className="wb-drop-slot">移至{label}</div>}
   </section>;
 }
 
@@ -77,7 +78,7 @@ export function WorkBoardPane({info,debug=false,onOpen,target,onCalendar}:Props)
   const drawer=!weekTarget&&!scheduleTarget&&(!!draft||!!item);
   useEffect(()=>{if(!drawer)return;const previous=document.activeElement as HTMLElement|null;formRoot.current?.querySelector<HTMLElement>('button,input')?.focus();return()=>{if(previous?.isConnected)previous.focus();};},[drawer,!!draft,selected]);
   useEffect(()=>{setRunId('');setLinking(false);setDetailError('');},[selected]);
-  useEffect(()=>{if(leaveWork)leaveRoot.current?.querySelector<HTMLElement>('button')?.focus();},[!!leaveWork]);
+  useEffect(()=>{if(!leaveWork)return;const previous=document.activeElement as HTMLElement|null;leaveRoot.current?.querySelector<HTMLElement>('button')?.focus();return()=>{if(previous?.isConnected)previous.focus();};},[!!leaveWork]);
   const visible=controller.items.filter(item=>item.archived===archived&&(project==='all'||(project==='none'?!item.project_id:item.project_id===project))&&(!query||(item.title+' '+item.description).toLocaleLowerCase().includes(query.toLocaleLowerCase())));
   useEffect(()=>{if(controller.loaded&&project!=='all'&&project!=='none'&&!controller.page.projects.some(p=>p.id===project))setProject('none');},[controller.loaded,controller.page.projects,project]);
   function guardDraft(next:()=>void){if(draft&&JSON.stringify(draft)!==draftBase.current)setLeaveWork(()=>next);else next();}
@@ -113,22 +114,24 @@ export function WorkBoardPane({info,debug=false,onOpen,target,onCalendar}:Props)
   </div>;
   return <div className="work-board" data-work-board data-demo={debug?'true':'false'}>
     <header className="wb-heading"><div><span className="wb-eyebrow">工作区 / 工作看板</span><h1>把事情一步步做完。</h1><p>研究、动手、验收，都有自己的位置。{debug&&' · 演示数据，未连接后端'}</p></div>
-      <button type="button" className="wb-primary" onClick={create}>＋ 新增事项</button></header>
+      <UiButton variant="primary" onClick={create}>＋ 新增事项</UiButton></header>
+    {debug&&<UiContractSample/>}
     <div className="wb-toolbar"><label className="wb-search"><span aria-hidden="true">⌕</span><input aria-label="搜索事项" placeholder="搜索事项" value={query} onChange={e=>setQuery(e.target.value)}/></label>
       <select aria-label="筛选项目" value={project} onChange={e=>setProject(e.target.value)}><option value="all">所有项目</option><option value="none">未归属项目</option>{controller.page.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select>
       <button type="button" aria-pressed={archived} onClick={()=>setArchived(value=>!value)}>{archived?'查看日常事项':'已归档'}</button>
       <button type="button" onClick={()=>openWeek()}>日程安排</button>
-      <button type="button" disabled={controller.loading} onClick={()=>void refresh()}>{controller.loading?'读取中…':'刷新核对'}</button><span className="wb-sort">优先级 · 截止日期</span></div>
-    {(controller.error||formError)&&<p className="wb-error" role="alert">{controller.error||formError}</p>}
-    {[...controller.uncertain].map(([key,record])=><div className="wb-uncertain" role="alert" key={key}><div><strong>保存结果未确认</strong><p>{record.message}</p><small>操作编号：{record.action.request_id}</small></div><div><button type="button" onClick={()=>void refresh()} disabled={controller.loading}>重新读取核对</button><button type="button" onClick={()=>void retry(key)} disabled={controller.pending.has(key)}>手动重试原操作</button></div></div>)}
-    {!controller.loaded&&controller.loading&&<p role="status">正在读取事项…</p>}
+      <UiButton busy={controller.loading} busyLabel="读取中…" onClick={()=>void refresh()}>刷新核对</UiButton><span className="wb-sort">优先级 · 截止日期</span></div>
+    {controller.error&&controller.error!==formError&&<UiFeedback state="error" title={controller.error} className="wb-error"/>}
+    {[...controller.uncertain].map(([key,record])=><UiFeedback state="unconfirmed" title="保存结果未确认" className="wb-uncertain" key={key}><div><p>{record.message}</p><small>操作编号：{record.action.request_id}</small></div><div><UiButton onClick={()=>void refresh()} busy={controller.loading} busyLabel="核对中…">重新读取核对</UiButton><UiButton onClick={()=>void retry(key)} busy={controller.pending.has(key)} busyLabel="原操作处理中…">手动重试原操作</UiButton></div></UiFeedback>)}
+    {!controller.loaded&&controller.loading&&<UiFeedback state="loading" title="正在读取事项…"/>}
+    {controller.loaded&&!visible.length&&<UiFeedback state={query||project!=='all'||archived?'no_results':'empty'} title={query||project!=='all'||archived?'当前筛选没有匹配事项':'还没有事项'}>可调整筛选，或用「新增事项」开始。</UiFeedback>}
     <DndContext sensors={dragSensors} collisionDetection={collision}
       accessibility={{screenReaderInstructions:{draggable:'按空格抓起，方向键移动，空格放下，Escape 取消。也可使用卡片底部的移至菜单。'},announcements:{
         onDragStart:()=> '已抓起事项。',onDragOver:({over})=>over?`目标：${workStateLabel(String(over.id))}`:'请选择目标列。',
         onDragEnd:({over})=>over?`已放入${workStateLabel(String(over.id))}，正在保存。`:'移动已取消。',onDragCancel:()=> '移动已取消。'}}}
       onDragStart={event=>setDragging(String(event.active.id))} onDragCancel={()=>setDragging(null)}
       onDragEnd={event=>{setDragging(null);if(event.over)move(String(event.active.id),String(event.over.id) as WorkState);}}>
-      <div className="wb-columns">{WORK_STATES.map(([state,label])=><Column key={state} state={state} label={label} count={visible.filter(item=>item.state===state).length}>
+      <div className="wb-columns">{WORK_STATES.map(([state,label])=><Column key={state} state={state} label={label} settled={controller.loaded} count={visible.filter(item=>item.state===state).length}>
         {visible.filter(item=>item.state===state).map(item=><ItemCard key={item.id} item={item} controller={controller} onMove={move} onSchedule={openSchedule} onSelect={()=>guardDraft(()=>{setSelected(item.id);setDraft(null);setFormError('');})}/>)}</Column>)}</div>
       <DragOverlay dropAnimation={reduce?null:{duration:180,easing:'ease-out'}}>{dragging&&controller.items.find(i=>i.id===dragging)?<ItemCard item={controller.items.find(i=>i.id===dragging)!} controller={controller} onSelect={()=>{}} onMove={move} onSchedule={openSchedule} overlay/>:null}</DragOverlay>
     </DndContext>
@@ -136,15 +139,15 @@ export function WorkBoardPane({info,debug=false,onOpen,target,onCalendar}:Props)
     {drawer&&<><div className="wb-shade" onClick={close}/><aside className="wb-detail" role="dialog" aria-modal="true" aria-label={draft?'编辑事项':'事项详情'} ref={formRoot}
       onKeyDown={event=>{if(event.key==='Escape'){event.stopPropagation();if(leaveWork)setLeaveWork(null);else close();}if(event.key==='Tab'){const nodes=[...(leaveRoot.current||event.currentTarget).querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href]')];const first=nodes[0],last=nodes[nodes.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}}}>
       <header className="wb-detail-header"><span>{draft?'编辑事项':item?.archived?'已归档事项':'事项详情'}</span><button type="button" aria-label="关闭事项详情" onClick={close}>×</button></header>
-      {draft?<form onSubmit={event=>void save(event)}><label>事项标题<input aria-label="事项标题" value={draft.title} maxLength={120} disabled={fieldBusy} onChange={e=>setDraft({...draft,title:e.target.value})}/></label>
+      {draft?<form onSubmit={event=>void save(event)}><UiField label="事项标题" help="必填，最多120字。" error={formError&&!draft.title.trim()?formError:undefined}><input aria-label="事项标题" value={draft.title} maxLength={120} disabled={fieldBusy} onChange={e=>{setDraft({...draft,title:e.target.value});if(formError==='请输入事项标题。')setFormError('');}}/></UiField>
         <div className="wb-detail-fields"><label>所属项目<select aria-label="事项所属项目" disabled={fieldBusy} value={draft.project_id} onChange={e=>setDraft({...draft,project_id:e.target.value})}><option value="">未归属项目</option>{draft.project_id&&!controller.page.projects.some(p=>p.id===draft.project_id)&&<option value={draft.project_id}>原项目已移除，请重新选择</option>}{controller.page.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
           <label>优先级<select aria-label="事项优先级" disabled={fieldBusy} value={draft.priority} onChange={e=>setDraft({...draft,priority:e.target.value as WorkFields['priority']})}>{Object.entries(priorities).map(([key,name])=><option key={key} value={key}>{name}</option>)}</select></label>
           <label>截止日期<input type="date" aria-label="事项截止日期" value={draft.due} disabled={fieldBusy} onChange={e=>setDraft({...draft,due:e.target.value})}/></label></div>
         <label>AI 负责人<select aria-label="事项AI负责人" value={draft.agent_id||'tebb'} disabled={fieldBusy} onChange={e=>setDraft({...draft,agent_id:e.target.value})}>{(controller.page.agents||[{id:'tebb',name:'tebb · 通用助手',role:'通用助手'}]).map(a=><option value={a.id} key={a.id}>{a.name} · {a.role}</option>)}</select></label>
         <label>事项说明<textarea aria-label="事项说明" value={draft.description} maxLength={8000} rows={7} disabled={fieldBusy} onChange={e=>setDraft({...draft,description:e.target.value})}/></label>
         <p className="wb-detail-hint">截止日表示最晚完成日；实际工作的时间在事项详情中安排。</p>
-        {formError&&<p role="alert" className="wb-error">{formError}</p>}
-        <div className="wb-detail-actions"><button className="wb-primary" disabled={fieldBusy} type="submit">{fieldBusy?'等待保存或核对…':'保存事项'}</button><button type="button" onClick={()=>guardDraft(()=>setDraft(null))}>取消</button></div>
+        {formError&&!!draft.title.trim()&&<UiFeedback state={controller.uncertain.has(draft.id||'create')?'unconfirmed':'error'} title={formError} className="wb-error"/>}
+        <div className="wb-detail-actions"><UiButton variant="primary" busy={controller.pending.has(draft.id||'create')} disabled={fieldBusy} busyLabel="正在保存…" type="submit">{controller.uncertain.has(draft.id||'create')?'等待核对原操作':'保存事项'}</UiButton><UiButton onClick={()=>guardDraft(()=>setDraft(null))}>取消</UiButton></div>
       </form>:item&&<><h2>{item.title}</h2><div className="wb-detail-info"><span>状态</span><select aria-label="事项状态" value={item.state} disabled={item.archived||controller.uncertain.has(item.id)} onChange={e=>void controller.move(item.id,e.target.value as WorkState)}>{WORK_STATES.map(([id,label])=><option value={id} key={id}>{label}</option>)}</select><span>所属项目</span><strong>{item.project_name||'未归属项目'}</strong><span>优先级</span><strong>{priorities[item.priority]}优先级</strong><span>截止日期</span><strong>{item.due||'未设置'}</strong></div>
         {item.removed_project&&<p className="wb-removed">原项目已移除：{item.removed_project}。可重新关联。</p>}
         <section className="wb-detail-section"><h3>事项说明</h3>{item.description?<Markdown text={item.description}/>:<p>暂未添加说明。</p>}</section>

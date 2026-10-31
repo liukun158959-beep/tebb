@@ -34,3 +34,7 @@
 @media(pointer:coarse){.workspace-dialog button,.workspace-tabs button{min-height:44px}.workspace-dialog input,.workspace-dialog select{font-size:16px}}
 
 .pet-appearance-preview{min-height:150px;display:grid;place-items:center;background:hsl(var(--muted)/.4);border-radius:14px;margin:18px 0}.pet-appearance-preview p{font-size:13px;color:hsl(var(--muted-foreground))}
+
+/* Shared controls: semantic sizes and statuses belong to the workspace theme. */
+.tebb-workspace{--ui-space-xs:4px;--ui-space-sm:8px;--ui-space-md:12px;--ui-radius:10px;--ui-text-sm:12px;--ui-focus:var(--primary);--ui-status-success:151 30% 31%;--ui-status-warning:40 45% 33%;--ui-status-danger:var(--destructive)}
+.dark .tebb-workspace{--ui-status-success:151 40% 68%;--ui-status-warning:43 65% 70%;--ui-status-danger:0 70% 72%}
