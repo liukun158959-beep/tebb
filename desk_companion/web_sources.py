@@ -275,7 +275,17 @@ def source_catalog(sources):
     return list(rows.values())
 
 
-def render_citations(text, sources):
+def render_citations(text, sources, *, structured=False):
+    if structured:
+        from .json_document import json_answer,map_strings
+        try:value=json_answer(text)
+        except (ValueError,TypeError,RecursionError):return text,[]
+        unknown=[]
+        def render(value):
+            rendered,missing=render_citations(value,sources)
+            unknown.extend(missing);return rendered
+        import json
+        return json.dumps(map_strings(value,render),ensure_ascii=False),list(dict.fromkeys(unknown))
     catalog={s['id']:s for s in source_catalog(sources)}
     unknown=[]
     # Code samples stay untouched. URLs still pass the existing provenance audit.
@@ -290,7 +300,11 @@ def render_citations(text, sources):
     return ''.join(part if i%2 else prose(part) for i,part in enumerate(parts)),list(dict.fromkeys(unknown))
 
 
-def check_citations(text, sources):
+def check_citations(text, sources, *, structured=False):
+    if structured:
+        from .json_document import text_values
+        try:text='\n'.join(text_values(text))
+        except (ValueError,TypeError,RecursionError):text=''
     # Exclude API/code examples. This is a provenance check of visible links,
     # not a claim that the sentences are entailed by the retrieved passages.
     prose=re.sub(r"```[\s\S]*?```|`[^`\n]*`", "", text)

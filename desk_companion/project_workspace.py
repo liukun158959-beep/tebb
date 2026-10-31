@@ -274,7 +274,7 @@ def run(command, snapshot, run_id, timeout=90):
 
 def tool_specs():
     def spec(name, description, properties, required):
-        return dict(type='function', function=dict(name=name, description=description, parameters=dict(type='object', properties=properties, required=required)))
+        return dict(type='function', function=dict(name=name, description=description, parameters=dict(type='object', properties=properties, required=required)),read_only=name in {'workspace_list','workspace_read'})
     string = {'type':'string'}
     return [
         spec('workspace_list', '列出授权工作目录，参考目录只读。root为main或ref-0等。', {'root':string,'path':string}, []),

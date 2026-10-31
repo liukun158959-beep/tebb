@@ -2,8 +2,9 @@
 import json
 import math
 import time
+from .json_document import json_answer
 
-CONTRACT_VERSION=10
+CONTRACT_VERSION=11
 
 
 class CancellationNotSettled(TimeoutError):
@@ -138,14 +139,16 @@ CASES.extend(case('context_'+variant+'_receipt','context',_CONTEXT_PROMPT,
     dict(original_operation='eval-receipt-7d93c4a1',original_state='unknown',allow_repeat=False),
     executor='context',context_variant=variant,budget=1)for variant in('short','old','long'))
 
-
-def json_answer(text):
-    """One JSON value, optionally in a complete JSON/blank Markdown fence."""
-    if not isinstance(text,str):raise TypeError('answer must be text')
-    text=text.strip();lines=text.splitlines()
-    if len(lines)>=3 and lines[0].strip()in{'```','```json'}and lines[-1].strip()=='```':
-        text='\n'.join(lines[1:-1])
-    return json.loads(text)
+CASES.extend([
+    case('feedback_unsupported','feedback','审阅合成候选报告：来源真实存在于给定材料，但2019年启动的断言与2020年原句冲突。',
+         dict(dimension='claim_support',status='fail'),executor='feedback',scenario='unsupported',kind='feedback_review',budget=1),
+    case('feedback_partial_read','feedback','审阅合成候选报告：仅取得正文开头，不可声称已读全文或证明尾部不存在限制。',
+         dict(dimension='reading',status='unknown'),executor='feedback',scenario='partial',kind='feedback_review',budget=1),
+    case('feedback_incomparable','feedback','审阅合成候选报告：不同年度、币种和指标，不能据此声称经营效益高十倍。',
+         dict(dimension='numeric_comparability',status='fail'),executor='feedback',scenario='incomparable',kind='feedback_review',budget=1),
+    case('feedback_missing_artifact','feedback','审阅受控夹具：探针命令退出0，但明确要求的bundle.html不存在，不能算交付通过；不是沙箱项目验收。',
+         dict(dimension='artifact',status='fail'),executor='feedback',scenario='artifact',kind='feedback_review',budget=1),
+])
 
 
 def evaluate(spec, task, *, verification=None):
@@ -176,6 +179,7 @@ def evaluate(spec, task, *, verification=None):
             return 'false_success',dict(evidence,reason='required_artifact_verification_missing_or_failed')
     if spec.get('executor')=='chart':
         return ('success' if all(t in tools for t in spec['required_tools']) else 'false_success'),evidence
+    if spec.get('executor')=='feedback':return 'success',evidence
     try:
         value=json_answer(task.get('answer',''))
     except (ValueError,TypeError):

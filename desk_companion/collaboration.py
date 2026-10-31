@@ -257,7 +257,7 @@ class Collaboration:
             if run.get('options_generation'):run['options_generation']={k:v for k,v in run['options_generation'].items() if k in {'state','error','calls'}}
             if not run.get('parent'):
                 run['chain'] = chain_view(run, result['runs'])
-            for key in ("input", "agent_config", "members", "context", "cursor", "task", "attempt", "parent_draft", "source_evidence", "selection", "compress_ids", "public_answer"):
+            for key in ("input", "agent_config", "members", "context", "cursor", "task", "attempt", "parent_draft", "source_evidence", "selection", "compress_ids", "public_answer", "handoffs"):
                 run.pop(key, None)
         catalog = public_catalog()
         result["models"] = [{"id": item["id"], "model": item["model"]} for item in catalog["items"]]
@@ -714,6 +714,7 @@ class Collaboration:
                     elif all(dep['state']=='succeeded' for dep in preceding):
                         for dep in preceding:
                             run["context"].append(dict(sender=dep["agent"], text=dep["answer"][:24000]))
+                        run['handoffs']=[dict(id=dep['id'],agent=dep['agent'],state=dep['state'],answer=dep['answer'])for dep in preceding]
                         run['source_evidence']=[e for dep in preceding for e in dep.get('source_evidence',[])+dep.get('evidence',[])]
                         run["state"] = "pending"; run["events"].append("已收到前序成果，准备接续")
                     continue
@@ -727,7 +728,7 @@ class Collaboration:
                         objective=run.get('objective',run['input']),stage=run.get('stage','collect'),required_sources=run.get('required_sources',[]),requires_charts=run.get('requires_charts',False),
                         search_budget=max(0, run.get('search_limit',2)-run.get("search_calls",0)),fetch_budget=max(0,run.get('fetch_limit',4)-run.get("fetch_calls",0)),
                         source_topics=run.get('source_topics',[]),
-                        source_evidence=run.get("source_evidence",[]),evidence=run.get("evidence",[]))
+                        source_evidence=run.get("source_evidence",[]),evidence=run.get("evidence",[]),handoffs=run.get('handoffs',[]))
                     run["task"] = manager.submit(run["input"], "collab-"+run["id"], "collaboration", submission_key=f"collab:{run['id']}:{run['attempt']}",
                         task_limits=execution_limits(run['agent'],run.get('agent_config',{}).get('tools',())), **({**request, **({"sampling":run["sampling"]} if run.get("sampling") else {})}))
                     run["state"] = "queued"
@@ -753,6 +754,8 @@ class Collaboration:
                     elif kind == "verification": run.setdefault("checks", []).append(data)
                     elif kind == "citation_check": run["citation_check"]=data
                     elif kind == "delivery_check": run['delivery_check']=data
+                    elif kind == 'feedback_check': run['feedback_check']=data
+                    elif kind == 'feedback_invalidated':run.pop('feedback_check',None)
                     elif kind == 'project_receipt':
                         receipts=run.setdefault('project_receipts',[])
                         receipts.append(data)

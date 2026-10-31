@@ -1,0 +1,118 @@
+import json
+import unittest
+
+from desk_companion import feedback
+from desk_companion.web_sources import source_catalog,render_citations,check_citations
+
+
+class FeedbackTests(unittest.TestCase):
+    def test_json_citations_preserve_document_and_code_examples(self):
+        sources=[dict(url='https://example.org/actual',level='body',text='The launch was in 2020.')]
+        ident=source_catalog(sources)[0]['id']
+        original=dict(year=2020,citation=f'[{ident}]',code='curl https://api.example.org/not-read')
+        rendered,unknown=render_citations('```json\n'+json.dumps(original)+'\n```',sources,structured=True)
+        value=feedback.json_answer(rendered)
+        self.assertEqual(set(value),set(original));self.assertEqual(value['code'],original['code'])
+        self.assertIn('https://example.org/actual',value['citation']);self.assertEqual(unknown,[])
+        self.assertTrue(check_citations(rendered,sources,structured=True)['ok'])
+        # An ordinary fenced JSON example remains code unless explicitly a JSON answer.
+        self.assertFalse(check_citations('```json\n{"url":"https://example.org/actual"}\n```',sources)['ok'])
+
+    def test_json_contract_does_not_accept_extra_prose_or_change_types(self):
+        goal='请计算。最终只返回相同JSON。'
+        schema=dict(type='object',properties=dict(total=dict(type='integer'),checked=dict(type='boolean')),required=['total','checked'],additionalProperties=False)
+        contract=dict(format='json',schema=schema)
+        good=feedback.check_output('{"total":18,"checked":true}',goal,contract)
+        self.assertTrue(all(x['status']=='pass'for x in good))
+        self.assertEqual(feedback.check_output('# 报告\n{"total":18,"checked":true}',goal)[0]['status'],'fail')
+        self.assertEqual(feedback.check_output('{"total":true,"checked":true}',goal,contract)[-1]['status'],'fail')
+        self.assertIsNone(feedback.output_contract('解释“只返回JSON”是什么意思，请用普通段落。'))
+        self.assertIsNone(feedback.output_contract('解释“A，最终只返回JSON，B”这句示例。'))
+        self.assertEqual(feedback.check_output('{"total":NaN}',goal)[0]['status'],'fail')
+        self.assertEqual(feedback.check_output('{"checked":false,"checked":true}',goal)[0]['status'],'fail')
+        self.assertIsNone(feedback.output_contract('只输出JSON。\n最终只返回Markdown。'))
+        self.assertEqual(feedback.check_output('# report\n{}','Return only JSON object.')[0]['status'],'fail')
+
+    def test_remote_schema_reference_is_rejected_without_network(self):
+        with self.assertRaises(ValueError):
+            feedback.output_contract('x',dict(format='json',schema={'$ref':'https://example.org/schema'}))
+
+    def test_receipt_success_does_not_prove_artifact_or_test_coverage(self):
+        checks=feedback.check_receipts([dict(tool='workspace_run',call_id='call1',result=dict(state='succeeded',exit_code=0))],
+            [dict(id='build',kind='command',call_id='call1'),dict(id='bundle',kind='artifact',receipt_id='file1'),dict(id='coverage',kind='test_coverage',receipt_id='tests1')])
+        by_id={x['id']:x for x in checks}
+        self.assertEqual(by_id['build']['status'],'pass')
+        self.assertEqual(by_id['bundle']['status'],'unknown')
+        self.assertEqual(by_id['coverage']['status'],'unknown')
+        self.assertEqual(feedback.report(checks)['completion'],'unverified')
+
+    def test_known_missing_artifact_fails_even_after_exit_zero(self):
+        checks=feedback.check_receipts([dict(tool='artifact_check',call_id='file1',result=dict(exists=False))],
+            [dict(id='bundle',kind='artifact',receipt_id='file1')])
+        self.assertEqual(checks[0]['status'],'fail')
+        self.assertEqual(feedback.report(checks)['completion'],'incomplete')
+
+    def test_model_assessment_is_not_deterministic_verification(self):
+        checks=[feedback.check('claim','claim_support','pass','审阅认为支持',basis='model_assessment')]
+        self.assertEqual(feedback.report(checks)['completion'],'assessed')
+        self.assertIn('不代表',feedback.report(checks)['scope'])
+
+    def test_artifact_binds_actual_file_read_and_not_command_claim(self):
+        receipts=[dict(tool='workspace_run',call_id='command',arguments=dict(command='echo created'),result=dict(exit_code=0)),
+            dict(tool='project_read',call_id='file',arguments=dict(path='dist/index.html'),result=dict(ok=True,kind='file',sha256='a'*64))]
+        checks=feedback.check_receipts(receipts,[dict(id='bundle',kind='artifact',path='dist/index.html'),dict(id='wrong',kind='artifact',path='dist/missing.html')])
+        self.assertEqual(checks[0]['status'],'pass');self.assertEqual(checks[0]['receipt_id'],'file')
+        self.assertEqual(checks[1]['status'],'unknown')
+
+    def test_unknown_operation_identity_survives_feedback(self):
+        receipts=[dict(call_id='call',result=dict(operation=dict(id='original',state='unknown'),log_id='log'))]
+        record=feedback.report([],receipts=receipts)['unknown_operations'][0]
+        self.assertEqual(record['operation_id'],'original');self.assertEqual(record['state'],'unknown')
+        self.assertEqual(record['action'],'reconcile_original_receipt_do_not_replay')
+
+    def test_same_path_in_another_environment_cannot_prove_requested_artifact(self):
+        rows=[dict(tool='project_read',call_id='file_'+name,arguments=dict(path='dist/index.html',environment=name),result=dict(ok=True,sha256='a'*64))for name in ['A','B']]
+        checks=feedback.check_receipts(rows,[dict(id='ambiguous',kind='artifact',path='dist/index.html'),dict(id='bound',kind='artifact',path='dist/index.html',environment='A')])
+        self.assertEqual(checks[0]['status'],'unknown');self.assertEqual(checks[1]['receipt_id'],'file_A')
+
+    def test_only_receipt_for_the_same_operation_resolves_unknown(self):
+        first=dict(tool='project_prepare',read_only=False,call_id='first',result=dict(operation=dict(id='original',state='unknown')))
+        other=dict(tool='project_status',read_only=True,call_id='other',result=dict(operation=dict(id='unrelated',state='succeeded')))
+        self.assertEqual(feedback.report([],receipts=[first,other])['completion'],'unverified')
+        self.assertEqual(len(feedback.report([],receipts=[first,other])['unknown_operations']),1)
+        resolved=dict(tool='project_status',read_only=True,call_id='resolved',result=dict(operation=dict(id='original',state='succeeded')))
+        self.assertEqual(feedback.report([],receipts=[first,resolved])['unknown_operations'],[])
+
+    def test_repair_is_once_and_blocks_mutations_even_when_model_requests_them(self):
+        repair=feedback.RepairBudget()
+        self.assertTrue(repair.begin());self.assertFalse(repair.begin())
+        self.assertFalse(repair.allows('project_create',dict(read_only=False)))
+        self.assertFalse(repair.allows('calendar_change',dict(read_only=False)))
+        self.assertTrue(repair.allows('project_status',dict(read_only=True)))
+        self.assertTrue(repair.allows('build_chart',dict(read_only=False)))
+
+    def test_review_separates_real_source_and_supported_assertion(self):
+        from desk_companion.feedback_review import material,interpret
+        sources=[dict(url='https://example.org/actual',level='body',text='The launch was in 2020.')]
+        rows=material('When was launch?','It launched in 2019.',sources,[])
+        ident=rows[-1]['id']
+        item=dict(requirement='launch year',dimension='claim_support',status='contradicted',reason='2019 conflicts with the read source',evidence=[dict(source_id=ident,quote='The launch was in 2020.')])
+        checks=interpret(dict(requirements=[item]),rows)
+        self.assertEqual(checks[0]['status'],'fail');self.assertEqual(checks[0]['basis'],'model_assessment')
+        item.update(status='supported',evidence=[dict(source_id=ident,quote='The launch was in 2019.')])
+        self.assertEqual(interpret(dict(requirements=[item]),rows)[0]['status'],'unknown')
+
+    def test_review_cannot_promote_snippet_or_quote_across_unread_gap(self):
+        from desk_companion.feedback_review import material,interpret
+        sources=[dict(url='https://example.org/actual',level='body',text='first part',snapshot_id='snap',characters=100,read_ranges=[[0,10]],truncated=True),
+                 dict(url='https://example.org/actual',level='body',text='last part',snapshot_id='snap',characters=100,read_ranges=[[90,100]],truncated=True)]
+        rows=material('read whole','claim',sources,[]);ident=rows[-1]['id']
+        item=dict(requirement='claim',dimension='claim_support',status='supported',reason='claimed support',evidence=[dict(source_id=ident,quote='first part\nlast part')])
+        self.assertEqual(interpret(dict(requirements=[item]),rows)[0]['status'],'unknown')
+        sources[0].update(level='snippet',text='summary')
+        rows=material('read whole','claim',sources[:1],[])
+        item['evidence']=[dict(source_id=ident,quote='summary')]
+        self.assertEqual(interpret(dict(requirements=[item]),rows)[0]['status'],'unknown')
+
+
+if __name__=='__main__':unittest.main()

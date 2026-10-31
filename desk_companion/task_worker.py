@@ -69,6 +69,8 @@ def main():
         from .sampling import parse_sampling
         from .video_archive import VideoArchive
         archive = VideoArchive(request, emit)
+        actual_receipts=[]
+        actual_sources=[]
 
         class Progress(BasePlugin):
             name = "task_progress"
@@ -78,6 +80,14 @@ def main():
                                     "fingerprint": fingerprint(kw["tool_name"], kw["input"]),
                                     "read_only": host.agent.tools.get(kw["tool_name"]).isReadOnly})
             def on_tool_after_call(self, **kw):
+                raw=kw['result']
+                if isinstance(raw,str):
+                    try:raw=json.loads(raw)
+                    except (ValueError,TypeError):pass
+                actual_receipts.append(dict(tool=kw['tool_name'],call_id=str(kw['step_id']),arguments=kw['input'],result=raw,read_only=host.agent.tools.get(kw['tool_name']).isReadOnly))
+                if kw['tool_name']in{'web_fetch','web_search','github_repository'}and isinstance(raw,dict):
+                    from .web_sources import evidence_sources
+                    actual_sources.extend(evidence_sources([raw]))
                 emit("tool_end", {"tool": kw["tool_name"], "step": kw["step_id"],
                                   "input": kw["input"], "result": kw["result"],
                                   "status": kw["status"], "duration_ms": kw["duration_ms"],
@@ -145,6 +155,16 @@ def main():
             if getattr(result, "status", "") == "aborted" or answer.startswith("Agent 终止："):
                 emit("failure", "Agent 达到步骤或时间上限。已保留进度，请查看任务时间线。")
             else:
+                from .delivery_feedback import assess
+                from .feedback import report
+                checked_request={**request,'collab_run':request.get('task_id',request['session_id'])}
+                answer,checks,audit=assess(checked_request,answer,actual_sources,None,actual_receipts)
+                if audit is not None:emit('citation_check',audit)
+                outcome=report(checks,receipts=actual_receipts);emit('feedback_check',outcome)
+                if not outcome['ok']:
+                    emit('answer_reset',True);emit('token',answer)
+                    emit('failure',dict(type='DeliveryCheckFailed',message='交付核验未完成，已保留回答和实际回执，请查看反馈检查。'))
+                    return
                 emit("result", answer)
                 archive.finish(answer)
         except Exception as exc:

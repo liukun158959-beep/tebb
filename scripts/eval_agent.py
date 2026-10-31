@@ -54,7 +54,18 @@ class Fixture(BaseHTTPRequestHandler):
         receipts=[m for m in request['messages'] if m.get('role')=='tool']
         executor=spec.get('executor')
         available={v.get('function',{}).get('name')for v in request.get('tools',[])}
-        if executor=='project'and 'start_background_task' in available:
+        if request['messages'][0].get('content','').startswith('反馈审阅协议'):
+            material=json.loads(request['messages'][1]['content'])['materials']
+            row=next((m for m in material if m['level']=='body'),material[0])
+            status='supported';dimension='task_acceptance';evidence=[dict(source_id=row['id'],quote=row['segments'][0][:500])]
+            if executor=='feedback':
+                scenario=spec['scenario']
+                status='contradicted'if scenario in{'unsupported','incomparable'}else'unverified'if scenario=='partial'else'supported'
+                dimension='numeric_comparability'if scenario=='incomparable'else'claim_support'if scenario=='unsupported'else'task_acceptance'
+                if scenario=='incomparable':evidence=[dict(source_id=m['id'],quote=m['segments'][0][:500])for m in material if m['level']=='body']
+            delta=dict(content=json.dumps(dict(requirements=[dict(requirement='模拟交付检查',dimension=dimension,status=status,
+                reason='受控模拟审阅，不构成真实语义验收',evidence=evidence)]),ensure_ascii=False))
+        elif executor=='project'and 'start_background_task' in available:
             goal=next(m['content']for m in reversed(request['messages'])if m.get('role')=='user')
             delta=tool('start_background_task',dict(instructions=goal,strategy='direct'))
         elif executor=='project':
@@ -199,7 +210,9 @@ def main():
             'desk_companion/project_tools.py','desk_companion/project_receipts.py','desk_companion/docker_sandboxes.py',
             'desk_companion/worker_rpc.py','desk_companion/bridge.py','desk_companion/local_api/host.py','desk_companion/local_api/server.py',
             'desk_companion/execution_context.py','desk_companion/model_capacity.py','desk_companion/model_tokenizer.py',
-            'desk_companion/context_pack.py','desk_companion/assistant.py','desk_companion/model_catalog.py')
+            'desk_companion/context_pack.py','desk_companion/assistant.py','desk_companion/model_catalog.py',
+            'desk_companion/json_document.py','desk_companion/feedback.py','desk_companion/feedback_review.py',
+            'desk_companion/delivery_feedback.py','desk_companion/web_sources.py','desk_companion/project_workspace.py')
     hashes={}
     for name in source_paths:
         raw=(ROOT/name).read_bytes()
@@ -269,7 +282,7 @@ def main():
                         row['error']=accepted.get('error','workflow admission rejected');raise ValueError('workflow admission rejected')
                     run=accepted['run'];task_id=run['task_id'];row['workflow_run']=run['id']
                 else:
-                    task_id=manager.submit(context['prompt'],'eval-'+run_id,'collaboration',workflow='collaboration',kind=spec.get('kind','chat'),role=dict(id='research',name='验收助手',role='按实际输入完成可验证任务',tools=spec.get('tools',[])),selection=context['selection'],context=context.get('history',[]),members=[],model_id=model['id'],collab_run=run_id,collab_path=str(workspace),budget=spec.get('budget',2),search_budget=0,fetch_budget=spec.get('fetch_budget',0),task_limits=dict(call_timeout=min(args.timeout,90),task_timeout=args.timeout),sampling=dict(reasoning_effort='low',temperature=0.1,top_p=1))
+                    task_id=manager.submit(context['prompt'],'eval-'+run_id,'collaboration',workflow='collaboration',kind=spec.get('kind','chat'),role=dict(id='research',name='验收助手',role='按实际输入完成可验证任务',tools=spec.get('tools',[])),selection=context['selection'],context=context.get('history',[]),members=[],model_id=model['id'],collab_run=run_id,collab_path=str(workspace),budget=spec.get('budget',2),search_budget=0,fetch_budget=spec.get('fetch_budget',0),task_limits=dict(call_timeout=min(args.timeout,90),task_timeout=args.timeout),sampling=dict(reasoning_effort='low',temperature=0.1,top_p=1),**context.get('request_extra',{}))
                 row['task_id']=task_id;save()
                 if not lifecycle and not project:row['task_ids']=[task_id]
                 row['stage']='wait'

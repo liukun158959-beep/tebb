@@ -77,11 +77,15 @@ class CollaborationTests(unittest.TestCase):
         self.env = patch.dict(os.environ, {"DESK_COMPANION_DATA_DIR": self.temp.name}); self.env.start()
         self.model = patch("desk_companion.model_catalog.require_active", return_value=MODEL); self.model.start()
         self.item = patch("desk_companion.model_catalog.require_item", return_value=MODEL); self.item.start()
+        # Legacy scripted writers test routing/tools/streaming, not semantics.
+        # The real review loop and its call accounting have dedicated tests.
+        self.review=patch('desk_companion.feedback_review.review',return_value=[dict(id='fixture_review',dimension='task_acceptance',status='pass',message='受控旧测试审阅',basis='model_assessment',required=True)])
+        self.review.start()
         self.work, self.chat = Queue(), Queue()
         self.service = Collaboration(path=Path(self.temp.name)/"workspace.sqlite3", managers=dict(work=self.work, chat=self.chat), start=False)
 
     def tearDown(self):
-        self.service.shutdown(); self.item.stop(); self.model.stop(); self.env.stop(); self.temp.cleanup()
+        self.service.shutdown(); self.review.stop(); self.item.stop(); self.model.stop(); self.env.stop(); self.temp.cleanup()
 
     def state(self): return self.service.snapshot()["state"]
 

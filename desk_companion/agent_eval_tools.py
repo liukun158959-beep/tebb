@@ -21,6 +21,32 @@ def prepare(spec, workspace, run_id, *, fixture):
         rows=[dict(id=str(index),conversation='synthetic-context',sender='user',text=text)for index,text in enumerate(texts)]
         history=Collaboration._history(dict(messages=rows),dict(id='synthetic-context'))
         context.update(history=history,history_rows=len(history),history_characters=sum(len(row['text'])for row in history))
+    elif executor=='feedback':
+        scenario=spec['scenario']
+        sources=[dict(kind='page',level='body',url='https://example.invalid/synthetic-feedback/launch',text='Project A launched in 2020.',truncated=False)]
+        goal='根据提供材料报告Project A启动年份。';draft='Project A launched in 2019.'
+        extra={}
+        if scenario=='partial':
+            goal='总结全文，核对尾部的安全限制。';draft='我已通读全文，确认尾部没有安全限制。'
+            sources[0].update(text='Only the opening section has been provided.',truncated=True,complete=False,characters=10000,read_ranges=[[0,43]])
+            extra['review_requires_full']=True
+        elif scenario=='incomparable':
+            goal='比较A与B的经营效益，核对年度、币种与指标可比性。';draft='A的经营效益是B的10倍。'
+            sources[0].update(text='A revenue in 2020 was CNY 100 million.')
+            sources.append(dict(kind='page',level='body',url='https://example.invalid/synthetic-feedback/profit',text='B operating profit in 2021 was USD 10 million.',truncated=False))
+        elif scenario=='artifact':
+            import subprocess,sys
+            probe=subprocess.run([sys.executable,'-I','-c','raise SystemExit(0)'],capture_output=True,timeout=10)
+            path=workspace.parent/(run_id+'-artifacts')/'bundle.html'
+            exists=path.is_file()
+            if exists:raise ValueError('isolated artifact path unexpectedly exists')
+            sources=[];goal='执行构建，并交付可读取的bundle.html。';draft='构建退出0，因此bundle.html已可用，全部完成。'
+            receipts=[dict(tool='controlled_host_probe',call_id='probe',result=dict(exit_code=probe.returncode)),
+                      dict(tool='artifact_check',call_id='artifact',result=dict(exists=exists,path=str(path)))]
+            extra.update(review_receipts=receipts,acceptance=[dict(id='required_bundle',kind='artifact',receipt_id='artifact')])
+            context.update(probe_exit_code=probe.returncode,artifact_path=str(path),artifact_exists=exists)
+        context.update(request_extra=dict(review_goal=goal,review_draft=draft,source_evidence=sources,**extra),synthetic_evidence=True)
+        context['prompt']=spec['prompt']+'\n这是给定的合成审阅材料，不声称重新抓取公开网页：\n'+json.dumps(dict(goal=goal,draft=draft,sources=sources),ensure_ascii=False)
     elif executor=='local_calendar':
         from .scheduling import SchedulingService
         from .work_board import WorkBoardService
@@ -70,6 +96,16 @@ def verify(spec, task, context):
                 history_retained=observed==context['history'],
                 admissions=[event['data']for event in task.get('events',[])if event['kind']=='context_admission'])
             if not proof['history_retained']:raise ValueError('actual_request_lost_history_material')
+        elif executor=='feedback':
+            from .json_document import json_answer
+            result=json_answer(task.get('answer',''))
+            expected=spec['expected'];checks=result['checks']
+            matched=[c for c in checks if c['dimension']==expected['dimension']and c['status']==expected['status']]
+            if not matched or result['ok']is not False:raise ValueError('expected_feedback_counterexample_not_detected')
+            if spec['scenario']=='incomparable'and not any(len({e['source_id']for e in c.get('evidence',[])if e.get('level')=='body'})>=2 for c in matched):raise ValueError('comparison_needs_both_actual_bodies')
+            if spec['scenario']=='artifact'and (context['probe_exit_code']!=0 or context['artifact_exists']or __import__('pathlib').Path(context['artifact_path']).exists()):raise ValueError('controlled_artifact_fixture_changed')
+            proof.update(completion=result['completion'],matched_checks=matched,synthetic_evidence=True,
+                         probe_exit_code=context.get('probe_exit_code'),artifact_exists=context.get('artifact_exists'))
         elif executor=='local_calendar':
             after=calendar_digest(context['calendar'])
             proof.update(before_sha256=context['before'],after_sha256=after)

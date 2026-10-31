@@ -5,11 +5,13 @@ export type DemoProject = { id: string; name: string; primary?: string; instruct
 export type DemoConversation = { id: string; title: string; kind: "dm" | "group"; members: string[]; coordinator: string; goal: string; legacy?: boolean; summary?: string; project_id?: string };
 export type DemoMessage = { id: string; conversation: string; sender: string; text: string; run?: string; kind?: "result" | "notice" };
 export type ChartDraftView={draft_id:string;title:string;stage:string;attempt:number;asset_id?:string;spec?:unknown;history:{stage:string;attempt:number;error?:string;issues?:{path:string;message:string;hint?:string}[]}[]};
+export type FeedbackReport={completion:'incomplete'|'unverified'|'assessed'|'checked';ok:boolean;scope:string;checks:{id:string;dimension:string;status:'pass'|'fail'|'unknown';message:string;basis:string}[];unknown_operations:{operation_id?:string;call_id:string;state:string}[]};
 export type DemoRun = { id: string; conversation: string; agent: string; title: string; state: "running" | "waiting" | "succeeded" | "cancelled" | "pending" | "queued" | "cancelling" | "failed" | "timed_out" | "interrupted" | "needs_input";
   clarification_version?:string;clarification_form?:ClarificationForm;options_generation?:{state:string;error?:string;calls?:number};require_execution?:boolean;clarification?:string;created?:number;finished?:number;phases?:{kind:string;calls:number;started:number;ended:number}[];chain?:{state:DemoRun['state'];calls:number;tool_calls:number;elapsed_ms:number|null;error:string;answer:string;children:string[]};
   step: number; dependency?: string; dependencies?: string[]; delivery_state?: "running" | "succeeded" | "failed"; delivery_check?: { ok: boolean; missing?: string[]; missing_sources?: string[] }; updates: string[]; applied: number; events: string[]; artifact?: string;
   kind?: string; parent?: string; answer?: string; answer_pending?: boolean; error?: string; status?: string; calls?: number; model?: string; input_tokens?: number; output_tokens?: number;
   chart_builds?:Record<string,ChartDraftView>;
+  feedback_check?:FeedbackReport;
   project_receipts?: {tool:string;call_id:string;ok:boolean;error?:string;log_id?:string;service_ready?:boolean;
     environment:{id?:string;repository?:string;state?:string};operation:{id?:string;kind?:string;state?:string;stage?:string};service:{id?:string;state?:string;url?:string;log_id?:string}}[];
   changes?: { path: string; diff: string }[]; checks?: { command: string; state: string; exit_code: number | null; output: string; stale?: boolean; diff_limited?: boolean }[];
