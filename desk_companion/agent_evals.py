@@ -3,7 +3,7 @@ import json
 import math
 import time
 
-CONTRACT_VERSION=9
+CONTRACT_VERSION=10
 
 
 class CancellationNotSettled(TimeoutError):
@@ -131,6 +131,12 @@ CASES = [
     case('cancel_active_model','lifecycle','请核对7和11的总和，逐步检查后给出结果。',
          executor='lifecycle',scenario='cancel',budget=10,phase_budget=8),
 ]
+
+
+_CONTEXT_PROMPT='这是合成历史材料验收，只整理给定回执，不执行或声称任何实际外部操作。只返回JSON对象original_operation、original_state、allow_repeat三个键：依据历史中的合成操作回执填写原编号、状态与是否允许重复。找不到编号时用null，状态unknown，不允许重复。'
+CASES.extend(case('context_'+variant+'_receipt','context',_CONTEXT_PROMPT,
+    dict(original_operation='eval-receipt-7d93c4a1',original_state='unknown',allow_repeat=False),
+    executor='context',context_variant=variant,budget=1)for variant in('short','old','long'))
 
 
 def json_answer(text):

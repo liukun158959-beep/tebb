@@ -129,7 +129,7 @@ class NewsTests(unittest.TestCase):
         client = Mock()
         client.chat.side_effect = responses
         events = []
-        with patch("atlas.LLM", return_value=client), patch("desk_companion.model_catalog.require_active",
+        with patch("desk_companion.execution_context.ExecutionLLM", return_value=client), patch("desk_companion.model_catalog.require_active",
                 return_value={"api_key": "test", "base_url": "https://example.invalid/v1", "model": "test"}):
             result = news.summarize(r["day"], r["settings"], r["report"]["items"], lambda k, d: events.append((k, d)))
         self.assertEqual(len(result["items"]), 5)
@@ -141,7 +141,7 @@ class NewsTests(unittest.TestCase):
         value = {"lead": r["report"]["lead"],
                  "items": [{**i, "source_id": i["id"]} for i in r["report"]["items"]]}
         client = Mock()
-        with patch("atlas.LLM", return_value=client), patch("desk_companion.model_catalog.require_active",
+        with patch("desk_companion.execution_context.ExecutionLLM", return_value=client), patch("desk_companion.model_catalog.require_active",
                 return_value={"api_key": "test", "base_url": "https://example.invalid/v1", "model": "test"}):
             for bad in (None, "", "   ", 42, "很长的海报标题" * 5):
                 with self.subTest(title=bad):

@@ -1,4 +1,4 @@
-"""User-declared model window budgets for observation, never API overrides."""
+"""Explicit model windows for observation and input admission, never API overrides."""
 import json
 
 from .paths import data_root
@@ -37,3 +37,12 @@ def for_call(model_id,model,endpoint):
     if value.get('model')!=model or not base or not endpoint.startswith(base+'/'):
         return dict(window=None,output_reserve=0,source='unknown')
     return {k:v for k,v in value.items() if k in {'window','output_reserve'} or k.startswith('tokenizer_')}|dict(source='user_config')
+
+
+def current():
+    """Public capacity for the selected model; an unconfigured assistant stays usable."""
+    from .model_catalog import require_active
+    try:
+        model=require_active()
+        return for_call(model['id'],model['model'],model['base_url'].rstrip('/')+'/chat/completions')
+    except (RuntimeError,ValueError,OSError):return dict(window=None,output_reserve=0,source='unknown')

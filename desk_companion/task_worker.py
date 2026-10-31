@@ -97,6 +97,7 @@ def main():
             host.agent = build_agent(host)
             bind_llm(host.agent.llm, require_item(model_id) if model_id else require_active(),
                      timeout=request["limits"]["call_timeout"])
+            host.agent.llm.on_context=lambda report:emit('context_admission',report)
             original_chat = host.agent.llm.chat
             count = 0
             def chat(*args, **kwargs):

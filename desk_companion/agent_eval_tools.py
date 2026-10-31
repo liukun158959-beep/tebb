@@ -12,7 +12,16 @@ FIXTURE_BODY='合成来源，仅用于模拟服务。\n2. 保留TLD\n.test .exam
 def prepare(spec, workspace, run_id, *, fixture):
     context=dict(run_id=run_id, prompt=spec['prompt'], selection=dict(skills=[],attachments=[]))
     executor=spec.get('executor')
-    if executor=='local_calendar':
+    if executor=='context':
+        from .collaboration import Collaboration
+        receipt='合成操作回执：'+json.dumps(spec['expected'],ensure_ascii=False)+'。状态未知，必须核对原回执，禁止重复创建。'
+        variant=spec['context_variant'];texts=[receipt]
+        if variant=='old':texts.extend('无关参考背景'+str(index)for index in range(24))
+        if variant=='long':texts=['参考背景。'*1600+receipt]
+        rows=[dict(id=str(index),conversation='synthetic-context',sender='user',text=text)for index,text in enumerate(texts)]
+        history=Collaboration._history(dict(messages=rows),dict(id='synthetic-context'))
+        context.update(history=history,history_rows=len(history),history_characters=sum(len(row['text'])for row in history))
+    elif executor=='local_calendar':
         from .scheduling import SchedulingService
         from .work_board import WorkBoardService
         calendar=SchedulingService(WorkBoardService(path=workspace)).local
@@ -49,7 +58,19 @@ def verify(spec, task, context):
     executor=spec.get('executor')
     proof=dict(verified=False)
     try:
-        if executor=='local_calendar':
+        if executor=='context':
+            from .agent_debug import listing,detail
+            calls=listing(task_id=task['id'])['items']
+            if len(calls)!=1:raise ValueError('context_case_requires_one_actual_model_call')
+            actual=detail(calls[0]['id'])['request']
+            material=next(message['content']for message in actual['messages']if message.get('role')=='user'
+                and isinstance(message.get('content'),str)and message['content'].startswith('历史对话资料（'))
+            observed=json.loads(material.split('\n',1)[1])
+            proof.update(history_rows=context['history_rows'],history_characters=context['history_characters'],
+                history_retained=observed==context['history'],
+                admissions=[event['data']for event in task.get('events',[])if event['kind']=='context_admission'])
+            if not proof['history_retained']:raise ValueError('actual_request_lost_history_material')
+        elif executor=='local_calendar':
             after=calendar_digest(context['calendar'])
             proof.update(before_sha256=context['before'],after_sha256=after)
             if context['before']!=after:raise ValueError('readonly_calendar_changed')

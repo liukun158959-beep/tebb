@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,6 +33,21 @@ class RealTokenizerTests(unittest.TestCase):
         self.assertIsNone(mt.count(media,self.binding)['tokens'])
         (Path(self.temp.name)/'chat_template.jinja').write_text('changed','utf-8')
         self.assertIsNone(mt.count(self.request,self.binding)['tokens'])
+
+    def test_execution_admission_recounts_the_actual_offline_template_with_tools(self):
+        from desk_companion.execution_context import prepare_request
+        import copy
+        messages=[dict(role='system',content='Permission read only'),dict(role='user',content='Current goal')]
+        for i,body in enumerate([dict(ok=True,source_id='original',text='Hello world '*2000),dict(recent=1),dict(recent=2)]):
+            messages.extend([dict(role='assistant',content='',tool_calls=[dict(id=str(i),type='function',function=dict(name='read_local_source',arguments='{}'))]),
+                             dict(role='tool',tool_call_id=str(i),content=json.dumps(body))])
+        request=dict(model='fixture',messages=messages,tools=[dict(type='function',function=dict(name='工具',parameters=dict(type='object')))])
+        before=copy.deepcopy(request);capacity={**self.binding,'window':1024,'output_reserve':128}
+        projected,report=prepare_request(request,capacity)
+        self.assertTrue(report['compacted']);self.assertEqual(report['input_source'],'tokenizer')
+        self.assertGreater(report['input_tokens_before'],896)
+        self.assertEqual(mt.count(projected,capacity)['tokens'],report['input_tokens'])
+        self.assertLessEqual(report['input_tokens'],896);self.assertEqual(request,before)
 
     def test_missing_tool_template_or_untrusted_loader_fails_without_guessing(self):
         self.tokenizer.chat_template="{% for m in messages %}{{m.role}} {{m.content}}{% endfor %}"

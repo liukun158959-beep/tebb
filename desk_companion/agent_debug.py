@@ -348,7 +348,7 @@ def detail(call_id):
 
 
 def execute_explanation(request, emit):
-    from atlas import LLM
+    from .execution_context import ExecutionLLM as LLM
     from .model_catalog import require_active
     from .sampling import parse_sampling
     item = detail(request["debug_call_id"])

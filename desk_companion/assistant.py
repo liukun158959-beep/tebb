@@ -1,9 +1,8 @@
-"""组装 Atlas Agent。配置只来自本项目 .env 和 user_state。"""
+"""组装Atlas Agent，模型身份来自模型目录，执行材料由产品适配器检查。"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from .envconf import require_llm_env
 from .feishu_tools import AGENDA_SPEC, CREATE_EVENT_SPEC, TASKS_SPEC
 from .github_tools import RECENT_SPEC, ROADMAP_SPEC, STATUS_SPEC
 from .github_repository import SPEC as REPOSITORY_SPEC
@@ -132,7 +131,8 @@ def build_agent(host):
     from .agent_debug import install
     install()
     try:
-        from atlas import Agent, LLM, Toolkit
+        from atlas import Agent, Toolkit
+        from .execution_context import ExecutionLLM
         from atlas.journal import InMemoryJournal
         from atlas.plugins.token_cost import TokenCostPlugin
     except ImportError as exc:
@@ -144,7 +144,8 @@ def build_agent(host):
     if host is None:
         raise RuntimeError("build_agent 需要 host，才能挂气泡流式和用量。")
     state: UserState = host.state
-    cfg = require_llm_env()
+    from .model_catalog import require_active
+    model = require_active()
     tools = Toolkit()
     tools.register(**AGENDA_SPEC)
     tools.register(**TASKS_SPEC)
@@ -172,22 +173,17 @@ def build_agent(host):
                             lambda text: host.ui(lambda: host.on_stream_status(text))):
         tools.register(**spec)
     agent = Agent(
-        llm=LLM(
-            api_key=cfg["ATLAS_API_KEY"],
-            base_url=cfg["ATLAS_BASE_URL"],
-            model=cfg["ATLAS_MODEL"],
+        llm=ExecutionLLM(
+            api_key=model['api_key'],base_url=model['base_url'],model=model['model'],context_model_id=model['id'],
         ),
         tools=tools,
         system_prompt=build_system_prompt(state.persona),
         journal=InMemoryJournal(save_full_payload=True),
         max_steps=state.max_steps,
+        compact_threshold=None,
     )
-    from .video_context import VideoContextCompactManager
     from .model_catalog import bind_llm
-    bind_llm(agent.llm, dict(api_key=cfg['ATLAS_API_KEY'],base_url=cfg['ATLAS_BASE_URL'],model=cfg['ATLAS_MODEL']))
-
-    agent.compact_manager = VideoContextCompactManager(llm=agent.llm)
-    agent.runtime.compact = agent.compact_manager
+    bind_llm(agent.llm,model)
     from .stream_plugin import BubbleStreamPlugin
 
     agent.plugin_manager.register(BubbleStreamPlugin(host=host))

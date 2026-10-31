@@ -153,6 +153,7 @@ def bind_llm(llm, item: dict, timeout=90) -> None:
 
     client = openai_client(api_key=item["api_key"], base_url=item["base_url"], timeout=timeout)
     llm.bind_client(client, model=item["model"], owned=True)
+    if hasattr(llm,'context_model_id'):llm.context_model_id=item.get('id','')
 
 
 def _seed_from_env() -> dict:

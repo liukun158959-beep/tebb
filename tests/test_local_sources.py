@@ -159,7 +159,7 @@ class LocalSourceTests(unittest.TestCase):
         from atlas.testing import FakeLLM
         from desk_companion.local_api.host import HeadlessApp
         host = HeadlessApp()
-        with patch.object(assistant, 'require_llm_env', return_value={'ATLAS_API_KEY':'test','ATLAS_BASE_URL':'http://example.invalid','ATLAS_MODEL':'fake'}):
+        with patch('desk_companion.model_catalog.require_active', return_value={'id':'fixture','api_key':'test','base_url':'http://example.invalid','model':'fake'}):
             host.agent = assistant.build_agent(host)
         seen = []
         fake = FakeLLM(['已根据附件回答。'])

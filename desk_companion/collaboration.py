@@ -676,7 +676,7 @@ class Collaboration:
     def _history(state, conversation):
         rows = [m for m in state['messages'] if m['conversation']==conversation['id'] and m.get('text')]
         covered = set(conversation.get('summary_ids', []))
-        history = [dict(sender=m['sender'],text=m['text'][:8000]) for m in rows if m['id'] not in covered][-20:]
+        history = [dict(sender=m['sender'],text=m['text']) for m in rows if m['id'] not in covered]
         if conversation.get('summary'): history.insert(0, dict(sender='conversation_summary',text=conversation['summary']))
         return history
 

@@ -196,7 +196,7 @@ class VideoTests(unittest.TestCase):
         statuses = []
         host = SimpleNamespace(state=state, ui=lambda fn: fn(), on_llm_delta=lambda _: None, on_stream_status=statuses.append)
         cfg = {"ATLAS_API_KEY": "fake", "ATLAS_BASE_URL": "https://example.invalid/v1", "ATLAS_MODEL": "fake"}
-        with patch.object(assistant, "require_llm_env", return_value=cfg): agent = assistant.build_agent(host)
+        with patch('desk_companion.model_catalog.require_active',return_value=dict(id='fixture',api_key=cfg['ATLAS_API_KEY'],base_url=cfg['ATLAS_BASE_URL'],model=cfg['ATLAS_MODEL'])):agent=assistant.build_agent(host)
         call = lambda name, args: {"role": "assistant", "content": "", "tool_calls": [{"id": "v"+name, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]}
         sid = hashlib.sha256(URL.encode()).hexdigest()[:24]
         agent.llm = FakeLLM([call("read_video", {"url": URL}), "摘要：00:30 调用工具并验证结果。",

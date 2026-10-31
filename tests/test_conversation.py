@@ -99,9 +99,9 @@ class ConversationServiceTests(unittest.TestCase):
         settings = state.load_state(0, 0, persist=False)
         settings.session_id = 'unit-session'
         self.service = ConversationService(settings)
-        with patch.object(assistant, 'require_llm_env', return_value=dict(
-                ATLAS_API_KEY='fixture', ATLAS_BASE_URL='https://example.invalid/v1', ATLAS_MODEL='fake')), \
-             patch('atlas.LLM', return_value=FakeLLM(script)), \
+        with patch('desk_companion.model_catalog.require_active', return_value=dict(
+                id='fixture',api_key='fixture',base_url='https://example.invalid/v1',model='fake')), \
+             patch('desk_companion.execution_context.ExecutionLLM', return_value=FakeLLM(script)), \
              patch('desk_companion.model_catalog.bind_llm'):
             self.service.agent = assistant.build_agent(self.service)
         self.service.engage_model = Mock()

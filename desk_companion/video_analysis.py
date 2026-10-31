@@ -276,7 +276,7 @@ def analyze(request, emit, llm, source):
 
 
 def execute(request, emit):
-    from atlas import LLM
+    from .execution_context import ExecutionLLM as LLM
     from .model_catalog import require_active, require_item
     from .sampling import parse_sampling
     emit("tool_start", {"tool": "read_video", "read_only": True})

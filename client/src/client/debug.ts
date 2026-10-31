@@ -147,12 +147,12 @@ export const FEISHU_LOGGED_IN: FeishuSnap = {
 };
 
 export const DEBUG_CONTEXT: ContextView = {
-  budget: 128000,
-  tool_reserve: 16000,
+  budget: null,
+  tool_reserve: null,
   before: 180000,
   estimate: 140000,
   saved: 40000,
-  over: true,
+  over: null,
   summary: "博士要先看今天的空档，再排三步。",
   covered: [
     { role: "user", text: "先看今天有没有空" },

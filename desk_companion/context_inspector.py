@@ -17,7 +17,7 @@ def budget(request,response,capacity):
     known=window is not None and tokens is not None
     return dict(input_tokens=tokens,input_source='provider' if actual else local['source'],window=window,
                 output_reserve=reserved,remaining=max(0,window-tokens-reserved) if known else None,
-                over_by=max(0,tokens+reserved-window) if known else 0,tokenizer=local,
+                over_by=max(0,tokens+reserved-window) if known else None,tokenizer=local,
                 tokenizer_dir=capacity.get('tokenizer_dir',''),
                 capacity_source=capacity.get('source','unknown'))
 

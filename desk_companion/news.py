@@ -343,7 +343,7 @@ def phase(emit, kind, name, operation):
 
 
 def summarize(day, cfg, candidates, emit):
-    from atlas import LLM
+    from .execution_context import ExecutionLLM as LLM
     from .model_catalog import require_active
     model = require_active()
     llm = LLM(api_key=model["api_key"], base_url=model["base_url"], model=model["model"])

@@ -1,4 +1,4 @@
-"""当前会话全量注入。估算超过输入预算时，把更早的原文收成一段可见摘要。"""
+"""保留原历史与显式手动摘要；最终消息/工具容量由执行适配器核对。"""
 from __future__ import annotations
 
 import json
@@ -8,14 +8,11 @@ from pathlib import Path
 from .memory import memory_path, session_for_model
 
 TZ = timezone(timedelta(hours=8))
-INPUT_BUDGET = 128_000
-TOOL_RESERVE = 16_000
-SUMMARY_ROOM = 4_000
 PACK_MARK = "【上下文压缩】"
 
 _ASK = (
     "把下面更早的对话压成一段中文。"
-    "保留决定、人名、时间、未完成的事。"
+    "保留授权与禁止事项、当前目标、决定、人名、时间、未完成事项、原操作编号、失败和未知回执；未知不能改成成功。"
     "不要编。不要客套。不要调用工具。压完直接给正文。"
 )
 
@@ -67,15 +64,19 @@ def context_view(session_id: str, system_prompt: str) -> dict:
     rows = session_for_model(session_id)
     before = system + estimate_messages(rows)
     estimate = system + estimate_messages(_inject_rows_from(rows, pack))
+    from .model_capacity import current
+    capacity=current();window=capacity.get('window');reserve=capacity.get('output_reserve',0)
     return {
-        "budget": INPUT_BUDGET,
-        "tool_reserve": TOOL_RESERVE,
+        "budget": window,
+        "tool_reserve": reserve if window is not None else None,
+        "capacity_source": capacity.get('source','unknown'),
+        "estimate_source": "character_heuristic_history_only",
         "before": before,
         "estimate": estimate,
         "saved": before - estimate,
         "summary": pack["summary"] if pack else "",
         "covered": pack["covered"] if pack else [],
-        "over": estimate + TOOL_RESERVE > INPUT_BUDGET,
+        "over": None,
     }
 
 
@@ -94,18 +95,9 @@ def prepare_injection(
         raise RuntimeError("本轮正文必须是字符串。")
     rows = _without_current(session_for_model(session_id), exclude_user)
     pack = _read_session(session_id)
-    room = INPUT_BUDGET - TOOL_RESERVE - estimate_tokens(system_prompt) - estimate_tokens(current_text)
-    if room < 0:
-        raise RuntimeError(
-            "这一轮加上系统提示已经超过 128000 token。"
-            "恢复：缩短这句话，或去掉附上的飞书正文后再发。"
-        )
     if manual:
         return _compress_manual(session_id, rows, pack, complete, save or save_pack)
-    inject = _inject_rows_from(rows, pack)
-    if estimate_messages(inject) <= room:
-        return inject
-    return _compress_auto(session_id, rows, pack, room, complete, save or save_pack)
+    return _inject_rows_from(rows, pack)
 
 
 def raw_tail(session_id: str) -> list[dict]:
@@ -134,40 +126,13 @@ def _compress_manual(session_id: str, rows: list[dict], pack: dict | None, compl
     prefix, tail = _last_exchange(uncovered)
     if not prefix:
         raise RuntimeError(
-            "还没有更早的对话可以压缩。恢复：继续聊几句，或等估算超过 128000 时自动压。"
+            "还没有更早的对话可以整理。请保留最近一轮，继续对话后再手动整理。"
         )
     summary = _summarize(pack, prefix, complete)
     covered = list(pack["covered"]) if pack else []
     covered.extend(prefix)
     saved = save(session_id, summary, covered)
     return _inject_rows_from(rows, saved)
-
-
-def _compress_auto(session_id: str, rows: list[dict], pack: dict | None, room: int, complete, save) -> list[dict]:
-    if room < SUMMARY_ROOM:
-        raise RuntimeError(
-            "留下摘要的位置之后，这一轮已经放不下。"
-            "恢复：缩短这句话，或在记忆页删掉更早的对话后再发。"
-        )
-    inject = _inject_rows_from(rows, pack)
-    prefix, tail = _fit_prefix(inject, room - SUMMARY_ROOM)
-    if not prefix:
-        raise RuntimeError(
-            "最近的原文已经放不进 128000 token。"
-            "恢复：缩短更早的对话，或在记忆页删掉几句后再发。"
-        )
-    folded = [row for row in prefix if row.get("kind") != "pack"]
-    summary = _summarize(pack, folded, complete)
-    covered = list(pack["covered"]) if pack else []
-    covered.extend({"role": row["role"], "text": row["text"]} for row in folded)
-    draft = {"summary": summary.strip(), "covered": covered}
-    built = _inject_rows_from(rows, draft)
-    if estimate_messages(built) > room:
-        raise RuntimeError(
-            "压缩之后仍然超过 128000 token。"
-            "恢复：在记忆页删掉更早的对话后再发。"
-        )
-    return _inject_rows_from(rows, save(session_id, summary, covered))
 
 
 def _summarize(pack: dict | None, folded: list[dict], complete) -> str:
@@ -189,24 +154,6 @@ def _summarize(pack: dict | None, folded: list[dict], complete) -> str:
             "压缩结果是空的。恢复：再压一次；仍空就删掉 memory/context_pack.json 后重试。"
         )
     return text.strip()
-
-
-def _fit_prefix(rows: list[dict], tail_room: int) -> tuple[list[dict], list[dict]]:
-    if tail_room < 0:
-        raise RuntimeError("压缩尾部预算不能为负。")
-    tail: list[dict] = []
-    used = 0
-    for row in reversed(rows):
-        cost = 4 + estimate_tokens(str(row.get("text") or ""))
-        if tail and used + cost > tail_room:
-            break
-        if not tail and cost > tail_room:
-            break
-        tail.append(row)
-        used += cost
-    tail.reverse()
-    prefix = rows[: len(rows) - len(tail)]
-    return prefix, tail
 
 
 def _last_exchange(rows: list[dict]) -> tuple[list[dict], list[dict]]:

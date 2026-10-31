@@ -53,8 +53,8 @@ class RegressionTests(unittest.TestCase):
         host = SimpleNamespace(state=SimpleNamespace(persona="你是凯尔希。", max_steps=8),
                                ui=lambda fn: fn(), on_llm_delta=lambda _: None,
                                on_stream_status=lambda _: None)
-        with patch.object(assistant, "require_llm_env", return_value={
-            "ATLAS_API_KEY": "test-only", "ATLAS_BASE_URL": "http://example.invalid/v1", "ATLAS_MODEL": "test",
+        with patch('desk_companion.model_catalog.require_active', return_value={
+            'id':'fixture','api_key':'test-only','base_url':'http://example.invalid/v1','model':'test',
         }):
             agent = assistant.build_agent(host)
         names = {tool["function"]["name"] for tool in agent.tools.to_openai_tools()}
@@ -91,10 +91,11 @@ class RegressionTests(unittest.TestCase):
         context_pack.drop_pack_if_covered("s", "user", "旧问题")
         self.assertEqual(context_pack.context_view("s", "系统")["summary"], "")
 
-    def test_oversize_current_turn_is_rejected(self):
-        with self.assertRaises(RuntimeError):
-            context_pack.prepare_injection("s", "系统", "字" * 128000, exclude_user=None,
-                                           complete=lambda _: self.fail("本轮正文不能压缩"), manual=False)
+    def test_unknown_window_is_not_rejected_by_a_fixed_character_token_guess(self):
+        rows=context_pack.prepare_injection("s", "系统", "字" * 128000, exclude_user=None,
+            complete=lambda _: self.fail("不能按猜测容量自动摘要"),manual=False,
+            save=lambda *_:self.fail("不能自动改写摘要"))
+        self.assertIsInstance(rows,list)
 
     def test_models_hide_keys_and_keep_one_entry(self):
         patch.object(model_catalog, "catalog_path", return_value=self.root / "models.json").start()

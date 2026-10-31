@@ -136,7 +136,7 @@ class DebugTests(unittest.TestCase):
                 llm = LLM(**kwargs)
                 return llm
             emitted = []
-            with patch('desk_companion.model_network.openai_client',side_effect=lambda **kw:OpenAI(api_key='test',base_url='https://example.invalid/v1',http_client=transport,max_retries=0)), patch('atlas.LLM', side_effect=make_llm), patch('desk_companion.model_catalog.require_active', return_value={
+            with patch('desk_companion.model_network.openai_client',side_effect=lambda **kw:OpenAI(api_key='test',base_url='https://example.invalid/v1',http_client=transport,max_retries=0)), patch('desk_companion.execution_context.ExecutionLLM', side_effect=make_llm), patch('desk_companion.model_catalog.require_active', return_value={
                     'model': 'test', 'api_key': 'test', 'base_url': 'https://example.invalid/v1'}):
                 debug.execute_explanation({'debug_call_id': source_id, 'text': '解读', 'limits': {'call_timeout': 30},
                     'sampling': {'reasoning_effort': 'low', 'temperature': .5, 'top_p': 1}}, lambda k,d: emitted.append((k,d)))

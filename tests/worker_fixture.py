@@ -67,11 +67,9 @@ def extract_video(*args, **kwargs):
 # Standby preloads the adapter; keep this fixture on FakeLLM while the SDK
 # import guard still rejects accidental provider imports in the tool loop.
 with patch.dict(sys.modules, {"desk_companion.collaboration_llm": SimpleNamespace(CollaborationLLM=FakeLLM)}), \
-     patch.object(assistant, "require_llm_env", return_value={"ATLAS_API_KEY":"test-only",
-        "ATLAS_BASE_URL":"http://example.invalid/v1", "ATLAS_MODEL":"fake"}), \
      patch.object(assistant, "build_agent", build), patch.object(model_catalog, "bind_llm"), \
-     patch.object(model_catalog, "require_active", return_value={"model":"fake", "api_key":"test-only", "base_url":"http://example.invalid/v1"}), \
-     patch("atlas.LLM", side_effect=video_llm), \
+     patch.object(model_catalog, "require_active", return_value={"id":"fixture","model":"fake", "api_key":"test-only", "base_url":"http://example.invalid/v1"}), \
+     patch("desk_companion.execution_context.ExecutionLLM", side_effect=video_llm), \
      patch.object(video, "extract", extract_video), \
      patch("desk_companion.feishu_auth.create_markdown_doc", create_note):
     main()

@@ -1,6 +1,7 @@
 """Product policies for collaboration; Atlas owns transport and stream assembly."""
-from atlas.llm import LLM, ChatCallbacks, ChatOptions
+from atlas.llm import ChatCallbacks, ChatOptions
 from openai import OpenAI
+from .execution_context import ExecutionLLM
 
 
 class CollaborationLLM:
@@ -15,6 +16,7 @@ class CollaborationLLM:
         self.on_reasoning = None
         self.on_progress = None
         self.on_tool_delta = None
+        self.on_context = None
 
     def __enter__(self): return self
 
@@ -35,7 +37,8 @@ class CollaborationLLM:
                 self.client = http_client(self.timeout)
             sdk = OpenAI(api_key=self.model['api_key'], base_url=self.model['base_url'],
                          timeout=self.client.timeout, max_retries=0, http_client=self.client)
-            self._llm = LLM(model=self.model['model'], client=sdk)
+            self._llm = ExecutionLLM(model=self.model['model'],client=sdk,context_model_id=self.model.get('id',''),
+                                     on_context=lambda report:self.on_context(report)if self.on_context else None)
         extra = {'thinking': {'clear_thinking': False}, 'tool_stream': True} if self.preserve_reasoning else None
         try:
             return self._llm.chat(messages, tools, options=ChatOptions(

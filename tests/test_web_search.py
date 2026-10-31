@@ -137,7 +137,7 @@ class SearchTests(unittest.TestCase):
         self.transport(lambda r: httpx.Response(503, text='PRIVATE_TOKEN'))
         cfg = dict(ATLAS_API_KEY='test-secret', ATLAS_BASE_URL='https://example.invalid/v1', ATLAS_MODEL='fake')
         host = SimpleNamespace(state=SimpleNamespace(persona='助手', max_steps=8), ui=lambda fn: fn(), on_llm_delta=lambda _: None, on_stream_status=lambda _: None)
-        with patch.object(assistant, 'require_llm_env', return_value=cfg): agent = assistant.build_agent(host)
+        with patch('desk_companion.model_catalog.require_active',return_value=dict(id='fixture',api_key=cfg['ATLAS_API_KEY'],base_url=cfg['ATLAS_BASE_URL'],model=cfg['ATLAS_MODEL'])):agent=assistant.build_agent(host)
         agent.llm = FakeLLM([{'role': 'assistant', 'content': '', 'tool_calls': [{'id': 's1', 'type': 'function', 'function': {'name': 'web_search', 'arguments': '{"query":"苏州天气"}'}}]}, '未取得来源。'])
         agent.run('苏州天气', run_id='search-failure')
         tool = [e for e in agent.journal.get_events('search-failure') if e.event_type == 'tool_after_call'][-1]

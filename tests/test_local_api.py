@@ -31,9 +31,9 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         from desk_companion.tasks import TaskManager
         self.host._tasks = TaskManager(self.host, command=[sys.executable, "-u", "-c", "exec(open('tests/worker_fixture.py', encoding='utf-8').read())"])
         self.addCleanup(self.host._tasks.shutdown)
-        with patch.object(assistant, "require_llm_env", return_value={
-            "ATLAS_API_KEY": "test-only", "ATLAS_BASE_URL": "http://example.invalid/v1", "ATLAS_MODEL": "fake",
-        }), patch('atlas.LLM', return_value=FakeLLM(["本地流式回归正常。"])), \
+        with patch('desk_companion.model_catalog.require_active', return_value={
+            'id':'fixture','api_key':'test-only','base_url':'http://example.invalid/v1','model':'fake',
+        }), patch('desk_companion.execution_context.ExecutionLLM', return_value=FakeLLM(["本地流式回归正常。"])), \
                 patch('desk_companion.model_catalog.bind_llm'):
             self.host.agent = assistant.build_agent(self.host)
         self.host.agent.llm.sampling = None

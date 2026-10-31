@@ -86,7 +86,7 @@ class VideoAnalysisTests(unittest.TestCase):
         from types import SimpleNamespace
         llm = SimpleNamespace(bind_client=lambda *args, **kwargs: None)
         with patch.object(video, "read_video", return_value={"source_id": "a" * 24}), \
-             patch("atlas.LLM", return_value=llm), \
+             patch("desk_companion.execution_context.ExecutionLLM", return_value=llm), \
              patch("desk_companion.model_catalog.require_active", return_value={"model": "fake", "api_key": "fake", "base_url": "http://fake"}), \
              patch.object(analysis, "analyze", side_effect=TimeoutError()), \
              patch("desk_companion.video_archive.VideoArchive.finish") as archive:
@@ -99,7 +99,7 @@ class VideoAnalysisTests(unittest.TestCase):
         missing = {**self.source, "segments":[], "subtitle_status":"unavailable", "subtitle_notice":"B站字幕接口暂未成功返回（-352），请稍后重试。"}
         video.atomic_write(video.source_path("session", "a"*24),missing)
         with patch.object(video, "read_video", return_value={"source_id":"a"*24,"subtitle_status":"unavailable"}), \
-             patch("atlas.LLM") as model, patch.object(analysis,"analyze") as analyze, \
+             patch("desk_companion.execution_context.ExecutionLLM") as model, patch.object(analysis,"analyze") as analyze, \
              patch("desk_companion.video_archive.VideoArchive.finish") as archive:
             analysis.execute({**self.request,"video_url":self.source["url"]},self.emit)
         model.assert_not_called(); analyze.assert_not_called(); archive.assert_not_called()

@@ -154,9 +154,10 @@ def main():
     if args.project_sdk=='official'and not args.live:parser.error('official SDK requires --live')
     if args.live and projects and args.project_sdk!='official':parser.error('live project cases require explicit --project-sdk official')
     if not 20<=args.project_timeout<=1200:parser.error('project-timeout 20..1200')
-    from desk_companion import model_catalog,model_network
+    from desk_companion import model_catalog,model_network,model_capacity
     model=model_catalog.require_active() if args.live else dict(id='eval-fixture',model='eval-fixture',api_key='eval-fixture-only',base_url='')
     policy=model_network.load() if args.live else dict(mode='direct')
+    capacity=model_capacity.load(model['id'])if args.live else{}
     server=None
     if not args.live:
         server=ThreadingHTTPServer(('127.0.0.1',0),Fixture)
@@ -172,6 +173,7 @@ def main():
     CREDENTIAL_PATH.write_text(json.dumps(dict(active=model['id'],items=[model])),'utf-8')
     NETWORK_PATH=profile/'model-network.json'
     NETWORK_PATH.write_text(json.dumps(policy),'utf-8')
+    (profile/'model-capacity.json').write_text(json.dumps({model['id']:capacity}if capacity else{}),'utf-8')
     previous=os.environ.get('DESK_COMPANION_DATA_DIR')
     os.environ['DESK_COMPANION_DATA_DIR']=str(profile)
     for key in ('DESK_TERMINAL_PORT','DESK_TERMINAL_TOKEN'):os.environ.pop(key,None)
@@ -183,6 +185,8 @@ def main():
                 source_commit='',semantic_scope='machine-verifiable fixed tasks; not a general capability guarantee')
     import subprocess
     report['source_commit']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
+    report['capacity_snapshot']=dict(window=capacity.get('window'),output_reserve=capacity.get('output_reserve'),
+        tokenizer_bound=bool(capacity.get('tokenizer_dir')),tokenizer_signature=capacity.get('tokenizer_signature'))
     import hashlib
     source_paths=(
             'scripts/eval_agent.py','desk_companion/agent_evals.py','desk_companion/tasks.py',
@@ -193,7 +197,9 @@ def main():
             'desk_companion/agent_eval_projects.py','scripts/eval_project_host.py','scripts/eval_project_fixture.py',
             'desk_companion/project_environments.py','desk_companion/project_environment_store.py','desk_companion/project_operations.py',
             'desk_companion/project_tools.py','desk_companion/project_receipts.py','desk_companion/docker_sandboxes.py',
-            'desk_companion/worker_rpc.py','desk_companion/bridge.py','desk_companion/local_api/host.py','desk_companion/local_api/server.py')
+            'desk_companion/worker_rpc.py','desk_companion/bridge.py','desk_companion/local_api/host.py','desk_companion/local_api/server.py',
+            'desk_companion/execution_context.py','desk_companion/model_capacity.py','desk_companion/model_tokenizer.py',
+            'desk_companion/context_pack.py','desk_companion/assistant.py','desk_companion/model_catalog.py')
     hashes={}
     for name in source_paths:
         raw=(ROOT/name).read_bytes()
@@ -263,7 +269,7 @@ def main():
                         row['error']=accepted.get('error','workflow admission rejected');raise ValueError('workflow admission rejected')
                     run=accepted['run'];task_id=run['task_id'];row['workflow_run']=run['id']
                 else:
-                    task_id=manager.submit(context['prompt'],'eval-'+run_id,'collaboration',workflow='collaboration',kind=spec.get('kind','chat'),role=dict(id='research',name='验收助手',role='按实际输入完成可验证任务',tools=spec.get('tools',[])),selection=context['selection'],context=[],members=[],model_id=model['id'],collab_run=run_id,collab_path=str(workspace),budget=spec.get('budget',2),search_budget=0,fetch_budget=spec.get('fetch_budget',0),task_limits=dict(call_timeout=min(args.timeout,90),task_timeout=args.timeout),sampling=dict(reasoning_effort='low',temperature=0.1,top_p=1))
+                    task_id=manager.submit(context['prompt'],'eval-'+run_id,'collaboration',workflow='collaboration',kind=spec.get('kind','chat'),role=dict(id='research',name='验收助手',role='按实际输入完成可验证任务',tools=spec.get('tools',[])),selection=context['selection'],context=context.get('history',[]),members=[],model_id=model['id'],collab_run=run_id,collab_path=str(workspace),budget=spec.get('budget',2),search_budget=0,fetch_budget=spec.get('fetch_budget',0),task_limits=dict(call_timeout=min(args.timeout,90),task_timeout=args.timeout),sampling=dict(reasoning_effort='low',temperature=0.1,top_p=1))
                 row['task_id']=task_id;save()
                 if not lifecycle and not project:row['task_ids']=[task_id]
                 row['stage']='wait'

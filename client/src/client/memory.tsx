@@ -15,14 +15,14 @@ export type MemoryTurn = {
 };
 
 export type ContextView = {
-  budget: number;
-  tool_reserve: number;
+  budget: number | null;
+  tool_reserve: number | null;
   before: number;
   estimate: number;
   saved: number;
   summary: string;
   covered: MemoryTurn[];
-  over: boolean;
+  over: boolean | null;
 };
 
 export type MemoryPayload = {
@@ -122,7 +122,7 @@ export function ContextCard(props: {
   }
   const covered = context.covered || [];
   const verbatim = props.verbatim || [];
-  const hint = `${reductionText(context)}${context.over ? " · 下次发送会先压缩" : ""}`;
+  const hint = reductionText(context);
   if (bar) {
     return (
       <div
@@ -132,7 +132,7 @@ export function ContextCard(props: {
         data-context-before={context.before}
         data-context-estimate={context.estimate}
         data-context-saved={context.saved}
-        data-context-over={context.over ? "1" : "0"}
+        data-context-over={context.over === null ? "unknown" : context.over ? "1" : "0"}
         className="mb-2 text-sm"
       >
         <div className="composer-toolbar">
@@ -145,7 +145,7 @@ export function ContextCard(props: {
             className="desk-menu-item"
             onClick={() => setOpened((value) => !value)}
           >
-            上下文 · {Math.round(context.estimate / Math.max(1, triggerCap(context)) * 100)}%{context.over ? " · 待压缩" : ""} ⌄
+            上下文 · {triggerCap(context) === null ? "容量未知" : "历史估算"} ⌄
           </button>
           {opened && <button
             type="button"
@@ -178,13 +178,12 @@ export function ContextCard(props: {
       data-context-before={context.before}
       data-context-estimate={context.estimate}
       data-context-saved={context.saved}
-      data-context-over={context.over ? "1" : "0"}
+      data-context-over={context.over === null ? "unknown" : context.over ? "1" : "0"}
       className="border border-border px-3 py-3 text-sm"
     >
       <div className="flex items-center justify-between gap-3">
         <p>
           {reductionText(context)}
-          {context.over ? "，下一次发送会先压缩" : ""}
         </p>
         <button
           type="button"
@@ -208,14 +207,16 @@ export function ContextCard(props: {
   );
 }
 
-function triggerCap(context: ContextView): number {
-  return context.budget - context.tool_reserve;
+function triggerCap(context: ContextView): number | null {
+  return typeof context.budget === "number" && typeof context.tool_reserve === "number"
+    ? context.budget - context.tool_reserve : null;
 }
 
 function reductionText(context: ContextView): string {
   const cap = triggerCap(context);
   if (!context.summary) {
-    return `估算 ${context.estimate} / ${cap}`;
+    return cap === null ? `历史字符估算 ${context.estimate} · 模型窗口未知`
+      : `历史估算 ${context.estimate} / 声明可用 ${cap}（不含工具）`;
   }
   if (typeof context.before !== "number" || typeof context.saved !== "number") {
     return "压缩前后的差额还没有返回。恢复：停掉当前客户端，在 desk-companion\\client 里重新运行 pnpm tauri dev。";
@@ -227,19 +228,19 @@ function reductionText(context: ContextView): string {
 
 function ContextMeter(props: { context: ContextView }) {
   const cap = triggerCap(props.context);
-  const percent = cap <= 0 ? 100 : Math.round((props.context.estimate / cap) * 100);
-  const fill = Math.min(100, percent);
-  const label = `${percent}% · ${props.context.estimate} / ${cap}`;
+  const percent = cap === null ? undefined : cap <= 0 ? 100 : Math.round((props.context.estimate / cap) * 100);
+  const fill = percent === undefined ? 0 : Math.min(100, percent);
+  const label = reductionText(props.context);
   return (
     <div className="mt-2 flex items-center gap-3">
       <div
         data-context-meter=""
         data-context-progress={percent}
-        data-context-cap={cap}
-        role="progressbar"
-        aria-valuemin={0}
-        aria-valuemax={cap}
-        aria-valuenow={props.context.estimate}
+        data-context-cap={cap ?? undefined}
+        role={cap === null ? "status" : "progressbar"}
+        aria-valuemin={cap === null ? undefined : 0}
+        aria-valuemax={cap ?? undefined}
+        aria-valuenow={cap === null ? undefined : props.context.estimate}
         aria-label={label}
         className="h-1 min-w-0 flex-1"
         style={{ background: "hsl(var(--border))" }}
@@ -277,7 +278,7 @@ function ContextBody(props: {
   if (!props.context.summary) {
     return (
       <p data-context-summary="" className="mt-2 text-muted-foreground">
-        全部按原文发给模型。
+        历史原文用于准备下一轮；实际发送材料可在调用上下文查看。
       </p>
     );
   }
