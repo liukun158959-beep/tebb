@@ -227,7 +227,7 @@ def initialize_workspace(path=None):
 
 
 class Collaboration:
-    def __init__(self, path=None, managers=None, start=True,readonly_runtime='atlas'):
+    def __init__(self, path=None, managers=None, start=True,readonly_runtime='legacy'):
         if readonly_runtime not in {'atlas','legacy'}:raise ValueError('未知只读研究运行时。')
         self.readonly_runtime=readonly_runtime
         self.path = Path(path or workspace_path())

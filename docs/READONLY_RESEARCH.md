@@ -1,10 +1,10 @@
 # 只读研究运行时与验证
 
-#171按[ADR0034](adr/0034-atlas-readonly-research-workers.md)将Windows上新建、独立collect分工的工具循环交给固定Atlas fdafaecab45303314829f4f5af4fee10365c6dc0。生命周期、来源、权限、实际回执、独立审阅、Ledger仍由产品拥有。旧任务与不匹配角色保持兼容。任务不是因Atlas返回success就完成。
+#171按[ADR0034](adr/0034-atlas-readonly-research-workers.md)提供Windows上新建、独立collect分工的显式Atlas试点，固定fdafaecab45303314829f4f5af4fee10365c6dc0。生命周期、来源、权限、实际回执、独立审阅、Ledger仍由产品拥有。真实对照尚未达到业务通过，默认继续legacy，#171保留质量/默认切换验收。任务不是因Atlas返回success就完成。
 
 ## 提交与观测
 
-沿用[AGENT_DEBUG](AGENT_DEBUG.md)的认证RPC和协作action/send、状态与任务查询。新建独立研究分工并授权联网搜索/网页读取后，调度器自动选择；不新增任意命令入口。只读工具也不能越过角色、附件与来源边界。`Collaboration(readonly_runtime='legacy')`是隔离验证的依赖注入选择，生产默认atlas，不修改用户配置。
+沿用[AGENT_DEBUG](AGENT_DEBUG.md)的认证RPC和协作action/send、状态与任务查询。显式`Collaboration(readonly_runtime='atlas')`后，仅匹配权限和分工条件的任务进入试点。默认legacy，不修改用户配置；旧任务和依赖/写分工继续原路径。验证CLI的readonly_atlas_parallel明确启用此参数，其余模式及普通生命周期遵循默认。只读工具也不能越过角色、附件与来源边界。
 
 run的`execution_runtime`记录实际legacy或atlas_readonly；`runtime_observations`保留有界运行观察，含Atlas的loop_status和run_id。按父子run、task、call ID关联原任务事件、模型调用、来源、feedback_check、task_budget；查询错误与取消保持原语义。取消正在收发模型、阻塞读取和期限耗尽均经TaskManager回收实际工作进程；Windows父退出由Job收尾。远端推理是否同时停止不能从本地退出推断。Linux暂未验证父退出等价保护，默认不启用且对应对照明确跳过。
 

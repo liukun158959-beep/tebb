@@ -705,6 +705,7 @@ class CollaborationTests(unittest.TestCase):
             self.service.action({**action, "text": "不同消息"})
 
     def test_new_independent_research_child_selects_atlas_but_dependency_stays_legacy(self):
+        self.service=Collaboration(path=self.service.path,managers=self.service.managers,start=False,readonly_runtime='atlas')
         self.action(type='send',text='研究并写作',target='',mode='task');self.service.tick()
         self.work.complete(next(iter(self.work.items)),self.plan());self.service.tick()
         rows=self.state()['runs'];research,writer=rows[1:]
@@ -713,6 +714,13 @@ class CollaborationTests(unittest.TestCase):
         self.assertEqual(writer['execution_runtime'],'legacy')
         self.service.tick();request=self.work.requests['collab:'+research['id']+':0']
         self.assertEqual(request['execution_runtime'],expected_runtime);self.assertEqual(request['dependencies'],[])
+
+    def test_default_independent_child_retains_legacy_until_quality_gate_passes(self):
+        self.action(type='send',text='研究并写作',target='',mode='task');self.service.tick()
+        self.work.complete(next(iter(self.work.items)),self.plan());self.service.tick();self.service.tick()
+        research=self.state()['runs'][1]
+        self.assertEqual(research['execution_runtime'],'legacy')
+        self.assertEqual(self.work.requests['collab:'+research['id']+':0']['execution_runtime'],'legacy')
 
     def test_old_unmarked_child_keeps_legacy_runtime_when_dispatched(self):
         self.action(type='send',text='研究并写作',target='',mode='task');self.service.tick()

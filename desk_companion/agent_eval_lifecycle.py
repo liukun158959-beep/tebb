@@ -56,7 +56,7 @@ def execute(spec, *, profile, workspace, model_id, timeout, command=None, progre
         for kind in ('work','chat'):
             managers[kind]=TaskManager(path=profile/'memory'/f'eval-{tag}-{kind}.sqlite3',command=command)
         service=Collaboration(path=workspace,managers=managers,start=False,
-            readonly_runtime='atlas'if not readonly or spec['research_mode']=='atlas_parallel'else'legacy')
+            readonly_runtime='atlas'if readonly and spec['research_mode']=='atlas_parallel'else'legacy')
         for kind,manager in managers.items():manager.configure(2 if readonly and kind=='work'and spec['research_mode']!='serial'else 1,min(timeout,90),timeout,False)
         for ident in ('research','writer'):
             agent=next(a for a in service.snapshot()['state']['agents'] if a['id']==ident)
