@@ -9,6 +9,11 @@ def check(ident,dimension,status,message,*,basis='deterministic',required=True,*
     return dict(id=ident,dimension=dimension,status=status,message=message,basis=basis,required=required,**evidence)
 
 
+def current_goal(request):
+    # A leaf may deliver its own result without becoming the root synthesizer.
+    return request.get('objective',request['text'])if request.get('stage')=='deliver'and not request.get('parent_run')else request['text']
+
+
 def output_contract(goal,declared=None):
     if declared is not None:
         if not isinstance(declared,dict)or set(declared)-{'format','schema'}or declared.get('format')!='json':

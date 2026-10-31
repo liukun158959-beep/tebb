@@ -770,6 +770,7 @@ class CollaborationTests(unittest.TestCase):
         self.assertIn('SOURCE_CODE',json.dumps(req));self.assertIn('PUBLIC_BODY',json.dumps(req))
         self.assertEqual(set(req['required_sources']),{'repository','web'})
         self.assertEqual(req['objective'],'完整对比报告')
+        self.assertEqual(req['parent_run'],root['id'])
         self.work.complete('collab:'+writer['id']+':0','最终报告',state='failed');self.service.tick()
         self.assertEqual(self.state()['runs'][0]['chain']['state'],'failed')
 

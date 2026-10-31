@@ -185,5 +185,26 @@ class FeedbackTests(unittest.TestCase):
         _,checks,_=assess(dict(text='read research',collab_run='test',required_sources=['web']),'[preview](http://127.0.0.1:12345/)',[source],None,[])
         self.assertTrue(any(c['id']=='required_source_web'and c['status']=='fail'for c in checks))
 
+    def test_child_goal_does_not_inherit_root_output_format(self):
+        from desk_companion.delivery_feedback import assess
+        req=dict(text='只输出JSON对象。',objective='最终用Markdown段落。',parent_run='actual-parent',stage='deliver',collab_run='child')
+        _,checks,_=assess(req,'plain text',[],dict(complete=True,missing=[]),[])
+        self.assertTrue(any(c['id']=='output_format'and c['status']=='fail'for c in checks))
+        self.assertEqual(feedback.current_goal({**req,'parent_run':None}),req['objective'])
+
+    def test_rule_reference_keeps_canonical_scope_and_cannot_replace_semantics(self):
+        from desk_companion.feedback_review import material,interpret
+        rows=material('check facts','candidate',[],[])
+        known=[feedback.check('citation_provenance','source_url','pass','仅核对URL来源。')]
+        item=dict(requirement='overbroad model claim',dimension='source_url',rule_id='citation_provenance',status='supported',reason='matches',evidence=[])
+        result=interpret(dict(requirements=[item]),rows,verified_checks=known)
+        self.assertEqual(result[0]['status'],'pass');self.assertEqual(result[0]['verified_by'],'citation_provenance')
+        self.assertEqual(result[0]['requirement'],known[0]['message'])
+        self.assertFalse(feedback.report(result)['ok'])
+        for changes in [dict(rule_id='invented'),dict(dimension='reading'),dict(dimension='claim_support')]:
+            invalid=interpret(dict(requirements=[{**item,**changes}]),rows,verified_checks=known)
+            self.assertEqual(invalid[0]['status'],'unknown');self.assertFalse(feedback.report(invalid)['ok'])
+        self.assertEqual(interpret(dict(requirements=[item]),rows,verified_checks=[{**known[0],'status':'unknown'}])[0]['status'],'unknown')
+
 
 if __name__=='__main__':unittest.main()

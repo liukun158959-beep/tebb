@@ -188,7 +188,8 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     repair=feedback.RepairBudget()
     tool_receipts=[]
     consumed=0
-    goal=request.get('objective',request['text'])if request.get('stage')=='deliver'else request['text']
+    retained_declaration=None
+    goal=feedback.current_goal(request)
     structured=feedback.output_contract(goal,request.get('output_contract'))is not None
     format_repairs=0
     if kind == 'task': messages[0]["content"] += ("\n研究报告应读取一手正文并保留Markdown来源链接。搜索摘要不等于已读正文，"
@@ -215,7 +216,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     delivering=kind=='task' and request.get('stage')=='deliver'
     if delivering:
         extra['submit_deliverable']=dict(type='function',function=dict(name='submit_deliverable',description='提交完整交付。complete表示当前用户核心目标完成；missing只列阻塞当前目标的缺失。未被要求的附加信息缺口列limitations，不能把报告框架当完成。',parameters=dict(type='object',properties={'report':{'type':'string'},'complete':{'type':'boolean'},'missing':{'type':'array','items':{'type':'string'}},'limitations':{'type':'array','items':{'type':'string'}}},required=['report','complete','missing'],additionalProperties=False)))
-        messages[0]['content']+=('\n你负责最终综合交付。必须调用submit_deliverable提交完整成果，report严格遵守用户要求的格式：用户要求JSON时report本身为完整JSON字符串，不添加Markdown或额外说明；未指定时采用Markdown。逐项回应当前用户目标，结合所有前序成果；引用实际证据中的链接，不把空白表格或资料提纲当完整成果。'
+        messages[0]['content']+=('\n本阶段交付当前职责的完整候选，由后台统一核验。可直接给出用户要求格式的最终答复，或用submit_deliverable声明已知完成情况与缺口；该工具不是外部操作回执。report严格遵守用户要求：JSON时为完整JSON字符串，不添加Markdown或额外说明；未指定时采用Markdown。只回应当前职责，结合实际前序成果；引用实际证据中的链接，不把空白表格或资料提纲当完整成果。'
             'missing仅包含妨碍当前用户核心目标完成的缺失，例如没有读取被比较的项目或没有对比结论。未被用户要求、且不阻塞已有结论的版本/许可证信息、全源码阅读或本地运行结果，明确写入limitations和正文适用限制，不能自行扩为失败条件。'
             '当前目标确实未完成时complete=false；已完成且诚实说明附加缺口时complete=true。报告控制在约1500～2500中文字，事实、推断、尚未验证项分清。'
             '通用操作任务按实际回执简洁报告结果和失败阶段，无需写成长篇研究报告；不要重复执行前序已经完成的外部写入。'
@@ -279,6 +280,8 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
         messages[0]['content'] += prompt_extra
         messages.append(dict(role='user',content='当前工作目录授权：'+json.dumps(request.get('workspace',{}),ensure_ascii=False)))
     messages[0]['content']+='\n当前任务职责是本阶段需要执行的工作，整体目标用于理解背景与约束；不要把其他伙伴或其他阶段的分工动作重复当作自己的职责。已完成的工作依据实际交接与回执，不再次调度；无回执的事实仍是未知，工具权限不因整体目标扩大。'
+    if request.get('parent_run'):
+        messages[0]['content']+='\n后台已实际创建本子任务：'+json.dumps(dict(task_id=request.get('task_id'),parent_run=request['parent_run'],role=role.get('id'),stage=request.get('stage')),ensure_ascii=False)+'。分工已经发生；deliver只表示交付本子任务成果，不是负责人整体汇总，不再查成员或重复委派。整体目标中的其他阶段约束不变，但不转为本子任务额外工作。'
     if kind=='task'and not extra and not allowed_search and not allowed_fetch:
         messages[0]['content']+='\n本轮未提供执行工具。对已给定文本、计算或写作直接处理，不调用虚构函数或查询成员；需要外部操作却没有能力时按用户格式明确缺失，不能假报成功。'
         if request.get('stage')=='collect':messages[0]['content']+='当前已是父任务创建的子任务，分工已发生，不再做成员发现或重新委派；只完成本角色收到的具体工作。'
@@ -316,7 +319,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
         return extra[name]['implementation'](arguments)
 
     def latest_updates():
-        nonlocal applied,goal,structured
+        nonlocal applied,goal,structured,retained_declaration
         current = updates(request["collab_path"], request["collab_run"])
         if len(current)>applied:
             for ident in selected_materials(request['collab_path'],request['collab_run']).get('attachments', []):
@@ -326,8 +329,9 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
         if len(current) > applied:
             messages.append({"role": "user", "content": "本任务补充要求（按顺序，以最新要求修订）：\n" + "\n".join(current[applied:])})
             applied = len(current)
-            base=request.get('objective',request['text'])if delivering else request['text']
+            base=feedback.current_goal(request)
             goal=base+'\n本任务最新补充要求：\n'+'\n'.join(current)
+            retained_declaration=None
             structured=feedback.output_contract(goal,request.get('output_contract'))is not None
             emit('feedback_invalidated',dict(applied=applied))
             emit("collab_applied", applied)
@@ -570,7 +574,9 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
             emit('result',json.dumps(decision,ensure_ascii=False));return
         if kind=='task':
             from .delivery_feedback import assess
-            text,feedback_checks,audit=assess(request,text,sources,delivery,tool_receipts,goal=goal)
+            if delivery is not None:retained_declaration=delivery if not delivery['complete']or delivery['missing']else None
+            declared=delivery or retained_declaration
+            text,feedback_checks,audit=assess(request,text,sources,declared,tool_receipts,goal=goal)
             emit('feedback_draft',dict(answer=text))
             if audit is not None:emit('citation_check',audit)
             assessment=feedback.report(feedback_checks,receipts=tool_receipts)
@@ -591,11 +597,12 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                         llm.on_tool_delta=old_delta
                         emit('llm_end',dict(phase='feedback_review',duration_ms=int((time.monotonic()-started)*1000)))
                 try:
-                    reviewed=review(goal,text,sources,tool_receipts,review_call,handoffs=request.get('handoffs',[]),verified_checks=feedback_checks)
-                    protocol_issues=[c for c in reviewed if c['id']=='review_protocol'or c.get('invalid_evidence_ids')]
+                    assignment=dict(task_id=request.get('task_id'),parent_run=request['parent_run'],role=role.get('id'),stage=request.get('stage'),global_goal=request.get('objective',request['text']))if request.get('parent_run')else None
+                    reviewed=review(goal,text,sources,tool_receipts,review_call,handoffs=request.get('handoffs',[]),verified_checks=feedback_checks,assignment=assignment)
+                    protocol_issues=[c for c in reviewed if c['id']in{'review_protocol','review_semantic_missing'}or c.get('invalid_evidence_ids')or c.get('invalid_rule_reference')]
                     if protocol_issues and consumed<budget and repair.begin():
                         emit('feedback_review_repair',dict(reason='review_protocol_or_quote',candidate_unchanged=True))
-                        reviewed=review(goal,text,sources,tool_receipts,review_call,handoffs=request.get('handoffs',[]),verified_checks=feedback_checks,protocol_issues=protocol_issues)
+                        reviewed=review(goal,text,sources,tool_receipts,review_call,handoffs=request.get('handoffs',[]),verified_checks=feedback_checks,protocol_issues=protocol_issues,assignment=assignment)
                     feedback_checks.extend(reviewed)
                 except Exception as exc:
                     feedback_checks.append(feedback.check('review_unavailable','task_acceptance','unknown','独立审阅未完成，保留成果并标记待核验。',basis='model_assessment',error_type=type(exc).__name__))
@@ -605,8 +612,9 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                 emit('answer_reset',True);continue
             emit('feedback_check',assessment)
             if delivering:
-                emit('delivery_check',dict(ok=assessment['ok'],missing=delivery.get('missing',[])if delivery else ['缺少submit_deliverable'],
-                    limitations=delivery.get('limitations',[])if delivery else [],completion=assessment['completion'],scope=assessment['scope']))
+                emit('delivery_check',dict(ok=assessment['ok'],missing=declared.get('missing',[])if declared else [],candidate_origin='model_declaration'if delivery else'final_answer',
+                    declaration_origin='current'if delivery else'retained'if retained_declaration else'none',
+                    limitations=declared.get('limitations',[])if declared else [],completion=assessment['completion'],scope=assessment['scope']))
             if not assessment['ok']:
                 issues=[c for c in assessment['checks']if c.get('required',True)and c['status']!='pass']
                 if consumed<budget and repair.begin():
@@ -614,7 +622,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                         '。保留已有有效分析、真实图表及原操作编号，重新交付完整成果。严格遵守用户JSON/其他格式，不能只追加说明或修改清单。'+
                         '引用复制真实证据id，不能编造来源；必要时只读补齐已授权材料。图表复用已成功资产，确需修正才用原draft_id。'+
                         '不得重复写入、创建、发送或运行命令；未知副作用先按原编号只读核对，仍未知则明确未完成。'+
-                        ('必须调用submit_deliverable，report使用用户要求的最终格式；实质缺口保留complete=false和missing，不能为了通过而删去缺口。'if delivering else ''))])
+                        ('可直接给出修订后的完整候选，或调用submit_deliverable；都按用户最终格式。已声明的实质缺口不能为了通过而删除。'if delivering else ''))])
                     emit('status','正在按具体核验缺口定向修订，已有成果和原回执保留。');emit('answer_reset',True);continue
                 emit('answer_reset',True);emit('token',text)
                 raise PublicFailure('交付未完成：'+'；'.join(c['message']for c in issues)[:700])

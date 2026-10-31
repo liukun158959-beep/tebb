@@ -725,7 +725,7 @@ class Collaboration:
                     request = dict(workflow="collaboration", collab_path=str(self.path), collab_run=run["id"],conversation=run['conversation'],source_scope=run.get('parent') or run['id'],
                         role=run["agent_config"], kind=run["kind"], model_id=run["model_id"], context=run["context"], workspace=run.get("workspace"), selection=run.get("selection", {}),
                         reference_time=run.get("created",0), supplemented_at=run.get("supplemented_at"), members=run.get("members", []), require_execution=run.get('require_execution',False), applied=run["applied"], draft=run.get("parent_draft", ""), budget=max(0, call_budget(run['agent'],run['kind'],run.get('agent_config',{}).get('tools',()))-phase_calls(run)),
-                        objective=run.get('objective',run['input']),stage=run.get('stage','collect'),required_sources=run.get('required_sources',[]),requires_charts=run.get('requires_charts',False),
+                        objective=run.get('objective',run['input']),parent_run=run.get('parent'),stage=run.get('stage','collect'),required_sources=run.get('required_sources',[]),requires_charts=run.get('requires_charts',False),
                         search_budget=max(0, run.get('search_limit',2)-run.get("search_calls",0)),fetch_budget=max(0,run.get('fetch_limit',4)-run.get("fetch_calls",0)),
                         source_topics=run.get('source_topics',[]),
                         source_evidence=run.get("source_evidence",[]),evidence=run.get("evidence",[]),handoffs=run.get('handoffs',[]))

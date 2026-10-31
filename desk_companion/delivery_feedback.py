@@ -6,7 +6,7 @@ from .web_sources import render_citations,check_citations,source_catalog
 
 
 def assess(request,text,sources,delivery,receipts,*,goal=None):
-    if goal is None:goal=request.get('objective',request['text'])if request.get('stage')=='deliver'else request['text']
+    if goal is None:goal=feedback.current_goal(request)
     declared=request.get('output_contract')
     structured=feedback.output_contract(goal,declared)is not None
     checks=feedback.check_output(text,goal,declared)
@@ -34,8 +34,11 @@ def assess(request,text,sources,delivery,receipts,*,goal=None):
     if any(s.get('kind')=='page'and s.get('level')=='body'for s in sources):present.add('web')
     for missing in sorted(set(request.get('required_sources',[]))-present):
         checks.append(feedback.check('required_source_'+missing,'reading','fail','未取得本任务要求的一手正文来源：'+missing))
-    if request.get('stage')=='deliver':
-        accepted=delivery is not None and delivery['complete']and not delivery['missing']
+    if request.get('stage')=='deliver'and delivery is None:
+        checks.append(feedback.check('final_candidate_received','task_acceptance','pass',
+            '后台已收到最终候选；其本身不证明用户目标完成，继续核对规则与独立审阅。',required=False))
+    elif request.get('stage')=='deliver':
+        accepted=delivery['complete']and not delivery['missing']
         checks.append(feedback.check('delivery_declaration','task_acceptance','pass'if accepted else 'fail',
             '模型交付声明不独立证明目标完成。'if accepted else '未提交完整交付，或模型明确标记核心目标仍有缺失。',basis='model_declaration',
             missing=delivery.get('missing',[])if delivery else ['缺少submit_deliverable回执']))

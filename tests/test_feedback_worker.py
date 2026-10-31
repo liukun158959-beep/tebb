@@ -156,6 +156,34 @@ class FeedbackWorkerTests(unittest.TestCase):
         self.assertTrue(any(k=='feedback_review_repair'for k,d in self.events))
         self.assertTrue(json.loads(model.calls[-1]['messages'][1]['content'])['previous_protocol_issues'])
 
+    def test_correct_raw_child_candidate_is_reviewed_for_current_duty(self):
+        text='计算7与11的和。只输出JSON对象。'
+        self.request.update(text=text,objective='必须委派写作者并整体汇总。只返回JSON。',parent_run='actual-parent',stage='deliver',budget=2)
+        candidate='{"total":18,"checked":true}';model=ScriptedModel([candidate,candidate]);self.run_model(model)
+        self.assertEqual(json.loads(self.events[-1][1]),dict(total=18,checked=True));self.assertEqual(len(model.calls),2)
+        self.assertEqual(json.loads(model.calls[-1]['messages'][1]['content'])['materials'][0]['segments'],[text])
+        materials=json.loads(model.calls[-1]['messages'][1]['content'])['materials']
+        self.assertEqual(next(m for m in materials if m['id']=='global_goal')['segments'],[self.request['objective']])
+        self.assertEqual(json.loads(next(m for m in materials if m['id']=='assignment')['segments'][0])['parent_run'],'actual-parent')
+        self.assertIn('actual-parent',model.calls[0]['messages'][0]['content'])
+        delivery_check=next(d for k,d in self.events if k=='delivery_check')
+        self.assertTrue(delivery_check['ok']);self.assertEqual(delivery_check['missing'],[])
+        self.assertEqual(delivery_check['candidate_origin'],'final_answer')
+
+    def test_raw_candidate_still_needs_review_and_explicit_missing_still_blocks(self):
+        self.request.update(stage='deliver',budget=1)
+        with self.assertRaises(PublicFailure):self.run_model(ScriptedModel(['{"total":18}']))
+        self.assertFalse(any(k=='result'for k,d in self.events))
+        self.events=[];self.request['budget']=2
+        incomplete=dict(tool_calls=[dict(id='incomplete',function=dict(name='submit_deliverable',arguments=json.dumps(dict(report='{"total":18}',complete=False,missing=['actual core requirement missing']))))])
+        with self.assertRaises(PublicFailure):self.run_model(ScriptedModel([incomplete,incomplete]))
+        self.assertTrue(any(k=='feedback_check'and any(c['id']=='delivery_declaration'and c['status']=='fail'for c in d['checks'])for k,d in self.events))
+        self.events=[]
+        with self.assertRaises(PublicFailure):self.run_model(ScriptedModel([incomplete,'{"total":18}']))
+        last=next(d for k,d in reversed(self.events)if k=='delivery_check')
+        self.assertFalse(last['ok']);self.assertEqual(last['declaration_origin'],'retained')
+        self.assertEqual(last['missing'],['actual core requirement missing'])
+
     def test_unknown_create_blocks_another_create_before_any_final_draft(self):
         self.request.update(text='准备公开项目。只输出JSON。',role=dict(id='writer',name='writer',role='write',tools=['项目环境']),budget=8)
         def prepare(ident):return dict(tool_calls=[dict(id=ident,function=dict(name='project_prepare',arguments=json.dumps(dict(repository='https://github.com/example/project'))))])
