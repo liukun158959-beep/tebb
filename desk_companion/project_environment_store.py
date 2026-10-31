@@ -2,9 +2,11 @@
 from contextlib import contextmanager,closing
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
 import time
+from .resource_lock import ResourceLock
 
 ACTIVE={'running','unknown','stopping'}
 
@@ -61,6 +63,69 @@ class EnvironmentStore:
         with closing(sqlite3.connect(self.path,timeout=10)) as db:
             return [json.loads(row[0]) for row in db.execute('SELECT data FROM environments ORDER BY rowid DESC')]
 
+    def creation_guard(self,operation):
+        """OS-owned lifetime, not a task/PID/TTL inference; never restore the lock."""
+        database=self.path.resolve()
+        return ResourceLock('project-create:'+os.path.normcase(str(database))+':'+operation,directory=database.parent/'operation-locks')
+
+    def creation_active(self,operation):
+        lock=self.creation_guard(operation)
+        if not lock.acquire(blocking=False):return True
+        lock.__exit__();return False
+
+    def archive_status(self,ident):
+        environment=self.get(ident);original=environment.get('prepare_operation')
+        operation=self.operation(original) if original else {}
+        active=self.creation_active(original) if original else False
+        eligible=bool(original and operation.get('kind')=='prepare' and operation.get('state')=='unknown'
+                      and environment.get('active_operation')==original and not environment.get('sandbox_id')
+                      and not environment.get('service') and not environment.get('creation_archive') and not active)
+        return dict(eligible=eligible,operation=original,local_active=active,
+                    archived=bool(environment.get('creation_archive')),creation_outcome_unknown=operation.get('state')=='unknown')
+
+    def archive_create(self,ident,expected,request):
+        """Release admission once; a late acknowledgement still belongs to the old row."""
+        arguments=dict(expected_operation=expected)
+        digest=fingerprint(dict(environment=ident,kind='archive_prepare',arguments=arguments))
+        def replay(db):
+            previous=db.execute('SELECT environment,fingerprint,operation FROM requests WHERE id=?',(request,)).fetchone()
+            if previous:
+                if previous[0]!=ident or previous[1]!=digest:raise ValueError('请求编号已用于不同项目操作。')
+                return self._environment(db,ident),self._operation(db,previous[2]),True
+            environment=self._environment(db,ident);archived=environment.get('creation_archive')
+            if archived:
+                if archived['operation']!=expected:raise ValueError('原创建操作已变化，请刷新后重试。')
+                db.execute('INSERT INTO requests VALUES (?,?,?,?)',(request,ident,digest,archived['request']))
+                return environment,self._operation(db,archived['request']),True
+        # An acknowledged historical archive can be replayed while a later explicit
+        # observation is active. It does not release admission a second time.
+        with self.transaction() as db:
+            previous=replay(db)
+            if previous:return previous
+        lock=self.creation_guard(expected)
+        if not lock.acquire(blocking=False):raise ValueError('原创建或归属验证仍在父后台执行，暂不能归档。')
+        try:
+            with self.transaction() as db:
+                previous=replay(db)
+                if previous:return previous
+                environment=self._environment(db,ident);operation=self._operation(db,expected)
+                if environment.get('prepare_operation')!=expected or environment.get('active_operation')!=expected or operation['environment']!=ident:
+                    raise ValueError('原创建操作已变化，请刷新后重试。')
+                if operation['kind']!='prepare' or operation['state']!='unknown':raise ValueError('仅可归档结果未知的原创建请求。')
+                if environment.get('sandbox_id') or environment.get('service'):
+                    raise ValueError('已绑定实例或存在服务，需先按原身份核对与停止，不能归档释放。')
+                now=time.time();fact=dict(operation=expected,request=request,at=now,actor='desktop',creation_outcome='unknown')
+                environment.update(active_operation='',creation_archive=fact)
+                operation['creation_archive']=fact
+                receipt=dict(id=request,environment=ident,kind='archive_prepare',state='succeeded',stage='archived',owner_task='',
+                             created=now,updated=now,cancel_requested=False,error='',result=dict(archived_operation=expected,
+                             admission_released=True,creation_outcome='unknown',stop_confirmed=False))
+                db.execute('INSERT INTO operations VALUES (?,?,?,?)',(request,ident,digest,json.dumps(receipt,ensure_ascii=False)))
+                db.execute('INSERT INTO requests VALUES (?,?,?,?)',(request,ident,digest,request))
+                self._save_operation(db,operation);self._save(db,environment)
+                return environment,receipt,False
+        finally:lock.__exit__()
+
     def begin(self,ident,kind,request_id,arguments,owner_task='',*,initial=None):
         digest=fingerprint(dict(environment=ident,kind=kind,arguments=arguments))
         with self.transaction() as db:
@@ -77,6 +142,7 @@ class EnvironmentStore:
                     for row in db.execute('SELECT data FROM environments'):
                         saved=json.loads(row[0])
                         if any(saved.get(key)!=initial.get(key) for key in ('scope','repository','ref')):continue
+                        if saved.get('creation_archive'):continue
                         previous_id=saved.get('prepare_operation')
                         if not previous_id:continue
                         original=self._operation(db,previous_id)
@@ -86,6 +152,8 @@ class EnvironmentStore:
                             return saved,original,False
                 db.execute('INSERT INTO environments VALUES (?,?)',(ident,json.dumps(environment,ensure_ascii=False)))
             else:environment=self._environment(db,ident)
+            if environment.get('creation_archive') and kind!='stop':
+                raise ValueError('原创建已归档；仅可核对原身份与停止，新的工作请使用新请求。')
             active=environment.get('active_operation')
             if active and self._operation(db,active)['state'] in ACTIVE:raise ValueError('此项目操作仍在执行或结果未知，请先查询或停止原操作。')
             if kind not in {'read','stop'} and (environment.get('service') or {}).get('state') in {'ready','stopping','unknown'}:raise ValueError('请先停止此项目服务，再修改或执行配置命令。')
@@ -115,12 +183,21 @@ class EnvironmentStore:
         with self.transaction() as db:
             operation=self._operation(db,operation_id);environment=self._environment(db,operation['environment'])
             if environment.get('sandbox_id') and environment['sandbox_id']!=sandbox_id:raise ValueError('原项目沙箱身份发生变化。')
-            environment['sandbox_id']=sandbox_id;self._save(db,environment)
+            environment['sandbox_id']=sandbox_id
+            if environment.get('creation_archive'):
+                environment['late_runtime_observed_at']=time.time()
+            self._save(db,environment)
             return environment
 
     def finish(self,operation_id,state,*,result=None,error='',changes=None,error_details=None):
         with self.transaction() as db:
             operation=self._operation(db,operation_id);environment=self._environment(db,operation['environment'])
+            if operation.get('creation_archive'):
+                observation=dict(state=state,result=result,error=error,changes=changes,at=time.time())
+                if error_details is not None:observation['error_details']=error_details
+                operation['late_observations']=(operation.get('late_observations',[])+[observation])[-20:]
+                self._save_operation(db,operation)
+                return environment,operation
             if operation['state'] not in ACTIVE:return environment,operation
             if operation['cancel_requested'] and state=='succeeded':raise RuntimeError('取消后不能登记项目操作成功。')
             operation.update(state=state,result=result,error=error)

@@ -5,13 +5,15 @@ import errno
 import os
 import threading
 import time
+from pathlib import Path
 from .paths import data_root
 
 
 class ResourceLock:
-    def __init__(self, name, *, shared=False):
+    def __init__(self, name, *, shared=False, directory=None):
         self.name = name
         self.shared = shared
+        self.directory = Path(directory) if directory is not None else None
         self.local = threading.RLock()
         self.depth = 0
         self.file = None
@@ -25,7 +27,8 @@ class ResourceLock:
             return False
         try:
             if not self.depth:
-                path = data_root() / "memory" / "locks" / (hashlib.sha256(self.name.encode()).hexdigest() + ".lock")
+                directory = self.directory if self.directory is not None else data_root() / "memory" / "locks"
+                path = directory / (hashlib.sha256(self.name.encode()).hexdigest() + ".lock")
                 path.parent.mkdir(parents=True, exist_ok=True)
                 self.file = path.open("a+b")
                 if os.name == "nt":

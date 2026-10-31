@@ -66,7 +66,23 @@ python -m unittest tests.test_docker_sandboxes tests.test_project_environments t
 
 `expected_http_text` 是 HTTP 正文条件，不能填终端的 `Listening/Running` 日志；不确定时省略。工具保留结构化失败，不把失败对象包装成已运行。`project_receipt` 事件关联 call/environment/operation/log 编号，完整模型请求及工具返回仍见 [调用调试](AGENT_DEBUG.md)。
 
-桌面 token 另可调用 `project_environments_ui(operation, payload)` 的 `probe/list/status/log/stop/reconcile`，用于独立核对和停止；它不提供任意创建/执行命令入口。浏览器协作预览 token 无权使用这些方法。
+桌面 token 另可调用 `project_environments_ui(operation, payload)` 的 `probe/list/status/log/stop/reconcile/archive_create`，用于独立核对和停止；它不提供任意创建/执行命令入口。浏览器协作预览 token 无权使用这些方法。
+
+## 未知创建归档（#203）
+
+两个未决创建可能占满应用准入。用户可在“项目运行”中选择原请求、点击“放弃原创建请求”，阅读说明后确认释放。仅限原prepare为unknown、没有UUID且没有服务；已知实例继续按原身份核对与停止。归档不证明远端不存在或已停止，原owner、操作、错误和日志保留，迟到UUID仍只绑定旧记录。
+
+父服务在整个prepare及显式归属验证期间持有数据库目录下的OS文件锁。取消模型任务、清单没有候选、超过时间、worker退出均不会提前释放这把锁；归档事务再次核对原操作，实际调用未结束则拒绝。父进程退出由OS释放锁，不恢复或采信持久PID。旧原请求重放返回原unknown，新编号才能另建；迟到finish作为观察保存，不能覆盖原unknown或重新占位。
+
+AI可通过既有认证RPC调试此用户动作（模型工具没有自动归档权限）：
+
+```json
+{"method":"project_environments_ui","args":{"operation":"archive_create","payload":{"environment":"原环境ID","expected_operation":"原prepare操作ID","request_id":"新生成并在不明重试时保留的编号","confirm":true}}}
+```
+
+先以status取得`archive_status`，确认预期原操作；它只是界面投影，服务仍原子校验。结果为`admission_released=true, creation_outcome=unknown, stop_confirmed=false`。相同request_id重试返回同一归档回执，不能换环境或原操作。之后status/list可核对creation_archive；log在没有本地写者时允许done，但`creation_outcome_unknown=true`仍表示原创建未确认。归档后不要把日志轮询结束当作SDK成功。原候选后续核对仍需原归属标记，不按同名接管或停止。
+
+隔离无模型回归：`python -m unittest discover -s tests -p test_project_create_archive.py -v`。使用临时数据库、模拟SDK和真实跨进程锁，覆盖两槽占位、取消后父调用未结束、迟到身份/结束、请求重放/重启、绑定竞争、错误归属、确认/权限边界；不重放旧未知实例。设计见[ADR 0029](adr/0029-archive-unknown-project-create.md)。
 
 离线回归（临时数据、假 SDK/模型）可复制执行：
 

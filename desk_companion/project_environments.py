@@ -228,48 +228,54 @@ class ProjectEnvironmentService:
         if not fresh:
             self._environment(environment['id'],scope)
             return dict(ok=operation['state']=='succeeded',environment=environment,operation=operation,replayed=True)
-        with self._context(request):
-            try:
-                self._check(request)
-                self.store.checkpoint(request,'create')
-                observed=self.client.create(environment['sandbox_name'],environment['id'])
-                environment=self.store.bind_runtime(request,observed['id'])
-                self._check(request)
-                self.store.checkpoint(request,'network_policy')
-                network=self.client.dependency_network(environment['sandbox_name'],environment['sandbox_id'])
-                self.store.checkpoint(request,'clone',network=network)
-                self.store.checkpoint(request,'clone',state='preparing')
-                checkout=''
-                if ref:checkout='git -c credential.helper= fetch --depth 1 origin '+shlex.quote(ref)+'\ngit checkout --detach FETCH_HEAD\n'
-                clone=('set -eu\nexport GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null\n'
-                       'test ! -e '+PROJECT+'\ngit -c credential.helper= -c core.hooksPath=/dev/null clone --depth 1 -- '+shlex.quote(repo)+' '+PROJECT+'\n'
-                       'cd '+PROJECT+'\n'+checkout+'git rev-parse HEAD\n')
-                result=self._exec(environment,request,clone)
-                commit=result['stdout'].strip().splitlines()[-1]
-                if not re.fullmatch('[a-f0-9]{40,64}',commit):raise RuntimeError('未取得实际仓库提交编号。')
-                self.store.checkpoint(request,'install',commit=commit)
-                install=('set -eu\ncd '+PROJECT+'\n'
-                         'if test -f package.json; then\n'
-                         '  if test -f package-lock.json; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi\n'
-                         'elif test -f requirements.txt || test -f pyproject.toml || test -f setup.py; then\n'
-                         '  python3 -m venv .venv\n'
-                         '  if test -f requirements.txt; then .venv/bin/python -m pip install --disable-pip-version-check -r requirements.txt; '
-                         'else .venv/bin/python -m pip install --disable-pip-version-check -e .; fi\n'
-                         'else echo "No supported dependency manifest; inspect README and configure explicitly." >&2; exit 42; fi\n')
-                self._exec(environment,request,install,timeout=240)
-                runtime_code=('from pathlib import Path;import json,subprocess;'
-                    'node=Path("package.json").is_file();'
-                    'info=dict(language="node",node=subprocess.check_output(["node","--version"],text=True).strip(),'
-                    'npm=subprocess.check_output(["npm","--version"],text=True).strip(),start_hint="npm start") if node else '
-                    'dict(language="python",python=subprocess.check_output([".venv/bin/python","--version"],text=True).strip(),'
-                    'python_command=".venv/bin/python",activate="source .venv/bin/activate",flask_command=".venv/bin/flask");'
-                    'print(json.dumps(info))')
-                runtime=json.loads(self._exec(environment,request,'cd '+PROJECT+'\npython3 -I -c '+shlex.quote(runtime_code),30)['stdout'])
-                self._check(request)
-                environment,operation=self.store.finish(request,'succeeded',result=dict(commit=commit,log_id=request),
-                                                       changes=dict(state='available',dependencies='installed',runtime=runtime))
-                return dict(ok=True,environment=environment,operation=operation,service_ready=False,log_id=request)
-            except Exception as exc:return self._failure(request,exc)
+        try:
+            guard=self.store.creation_guard(request);guard.acquire()
+        except OSError as exc:
+            return self._failure(request,exc)  # No SDK call has begun; admission can finish failed.
+        try:
+            with self._context(request):
+                try:
+                    self._check(request)
+                    self.store.checkpoint(request,'create')
+                    observed=self.client.create(environment['sandbox_name'],environment['id'])
+                    environment=self.store.bind_runtime(request,observed['id'])
+                    self._check(request)
+                    self.store.checkpoint(request,'network_policy')
+                    network=self.client.dependency_network(environment['sandbox_name'],environment['sandbox_id'])
+                    self.store.checkpoint(request,'clone',network=network)
+                    self.store.checkpoint(request,'clone',state='preparing')
+                    checkout=''
+                    if ref:checkout='git -c credential.helper= fetch --depth 1 origin '+shlex.quote(ref)+'\ngit checkout --detach FETCH_HEAD\n'
+                    clone=('set -eu\nexport GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null\n'
+                           'test ! -e '+PROJECT+'\ngit -c credential.helper= -c core.hooksPath=/dev/null clone --depth 1 -- '+shlex.quote(repo)+' '+PROJECT+'\n'
+                           'cd '+PROJECT+'\n'+checkout+'git rev-parse HEAD\n')
+                    result=self._exec(environment,request,clone)
+                    commit=result['stdout'].strip().splitlines()[-1]
+                    if not re.fullmatch('[a-f0-9]{40,64}',commit):raise RuntimeError('未取得实际仓库提交编号。')
+                    self.store.checkpoint(request,'install',commit=commit)
+                    install=('set -eu\ncd '+PROJECT+'\n'
+                             'if test -f package.json; then\n'
+                             '  if test -f package-lock.json; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi\n'
+                             'elif test -f requirements.txt || test -f pyproject.toml || test -f setup.py; then\n'
+                             '  python3 -m venv .venv\n'
+                             '  if test -f requirements.txt; then .venv/bin/python -m pip install --disable-pip-version-check -r requirements.txt; '
+                             'else .venv/bin/python -m pip install --disable-pip-version-check -e .; fi\n'
+                             'else echo "No supported dependency manifest; inspect README and configure explicitly." >&2; exit 42; fi\n')
+                    self._exec(environment,request,install,timeout=240)
+                    runtime_code=('from pathlib import Path;import json,subprocess;'
+                        'node=Path("package.json").is_file();'
+                        'info=dict(language="node",node=subprocess.check_output(["node","--version"],text=True).strip(),'
+                        'npm=subprocess.check_output(["npm","--version"],text=True).strip(),start_hint="npm start") if node else '
+                        'dict(language="python",python=subprocess.check_output([".venv/bin/python","--version"],text=True).strip(),'
+                        'python_command=".venv/bin/python",activate="source .venv/bin/activate",flask_command=".venv/bin/flask");'
+                        'print(json.dumps(info))')
+                    runtime=json.loads(self._exec(environment,request,'cd '+PROJECT+'\npython3 -I -c '+shlex.quote(runtime_code),30)['stdout'])
+                    self._check(request)
+                    environment,operation=self.store.finish(request,'succeeded',result=dict(commit=commit,log_id=request),
+                                                           changes=dict(state='available',dependencies='installed',runtime=runtime))
+                    return dict(ok=True,environment=environment,operation=operation,service_ready=False,log_id=request)
+                except Exception as exc:return self._failure(request,exc)
+        finally:guard.__exit__()
 
     def execute(self,ident,scope,request,command,*,timeout=120,owner_task=''):
         environment=self._environment(ident,scope);request=request_id(request)
@@ -342,7 +348,8 @@ class ProjectEnvironmentService:
         with self.lock:process=self.processes.get(operation)
         active=bool(process and process.poll() is None)
         return dict(ok=True,environment=ident,operation=operation,base64=base64.b64encode(content).decode(),
-                    offset=offset+len(content),size=size,done=not active and record['state'] not in {'running','unknown','stopping'},
+                    offset=offset+len(content),size=size,done=not active and (record['state'] not in {'running','unknown','stopping'} or bool(record.get('creation_archive')) and not self.store.creation_active(operation)),
+                    creation_outcome_unknown=record['kind']=='prepare' and record['state']=='unknown',
                     truncated=size>=LOG_LIMIT,limit=LOG_LIMIT)
 
     @staticmethod
@@ -420,17 +427,37 @@ class ProjectEnvironmentService:
             process=self.processes.get(service.get('operation'))
             held=bool(process and process.poll() is None)
         ready=bool(service.get('state')=='ready' and held and observed and observed['status']=='running' and health['ok'])
-        operation=self.store.operation(environment['active_operation']) if environment.get('active_operation') else None
+        operation_id=environment.get('active_operation') or (environment.get('prepare_operation') if environment.get('creation_archive') else '')
+        operation=self.store.operation(operation_id) if operation_id else None
         return dict(ok=True,environment=environment,observed_runtime=observed,error=error,service_ready=ready,
-                    health=health,recovery_required=bool(environment['state']=='unknown' or (operation or {}).get('state')=='unknown'
+                    health=health,archive_status=self.store.archive_status(ident),recovery_required=bool(environment['state']=='unknown' or (operation or {}).get('state')=='unknown'
                         or service.get('state') in {'ready','unknown'} and not held),operation=operation)
 
+    def archive_unknown_create(self,ident,scope,expected_operation,request,*,confirm=False):
+        self._environment(ident,scope)
+        if confirm is not True:raise ValueError('请明确确认释放应用准入，创建结果仍未知。')
+        expected_operation=request_id(expected_operation);request=request_id(request)
+        environment,receipt,replayed=self.store.archive_create(ident,expected_operation,request)
+        return dict(ok=True,environment=environment,operation=receipt,replayed=replayed,
+                    admission_released=True,creation_outcome='unknown',stop_confirmed=False)
+
     def reconcile(self,ident,scope,*,verify=False,owner_task=''):
-        """Observe the old candidate, then explicitly verify its saved ownership marker."""
         environment=self._environment(ident,scope)
         if type(verify) is not bool:raise ValueError('归属验证选项无效。')
+        original=environment.get('active_operation') or environment.get('prepare_operation')
+        if verify and original:
+            lock=self.store.creation_guard(original)
+            if not lock.acquire(blocking=False):
+                return dict(ok=False,environment=environment,error='原创建或归属验证仍在父后台执行，请稍后核对。')
+            try:return self._reconcile(ident,scope,verify=verify,owner_task=owner_task)
+            finally:lock.__exit__()
+        return self._reconcile(ident,scope,verify=verify,owner_task=owner_task)
+
+    def _reconcile(self,ident,scope,*,verify=False,owner_task=''):
+        """Observe the old candidate, then explicitly verify its saved ownership marker."""
+        environment=self._environment(ident,scope)
         known=environment.get('sandbox_id')
-        original=self.store.operation(environment['active_operation']) if environment.get('active_operation') else None
+        original=self.store.operation(environment.get('active_operation') or environment['prepare_operation']) if environment.get('active_operation') or environment.get('prepare_operation') else None
         if verify and original and original['state']=='running' and not original['cancel_requested']:
             return dict(ok=False,environment=environment,error='原操作仍在执行，先观察原请求；未启动额外验证。')
         candidate=self.client.owned(environment['sandbox_name'],known) if known else next(
@@ -458,7 +485,7 @@ class ProjectEnvironmentService:
             if not isinstance(metadata.get('commit'),str) or metadata['commit'] and not re.fullmatch('[a-f0-9]{40,64}',metadata['commit']):
                 raise ValueError('原项目提交观察格式无效。')
             if not known:environment=self.store.bind_runtime(environment['prepare_operation'],candidate['id'])
-            original=self.store.operation(environment['active_operation']) if environment.get('active_operation') else None
+            original=self.store.operation(environment.get('active_operation') or environment['prepare_operation']) if environment.get('active_operation') or environment.get('prepare_operation') else None
             if original and original['cancel_requested']:
                 stopped=self.stop(ident,scope)
                 return dict(**stopped,identity_verified=True)
