@@ -198,3 +198,5 @@ v14固定公开来源案例要求RFC第2、3节，但旧验收额外要求整篇
 旧/新各4个固定案例（sort_unique、preserve_unknown、research_public_source、delegate_deliver），同模型/路由/采样，每题1次，最多28调用/组，无SDK/飞书写入。实际旧14次、新11次，用量完整，费用null；旧25141/6825、新19999/5496输入/输出tokens。最大单案200113.01/130691.10ms；N=4且后台回归并行，不估P95/P99，不据此宣称普遍改善。原v14成绩分别4成功、3成功/1评测覆盖误判；#206 v15零新增模型调用复判均4成功，原报告不修改。
 
 另有认证RPC真实参数验证2次（64/128输出截断）及一次业务64token边界停止（task failed、goal未完成），与质量成绩分开。生成参数验证仅证明该模型/路由，不推断窗口、分词器或价格。输出硬参数按显式验证绑定；scripts/eval_agent.py的--output-limit-bindings需--live并指向既有验证SQLite快照，复制进隔离profile，不能用于伪造其他模型支持。完整源码快照已纳入task_budgets.py、model_generation.py；终态收尾后刷新根预算投影。详见[TASK_BUDGETS.md](TASK_BUDGETS.md)。
+
+#170/#206最终运行代码76752ad的[CI 41182333915](https://github.com/liukun158959-beep/tebb/actions/runs/41182333915)全部通过：986项后端，12显式旧WSL/bubblewrap条件跳过，0失败/错误；208前端、tsc、构建与Rust通过。完整后端首轮因5个离线fixture缺少任务编号失败，已补齐登记，不在生产放宽预算归属。原失败日志、源码快照及零调用复判均保留。
