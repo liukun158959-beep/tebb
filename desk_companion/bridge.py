@@ -656,6 +656,10 @@ class Bridge:
     def load_usage(self) -> dict:
         return workbench_queries.load_usage()
 
+    def load_personal_usage(self,filters=None,cursor='',limit=50) -> dict:
+        from .usage_center import UsageCenter
+        return UsageCenter().query(filters,cursor,limit)
+
     def load_feishu(self) -> dict:
         from .feishu_auth import feishu_status
 

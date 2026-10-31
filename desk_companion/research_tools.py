@@ -6,6 +6,7 @@ import json
 from .task_budgets import current
 from .web_search import search_sources,format_search
 from .web_sources import search_ledger,urls,url_key,is_http_url
+from .usage_observer import invoke_tool
 
 
 @dataclass(frozen=True)
@@ -37,7 +38,7 @@ class ResearchTools:
         if current():current().tool(True,name)
         try:
             if name=='web_search':
-                payload=self.search(query)if self.search else search_sources(query,on_status=lambda status:self.emit('status',status))
+                payload=invoke_tool(name,self.search,query)if self.search else invoke_tool(name,search_sources,query,on_status=lambda status:self.emit('status',status))
                 if isinstance(payload,str):
                     result=payload;ledger=[dict(url=url,title=url,text=payload[:600],level='snippet',kind='search')for url in urls(payload)]
                     payload=dict(provider='injected-search')
@@ -46,7 +47,7 @@ class ResearchTools:
                 evidence=dict(kind='search',query=query,text=result[:18000],sources=ledger,provider=payload.get('provider'),
                     fallback_reason=payload.get('fallback_reason',''),attempts=payload.get('attempts',[]),primary_failure=payload.get('primary_failure'))
             else:
-                evidence=self.fetch(query)if self.fetch else self.page_reader.read(query,**{k:arguments[k]for k in('snapshot_id','offset','query','section')if k in arguments})
+                evidence=invoke_tool(name,self.fetch,query)if self.fetch else invoke_tool(name,self.page_reader.read,query,**{k:arguments[k]for k in('snapshot_id','offset','query','section')if k in arguments})
                 if not evidence.get('text')or evidence.get('level')!='body':raise ValueError('未取得可用正文')
                 ledger=[evidence];result=json.dumps(evidence,ensure_ascii=False)
             ledger=[source for source in ledger if isinstance(source,dict)and is_http_url(source.get('url'))]

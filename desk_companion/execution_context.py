@@ -214,7 +214,10 @@ class ExecutionLLM(LLM):
             options=replace(options,extra_body=body or None,should_cancel=cancelled)
             scope.notice()
         try:
-            result=super().chat(prepared['messages'],tools,on_delta,options=options,callbacks=callbacks)
+            from .usage_observer import ModelAttempt
+            with ModelAttempt(self.model,self.context_model_id,endpoint,call_id)as observed:
+                result=super().chat(prepared['messages'],tools,on_delta,options=options,callbacks=callbacks)
+                observed.returned(result.get('usage'),result.get('finish_reason'))
         except BaseException as exc:
             partial=getattr(exc,'partial',None)
             if call_id:

@@ -12,6 +12,20 @@ from .paths import data_root
 from .workflow_graph import KINDS, WRITES, ready_node, validate, version
 
 
+def usage_metadata(path=None,ident=''):
+    from .usage_store import read_rows
+    rows=read_rows(path or data_root()/'memory/workflows.sqlite3',
+        'SELECT id,created,state,attempt,task_id FROM runs'+(' WHERE id=?'if ident else ''),(ident,)if ident else ())
+    return [dict(id='workflow:'+r['id'],kind='task',created=r['created'],
+        state='succeeded'if r['state']=='completed'else r['state'],raw_state=r['state'],
+        project_id='',channel='automation',source='workflow',attempt=r['task_id']or'')for r in rows]
+
+
+def usage_origin(ident,path=None):
+    rows=usage_metadata(path,ident)
+    return rows[0]if rows else None
+
+
 class WorkflowStore:
     def __init__(self, path=None):
         self.path = Path(path or data_root() / 'memory' / 'workflows.sqlite3')

@@ -302,36 +302,37 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
 
     def extra_call(name, arguments):
         from .task_budgets import current
+        from .usage_observer import invoke_tool
         if current():current().tool(extra.get(name,{}).get('read_only',name not in{'workspace_write','workspace_run','build_chart'}),name)
         if name=='build_chart':
-            return build_chart(arguments,sources,request.get('source_scope',request['collab_run']),emit)
+            return invoke_tool(name,build_chart,arguments,sources,request.get('source_scope',request['collab_run']),emit)
         snapshot = request.get('workspace')
         if name=='project_chat_search':
             from .chat_projects import search_chats
-            return search_chats(request['collab_path'],snapshot['project_id'],request['collab_run'],arguments.get('query'))
+            return invoke_tool(name,search_chats,request['collab_path'],snapshot['project_id'],request['collab_run'],arguments.get('query'))
         if name.startswith('workspace_'):
             workspace = project.current(snapshot)
             root_id, path = arguments.get('root','main'), arguments.get('path','')
-            if name == 'workspace_list': return project.tree(root_id, path, config=workspace)
+            if name == 'workspace_list': return invoke_tool(name,project.tree,root_id,path,config=workspace)
             if name == 'workspace_read':
-                result = project.read(root_id, path, config=workspace)
+                result = invoke_tool(name,project.read,root_id,path,config=workspace)
                 if result.get('kind')=='image': result.pop('data',None); result['note']='图片由用户在侧栏预览，本工具仅返回元数据'
                 return result
             if name == 'workspace_write':
-                change = project.write(path,arguments.get('text'),arguments.get('revision'),config=snapshot,locked=True)
+                change = invoke_tool(name,project.write,path,arguments.get('text'),arguments.get('revision'),config=snapshot,locked=True)
                 changes.append(change)
                 for check in checks: check['stale'] = True
                 emit('file_change', change); return change
             if name == 'workspace_run':
-                check = project.run(arguments.get('command'),snapshot,request.get('task_id',request['collab_run']),arguments.get('timeout',90))
+                check = invoke_tool(name,project.run,arguments.get('command'),snapshot,request.get('task_id',request['collab_run']),arguments.get('timeout',90))
                 for change in check.pop('changes', []):
                     changes.append(change); emit('file_change',change)
                     for previous in checks: previous['stale'] = True
                 check['stale'] = False; checks.append(check); emit('verification',check); return check
         if name == 'read_local_source':
             if arguments.get('source_id') not in allowed_attachments: raise ValueError('附件不属于本轮选择')
-            return read_page(arguments['source_id'],arguments.get('offset',0),12000)
-        return extra[name]['implementation'](arguments)
+            return invoke_tool(name,read_page,arguments['source_id'],arguments.get('offset',0),12000)
+        return invoke_tool(name,extra[name]['implementation'],arguments)
 
     def latest_updates():
         nonlocal applied,goal,structured,retained_declaration

@@ -132,6 +132,7 @@ def main():
             host.agent.runtime.terminator = host.agent.terminator
             host.agent.plugin_manager.register(Progress())
             original = host.agent.tools.execute
+            from .usage_observer import invoke_tool
             def execute(name, arguments):
                 args = json.loads(arguments) if isinstance(arguments, str) else arguments
                 if fingerprint(name, args) in request.get("completed_writes", []):
@@ -148,14 +149,14 @@ def main():
                 # Calendar writes own a cross-process board lease and short cache lock.
                 # Do not retain the global write lock across their remote IO.
                 if tool.isReadOnly or name == 'create_calendar_event':
-                    output = original(name, arguments)
+                    output = invoke_tool(name,original,name,arguments)
                     task_budgets.record_progress(name,args,output)
                     archive.record(name, output)
                     return output
                 with WRITES:
                     if name == "save_video_summary":
                         archive.manual_save = True
-                    output=original(name, arguments)
+                    output=invoke_tool(name,original,name,arguments)
                     task_budgets.record_progress(name,args,output)
                     return output
             host.agent.tools.execute = execute

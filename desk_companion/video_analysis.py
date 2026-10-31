@@ -251,7 +251,8 @@ def analyze(request, emit, llm, source):
             emit("tool_start", {"tool": "web_search", "read_only": True})
             try:
                 suffix = " (site:github.com OR site:arxiv.org OR site:modelcontextprotocol.io OR site:docs.cline.bot)"
-                result = web_search({"query": query[:200 - len(suffix)] + suffix})
+                from .usage_observer import invoke_tool
+                result = invoke_tool('web_search',web_search,{"query":query[:200-len(suffix)]+suffix})
                 blocks = re.split(r"\n(?=\d+\. )", result)
                 kept = [b for b in blocks if any((urlsplit(url).hostname or "").removeprefix("www.") == d
                     or (urlsplit(url).hostname or "").endswith("." + d)
@@ -287,7 +288,8 @@ def execute(request, emit):
     if current():current().tool()
     emit("tool_start", {"tool": "read_video", "read_only": True})
     try:
-        result = video.read_video(request["session_id"], request["video_url"], on_status=lambda s: emit("status", s))
+        from .usage_observer import invoke_tool
+        result = invoke_tool('read_video',video.read_video,request["session_id"],request["video_url"],on_status=lambda s:emit("status",s))
     except (ValueError, RuntimeError) as exc:
         emit("tool_end", {"tool": "read_video", "read_only": True, "status": "error", "error": str(exc)})
         emit("failure", {"type": "VideoReadFailed", "message": "视频读取未完成：" + str(exc)})

@@ -22,6 +22,38 @@ def submission_task_id(submission_key):
     return uuid.uuid5(uuid.NAMESPACE_URL, 'tebb-task:' + submission_key).hex
 
 
+def usage_origin(ident,path=None):
+    from .usage_store import read_rows
+    rows=read_rows(path or data_root()/'memory/tasks.sqlite3',
+        "SELECT id,created,channel,json_extract(source,'$._usage_project_id') AS project_id FROM tasks WHERE id=?",(ident,))
+    return rows[0]if rows else None
+
+
+def usage_metadata(path=None,ledger=None):
+    """Metadata projection: no task text, answer, request, or event payloads."""
+    from .usage_store import read_rows
+    from .task_budgets import Ledger
+    rows=read_rows(path or data_root()/'memory/tasks.sqlite3',
+        "SELECT id,created,started,ended,state,channel,json_extract(source,'$._usage_project_id') AS project_id FROM tasks ORDER BY created,id")
+    feedback=read_rows(path or data_root()/'memory/tasks.sqlite3',"SELECT e.task,CASE WHEN json_type(e.data,'$.ok') IN('true','false') THEN json_extract(e.data,'$.ok') END AS feedback_ok,"
+        "CASE WHEN json_extract(e.data,'$.completion') IN('checked','assessed','incomplete','unverified') THEN json_extract(e.data,'$.completion') END AS completion "
+        "FROM events e JOIN(SELECT task,MAX(seq) AS seq FROM events WHERE kind='feedback_check' GROUP BY task) latest ON latest.seq=e.seq")
+    quality={r['task']:r for r in feedback}
+    bindings=(ledger or Ledger()).usage_members();indexed={r['id']:r for r in rows};roots={};physical=[]
+    for row in rows:
+        member=bindings.get(row['id']);owner=member['owner']if member else ''
+        physical.append({**row,**{k:v for k,v in quality.get(row['id'],{}).items()if k!='task'},'root':owner})
+        if not member or not member['root_member']or not owner.startswith('task:'):continue
+        first=indexed.get(owner.removeprefix('task:'))
+        if first is None:continue  # An uncommitted/orphan budget cannot create a task.
+        prior=roots.get(owner)
+        if prior and(prior['attempt_created'],prior['attempt'])>(row['created'],row['id']):continue
+        roots[owner]=dict(id=owner,kind='diagnostic'if first['channel']=='debug'else'task',created=first['created'],state=row['state'],raw_state=row['state'],
+            project_id=first['project_id'],channel=first['channel'],source='diagnostic'if first['channel']=='debug'else'task',attempt=row['id'],attempt_created=row['created'],
+            **{k:v for k,v in quality.get(row['id'],{}).items()if k!='task'})
+    return dict(tasks=list(roots.values()),attempts=physical)
+
+
 class TaskManager:
     def __init__(self, host=None, path=None, command=None, prewarm=0):
         self.path = Path(path or data_root() / "memory" / "tasks.sqlite3")
@@ -116,6 +148,10 @@ class TaskManager:
             ledger.bind(budget_root,task_id,root_member=not _budget_root or _budget_root_member,
                 purpose=request.get('kind')or request.get('workflow')or'task')
             request.pop('task_budget',None)  # Request data cannot grant membership.
+            source={**(source or{})}
+            if '_usage_project_id'not in source:
+                project=source.get('project_id',request.get('project_id',''))
+                source['_usage_project_id']=project if isinstance(project,str)else None
             with self.db() as db:
                 db.execute("INSERT INTO tasks(id,session,channel,text,request,state,created,source) VALUES(?,?,?,?,?,'queued',?,?)",
                            (task_id, session, channel, text, json.dumps(request), time.time(), json.dumps(source or {})))

@@ -336,7 +336,9 @@ def phase(emit, kind, name, operation):
     emit(event + "_start", data)
     status = "success"
     try:
-        return operation()
+        if kind=='llm':return operation()
+        from .usage_observer import invoke_tool
+        return invoke_tool(name,operation)
     except Exception:
         status = "failed"
         raise

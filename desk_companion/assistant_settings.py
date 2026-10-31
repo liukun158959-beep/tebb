@@ -199,12 +199,16 @@ class AssistantSettingsService:
                 raise RuntimeError("测试前先填 API 地址、模型名和 Key。")
             from .model_validation import validate_base_url
             from .model_network import openai_client
+            from .usage_observer import ModelAttempt
             with openai_client(api_key=api_key, base_url=validate_base_url(base_url), timeout=20) as client:
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "user", "content": "ping"}],
-                    max_tokens=8,
-                )
+                with ModelAttempt(model,str(payload.get('id')or''),validate_base_url(base_url),source='model_test')as observed:
+                    response = client.chat.completions.create(
+                        model=model,
+                        messages=[{"role": "user", "content": "ping"}],
+                        max_tokens=8,
+                    )
+                    usage=getattr(response,'usage',None)
+                    observed.returned(usage.model_dump()if hasattr(usage,'model_dump')else usage if isinstance(usage,dict)else None)
             text = (response.choices[0].message.content or "").strip()
             return {"ok": True, "message": "连通正常。" + (f" 回复：{text}" if text else "")}
         except Exception as exc:

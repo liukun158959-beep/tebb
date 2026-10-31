@@ -100,6 +100,29 @@ def workspace_path():
     return data_root() / "memory" / "collaboration" / "workspace.sqlite3"
 
 
+def usage_metadata(path=None,ident=''):
+    """Project only task metadata from the workspace; omit messages and content."""
+    from .usage_store import read_rows
+    fields=['id','parent','state','stage','kind','created','finished','task','usage_channel']
+    selected=','.join("json_extract(j.value,'$."+key+"') AS "+key for key in fields)
+    rows=read_rows(path or workspace_path(),"SELECT "+selected+",json_extract(j.value,'$.workspace.project_id') AS project_id "
+        "FROM workspace,json_each(workspace.data,'$.runs') j WHERE workspace.id=1")
+    roots=[]
+    for row in rows:
+        if row.get('parent')or ident and row['id']!=ident:continue
+        roots.append(dict(id='collab:'+row['id'],kind='task',created=row['created'],
+            state=chain_view(row,rows)['state'],raw_state=row['state'],project_id=row['project_id'],channel=row.get('usage_channel'),source='collaboration',attempt=row.get('task')or''))
+    return roots
+
+
+def usage_origin(ident,path=None):
+    from .usage_store import read_rows
+    rows=read_rows(path or workspace_path(),"SELECT json_extract(j.value,'$.id') AS id,"
+        "json_extract(j.value,'$.created') AS created,json_extract(j.value,'$.workspace.project_id') AS project_id,json_extract(j.value,'$.usage_channel') AS channel "
+        "FROM workspace,json_each(workspace.data,'$.runs') j WHERE workspace.id=1 AND json_extract(j.value,'$.id')=?",(ident,))
+    return rows[0]if rows else None
+
+
 def seed():
     agents = [
         dict(id="tebb", name="tebb", role="协调目标、拆分有限任务并明确验收条件", mark="t", tone="gold", model="", tools=[], memory=""),
@@ -327,6 +350,8 @@ class Collaboration:
         run["workspace"] = load(conversation.get('project_id',''))
         from .task_budgets import Ledger,default_tier
         owner=next((r for r in state['runs']if r['id']==parent),None)
+        from .agent_debug import metadata
+        run['usage_channel']=(owner or{}).get('usage_channel')or metadata().get('usage_channel')
         run['budget_id']=owner.get('budget_id')if owner else None
         if not run['budget_id']:
             run['budget_id']=Ledger().create('collab:'+run['id'],default_tier(kind,agent),execution_limits(agent_id,agent.get('tools',()))['task_timeout']*1000)

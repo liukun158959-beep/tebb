@@ -129,6 +129,24 @@ class Ledger:
         with closing(self._connect())as db:row=db.execute('SELECT data FROM roots WHERE id=?',(ident,)).fetchone()
         return json.loads(row[0])if row else None
 
+    def usage_members(self):
+        """Read only stable membership metadata; quota state stays owned here."""
+        from .usage_store import read_rows
+        rows=read_rows(self.path,"SELECT m.task,m.root,json_extract(m.data,'$.root_member') AS root_member,"
+            "json_extract(r.data,'$.owner') AS owner,json_extract(r.data,'$.last_root_member') AS last_root_member "
+            "FROM members m JOIN roots r ON r.id=m.root")
+        return {row['task']:row for row in rows}
+
+    def usage_admissions(self,owners):
+        """Reservations are coverage evidence, never proof of an actual request."""
+        from .usage_store import read_rows
+        rows=[];owners=list(owners)
+        for offset in range(0,len(owners),400):
+            group=owners[offset:offset+400]
+            rows.extend(read_rows(self.path,"SELECT o.owner AS root,j.key AS id FROM owners o JOIN roots r ON r.id=o.root,"
+                "json_each(r.data,'$.calls') j WHERE o.owner IN("+','.join('?'for _ in group)+')',group))
+        return rows
+
     @staticmethod
     def elapsed(root,now=None):
         return root['spent_ms']+max(0,((time.time()if now is None else now)-root['active_since'])*1000)if root['active_since']is not None else root['spent_ms']

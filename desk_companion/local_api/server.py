@@ -45,7 +45,7 @@ RPC_METHODS = frozenset({
     "load_model", "save_model", "test_model",
     "load_model_network", "save_model_network", "load_search_settings", "save_search_settings", "test_search",
     "load_models", "save_model_entry", "delete_model_entry", "use_model",
-    "load_usage", "load_chat_log", "load_memory", "compress_context",
+    "load_usage", "load_personal_usage", "load_chat_log", "load_memory", "compress_context",
     "add_fact", "update_fact", "delete_fact", "delete_memory_turn",
     "load_feishu", "feishu_login", "feishu_logout",
     "load_feishu_agent", "start_feishu_agent", "stop_feishu_agent",
@@ -175,9 +175,9 @@ def _dispatch(method: str, args: dict, preview=False) -> dict:
         target = fn
         def fn(**kwargs):
             from ..agent_debug import context
-            with context(session=HOST.state.session_id, channel="backend"):
+            with context(session=HOST.state.session_id, channel="backend",usage_channel="local"):
                 return target(**kwargs)
-        if method.startswith(("terminal_","project_")) or method in {"load_onboarding", "complete_onboarding", "save_onboarding_progress", "tebb_operation", "check_automation_execution","load_local_calendar", "change_local_calendar", "calendar_sync_step", "load_schedule", "change_schedule", "load_schedule_week", "load_schedule_month", "inspect_schedule_event", "load_work_board", "change_work_item", "compress_context", "load_chat_log", "load_memory",
+        if method.startswith(("terminal_","project_")) or method in {"load_personal_usage","load_onboarding", "complete_onboarding", "save_onboarding_progress", "tebb_operation", "check_automation_execution","load_local_calendar", "change_local_calendar", "calendar_sync_step", "load_schedule", "change_schedule", "load_schedule_week", "load_schedule_month", "inspect_schedule_event", "load_work_board", "change_work_item", "compress_context", "load_chat_log", "load_memory",
                       "load_notebook", "new_notebook", "save_notebook_note", "delete_notebook_note",
                       "export_notebook_markdown", "export_notebook_feishu", "open_notebook_file",
                       "reveal_notebook_file", "delete_notebook_file",

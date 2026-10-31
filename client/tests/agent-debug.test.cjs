@@ -123,7 +123,8 @@ test('debug dialog shows complete payloads and explicitly requests read-only int
   assert.ok(renderer.root.findAllByType('pre').some(n => n.children.join('').includes('data: [DONE]')));
   await act(async () => button('请求差异').props.onClick());
   assert.ok(JSON.stringify(renderer.toJSON()).includes('工具真实结果'));
-  await act(async () => button('暂停记录').props.onClick()); assert.equal(calls.find(c => c[0] === 'set_debug_recording')[1].enabled, false);
+  assert.ok(JSON.stringify(renderer.toJSON()).includes('不含正文的次数与用量元数据'));
+  await act(async () => button('暂停详细载荷').props.onClick()); assert.equal(calls.find(c => c[0] === 'set_debug_recording')[1].enabled, false);
   act(() => button('协助解读').props.onClick());
   act(() => renderer.root.findByType('textarea').props.onChange({ target: { value: '为何新增工具结果？' } }));
   await act(async () => button('请模型协助解读').props.onClick());

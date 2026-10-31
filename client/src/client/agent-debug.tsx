@@ -192,8 +192,8 @@ export function AgentDebugDialog({ info, onClose, debug = false }: { info: Backe
       }}>
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
         <div><p className="text-[10px] tracking-[.2em] text-primary">AGENT INSPECTOR</p><h1 id="agent-debug-title" className="mt-1 text-lg font-semibold">Agent 调试</h1></div>
-        <div className="flex items-center gap-3"><span className="text-xs text-muted-foreground">{debug ? "样本预览" : enabled ? "● 正在记录" : "记录已暂停"}</span>
-          <button className="desk-btn" disabled={pending || !info || debug} onClick={() => void recording()}>{enabled ? "暂停记录" : "恢复记录"}</button>
+        <div className="flex items-center gap-3"><span className="text-xs text-muted-foreground" title="暂停详细载荷后，本机使用中心仍记录不含正文的次数与用量元数据。">{debug ? "样本预览" : enabled ? "● 正在记录详细载荷" : "详细载荷已暂停"}</span>
+          <button className="desk-btn" disabled={pending || !info || debug} onClick={() => void recording()}>{enabled ? "暂停详细载荷" : "恢复详细载荷"}</button>
           <button className="desk-btn" disabled={!detail} onClick={exportCall}>导出本次 JSON</button>
           <button className="desk-btn" aria-label="关闭 Agent 调试" onClick={onClose}>关闭</button>
         </div>

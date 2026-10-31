@@ -110,6 +110,11 @@ def install(default=None):
 
     def send(client, request, *args, **kwargs):
         call_id = None
+        usage_attempt = None
+        try:
+            from .usage_observer import http_sending
+            usage_attempt = http_sending(request)
+        except Exception:pass
         timing = None
         buffer = b''
         started = time.monotonic()
@@ -132,11 +137,19 @@ def install(default=None):
         try:
             response = original(client, request, *args, **kwargs)
         except Exception as exc:
+            try:
+                from .usage_observer import http_returned
+                http_returned(usage_attempt,error=exc)
+            except Exception:pass
             if call_id:
                 if timing: save_timing(call_id,timing,getattr(client,'_tebb_network_mode','system'))
                 safe_update(call_id, state="failed", error=error_name(exc), updated=time.time(),
                             duration_ms=int((time.monotonic() - started) * 1000))
             raise
+        try:
+            from .usage_observer import http_returned
+            http_returned(usage_attempt,status=response.status_code)
+        except Exception:pass
         if not call_id or timing is None:
             return response
         first = int((time.monotonic() - started) * 1000)

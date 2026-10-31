@@ -49,6 +49,31 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         self.service.close()
         await self.service.wait_closed()
 
+    async def test_personal_usage_authenticated_metadata_read_while_busy(self):
+        import threading
+        from websockets.exceptions import ConnectionClosed
+        from desk_companion.usage_store import UsageStore,normalized_usage
+        store=UsageStore()
+        store.begin('rpc-usage','model',dict(root='',task='',project_id='',channel='diagnostic',source='model_test',model='fixture',model_id='fixture',model_key='fixture:route',route='hash'))
+        store.update('rpc-usage',state='returned',usage=normalized_usage({'prompt_tokens':0,'completion_tokens':0}),cost_cny=0)
+        entered,release=threading.Event(),threading.Event()
+        def hold():
+            with self.host.turn_lock:entered.set();release.wait(10)
+        thread=threading.Thread(target=hold);thread.start()
+        try:
+            self.assertTrue(await asyncio.to_thread(entered.wait,3))
+            value=await self.notebook_rpc('load_personal_usage',filters=dict(period='all',kind='model'))
+            self.assertTrue(value['ok']);self.assertEqual(value['totals']['model_calls'],1)
+            self.assertEqual(value['items'][0]['id'],'rpc-usage');self.assertEqual(value['totals']['cost_unknown_calls'],0)
+        finally:release.set();await asyncio.to_thread(thread.join,5)
+        self.host.conversation.running=True
+        try:self.assertTrue((await self.notebook_rpc('load_personal_usage'))['ok'])
+        finally:self.host.conversation.running=False
+        with self.assertRaises(ConnectionClosed):
+            async with connect(self.url.replace('test-token','bad-token'),proxy=None)as ws:
+                await ws.send(json.dumps(dict(type='rpc',id='unauthorized-usage',method='load_personal_usage')))
+                await asyncio.wait_for(ws.recv(),3)
+
     async def test_material_rpc_real_state_scope_and_authentication(self):
         from desk_companion import knowledge as k, local_sources, material_sources
         from websockets.exceptions import ConnectionClosed

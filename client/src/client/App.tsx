@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Fragment, lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Button, Card, CardBody } from "reend-components";
 import { useBoardActions } from "./board-actions";
+import { PersonalUsagePane } from './usage-center';
 import { shouldReloadBoard, type BoardPayload } from "./board";
 import {
   BOARD_FIXTURE,
@@ -113,7 +114,7 @@ export function App() {
   const [guideModel, setGuideModel] = useState<ModelSetupState | null>(null);
   const [dark, setDark] = useState(() => { try { return localStorage.getItem("tebb.theme") !== "light"; } catch { return true; } });
   const [sidebarState, setSidebarState] = useState({ open: false, available: false });
-  const [settingsSection,setSettingsSection] = useState("assistant");
+  const [settingsSection,setSettingsSection] = useState(debugKind==='usage'?'usage':"assistant");
   const [workspaceModalOpen,setWorkspaceModalOpen] = useState(false);
   useEffect(()=>{const dialogs=new Set<string>();const change=(event:Event)=>{const {id,open}=(event as CustomEvent<{id:string;open:boolean}>).detail;if(open)dialogs.add(id);else dialogs.delete(id);setWorkspaceModalOpen(dialogs.size>0);};window.addEventListener('tebb-workspace-dialog',change);return()=>window.removeEventListener('tebb-workspace-dialog',change);},[]);
   const [noteSourcesOpen, setNoteSourcesOpen] = useState(false);
@@ -155,7 +156,7 @@ export function App() {
         ? "feishu"
         : debugKind === "board"
           ? "board"
-          : debugKind === "settings"
+          : debugKind === "settings" || debugKind === "usage"
             ? "settings"
             : debugKind ? "chat" : "collaboration",
   );
@@ -2166,7 +2167,8 @@ export function App() {
               key="settings"
               className="flex-1 overflow-y-auto px-8 py-6"
             >
-              <nav className="workspace-tabs" aria-label="设置分类">{[['assistant','模型与人设'],['connections','连接与网络'],['appearance','界面外观'],['about','版本与诊断']].map(([id,label])=><button type="button" key={id} aria-pressed={settingsSection===id} onClick={()=>setSettingsSection(id)}>{label}</button>)}</nav>
+              <nav className="workspace-tabs" aria-label="设置分类">{[['assistant','模型与人设'],['connections','连接与网络'],['appearance','界面外观'],['usage','个人使用'],['about','版本与诊断']].map(([id,label])=><button type="button" key={id} aria-pressed={settingsSection===id} onClick={()=>setSettingsSection(id)}>{label}</button>)}</nav>
+              <div hidden={settingsSection!=='usage'}><PersonalUsagePane info={info} debug={!!debugKind} visible={settingsSection==='usage'}/></div>
               <div hidden={settingsSection!=='about'}><ReleaseSettings info={info} onShowIntro={releaseIntro.show}/>{developerMode&&<button type="button" className="desk-menu-item" onClick={()=>setAgentDebugOpen(true)}>调用调试</button>}</div>
               <div hidden={settingsSection!=='connections'}><ModelNetworkSettings info={info} debug={!!debugKind}/><SearchSettings info={info} debug={!!debugKind}/><StatusGrid cards={statuses} onOpenFeishu={()=>void openFeishu()}/></div>
               <div hidden={!['assistant','appearance'].includes(settingsSection)}><SettingsPane section={settingsSection==='appearance'?'appearance':'assistant'}

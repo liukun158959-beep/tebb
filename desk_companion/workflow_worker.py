@@ -57,7 +57,8 @@ def execute(request, emit, *, store=None, adapter=None, check_target=None):
             emit('tool_start', dict(tool='workflow_' + node['kind'], node_id=node['id'], read_only=node['kind'] not in WRITES,
                                     input=inputs, fingerprint=receipt['receipt_key']))
             try:
-                output = adapter(node['kind'], inputs, receipt['receipt_key'], emit, request)
+                from .usage_observer import invoke_tool
+                output = invoke_tool('workflow_'+node['kind'],adapter,node['kind'],inputs,receipt['receipt_key'],emit,request)
                 if not isinstance(output, dict) or set(output) != set(KINDS[node['kind']][2]) or len(json.dumps(output, ensure_ascii=False).encode()) > 500000:
                     raise ValueError('节点未返回完整、有效的输出。')
                 store.receipt(ident, node, 'confirmed', output=output, attempt=attempt)

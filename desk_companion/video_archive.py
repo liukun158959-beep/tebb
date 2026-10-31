@@ -46,7 +46,8 @@ class VideoArchive:
             self.emit("status", "视频笔记已生成，正在自动保存到飞书知识库。")
             self.emit("tool_start", {"tool": "archive_video_notes", "read_only": False})
             try:
-                result = export_summary(self.request["session_id"], sid, answer, destination=cfg)
+                from .usage_observer import invoke_tool
+                result = invoke_tool('archive_video_notes',export_summary,self.request["session_id"],sid,answer,destination=cfg)
                 self.emit("status", "视频笔记已保存：" + result["url"])
                 for warning in result.get("presentation_warnings", []):
                     self.emit("status", warning)

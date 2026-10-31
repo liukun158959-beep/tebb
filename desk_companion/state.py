@@ -54,6 +54,17 @@ def state_path() -> Path:
     return data_root() / STATE_NAME
 
 
+def model_price_snapshot(model):
+    """Only the user's two configured prices; no model credentials or payloads."""
+    from .usage_store import number
+    path=state_path()
+    if not path.is_file():return None
+    value=json.loads(path.read_text('utf-8')).get('model_prices',{}).get(model)
+    if not isinstance(value,dict):return None
+    result={key:number(value.get(key))for key in('input_cny_per_mtok','output_cny_per_mtok')}
+    return result if all(v is not None for v in result.values())else None
+
+
 def new_session_id() -> str:
     return str(uuid.uuid4())
 
