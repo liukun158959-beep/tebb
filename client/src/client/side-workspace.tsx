@@ -6,6 +6,7 @@ import { LoadingText } from "./loading-text";
 import { rpc, type BackendInfo } from "./api";
 import type { LocalSource } from "./local-sources";
 import type { NoteCite } from "./note";
+import { MaterialCitation } from './material-citation';
 const ProjectPanel = lazy(() => import("./project-panel").then(module => ({ default: module.ProjectPanel })));
 const TerminalPane = lazy(() => import("./terminal").then(module => ({ default: module.TerminalPane })));
 const ProjectRuntimePane = lazy(() => import("./project-runtime").then(module => ({ default: module.ProjectRuntimePane })));
@@ -13,7 +14,12 @@ const ProjectRuntimePane = lazy(() => import("./project-runtime").then(module =>
 type Request = { kind: "project" } | { kind: "project-runtime"; environment?: string; operation?: string } | { kind: "file"; source: LocalSource } | { kind: "web"; url: string } | { kind: "quote"; quote: NoteCite } | { kind: "terminal" };
 type Tab = { id: string; title: string; request: Request; text: string; total: number; next: number | null; busy: boolean; error: string; raw: boolean };
 type BrowserState = { url: string; title: string; loading: boolean };
-export function quoteIdentity(quote: NoteCite) { let hash = 2166136261; for (const ch of quote.context || quote.text) hash = Math.imul(hash ^ ch.codePointAt(0)!, 16777619); return `quote:${quote.doc_id}:${quote.n}:${hash >>> 0}`; }
+export function quoteIdentity(quote: NoteCite) {
+  let hash = 2166136261;
+  for (const ch of quote.context || quote.text) hash = Math.imul(hash ^ ch.codePointAt(0)!, 16777619);
+  const legacy = `quote:${quote.doc_id}:${quote.n}:${hash >>> 0}`;
+  return quote.source_id || quote.source_version ? `${legacy}:${quote.source_id || ''}:${quote.source_version || ''}:${quote.project_id || ''}` : legacy;
+}
 export function previewSource(source: LocalSource) { window.dispatchEvent(new CustomEvent("desk-open-preview", { detail: { kind: "file", source } })); }
 export function previewQuote(quote: NoteCite) { window.dispatchEvent(new CustomEvent("desk-open-preview", { detail: { kind: "quote", quote } })); }
 export function openProject() { window.dispatchEvent(new CustomEvent("desk-open-preview", { detail: { kind: "project" } })); }
@@ -144,6 +150,7 @@ export function SideWorkspace(props: { children: ReactNode; info: BackendInfo | 
         <div className="workspace-file-body">{current.error && <div role="alert" className="text-destructive">{current.error}<button className="desk-menu-item" onClick={() => file && void read(current.id, file)}>重试</button></div>}{current.busy && <p role="status"><LoadingText text="正在读取文件…" /><button className="desk-menu-item" onClick={() => { generation.current.set(current.id, (generation.current.get(current.id) || 0) + 1); update(current.id, { busy: false, error: "已停止等待，已读取内容保留。可重新读取。" }); }}>停止等待</button></p>}{markdown && !current.raw ? <Markdown text={current.text} /> : <pre>{current.text}</pre>}{current.next !== null && file && <button className="desk-menu-item" disabled={current.busy} onClick={() => void read(current.id, file, true)}>继续读取</button>}{file?.kind === "folder" && file.files?.map(child => <button key={child.id} className="workspace-file-link" onClick={() => previewSource(child)}>{child.relative || child.name}</button>)}</div>
         {file && <div className="workspace-footer"><span>{included ? "已加入本轮资料" : "仅预览"}</span><button className="desk-menu-item" onClick={() => included ? props.onDetach(file.id) : props.onAttach([file])}>{included ? "移出本轮资料" : "加入本轮资料"}</button></div>}
       </>}
+      {current?.request.kind === 'quote' && <MaterialCitation key={current.id} quote={current.request.quote} info={props.info} debug={props.debug} />}
       {notice && <p className="workspace-notice" role="status">{notice}</p>}
     </aside></>
   </div>;

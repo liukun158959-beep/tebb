@@ -454,6 +454,13 @@ def _cites(raw: object) -> list[dict]:
             "text": text.strip(),
             "doc_id": doc_id.strip(),
         }
+        for key, length in (('source_id', 32), ('source_version', 64), ('project_id', 100), ('indexed_at', 64)):
+            if key in item:
+                value = item[key]
+                if not isinstance(value, str) or len(value) > length or (key in {'source_id', 'source_version'} and
+                        (len(value) != length or any(ch not in '0123456789abcdef' for ch in value))):
+                    raise RuntimeError('引用的来源版本信息无效。')
+                row[key] = value
         if "context" in item:
             ctx = item.get("context")
             if type(ctx) is not str or not ctx.strip():

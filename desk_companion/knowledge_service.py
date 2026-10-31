@@ -3,6 +3,7 @@ from contextlib import nullcontext
 import uuid
 
 from . import knowledge
+from .material_sources import MaterialChangeError
 from .model_text import require_text
 from .task_budgets import budgeted_operation
 
@@ -28,7 +29,7 @@ class KnowledgeService:
                 conversation.running = True
                 reserved = True
             return action()
-        except knowledge.KnowledgeChangeError as exc:
+        except (knowledge.KnowledgeChangeError, MaterialChangeError) as exc:
             return dict(ok=False, error=str(exc), **exc.details)
         except Exception as exc:
             return dict(ok=False, change_state='not_changed', error=str(exc))
@@ -54,6 +55,17 @@ class KnowledgeService:
 
     def rebuild_knowledge(self):
         return self._change(knowledge.rebuild)
+
+    def material_operation(self, payload):
+        from .material_service import operation
+        if isinstance(payload, dict) and payload.get('action', 'list') in {'list', 'cancel', 'read_version', 'retrieve'}:
+            try:
+                return operation(payload)
+            except (knowledge.KnowledgeChangeError, MaterialChangeError) as exc:
+                return dict(ok=False, error=str(exc), **exc.details)
+            except Exception as exc:
+                return dict(ok=False, error=str(exc))
+        return self._change(lambda: operation(payload))
 
     @budgeted_operation('knowledge')
     def ask_knowledge(self, text):

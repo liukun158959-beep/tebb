@@ -444,6 +444,9 @@ class Bridge:
     def add_knowledge(self, doc_id: str, label: str, source: dict | None = None) -> dict:
         return self._host.knowledge_service.add_knowledge(doc_id, label, source)
 
+    def material_operation(self, payload: dict) -> dict:
+        return self._host.knowledge_service.material_operation(payload)
+
     def pick_local_sources(self, kind: str = "file", request_id: str = "") -> dict:
         from .local_sources import pick
         return pick(kind, request_id)

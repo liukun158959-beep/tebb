@@ -49,6 +49,33 @@ class LocalApiTests(unittest.IsolatedAsyncioTestCase):
         self.service.close()
         await self.service.wait_closed()
 
+    async def test_material_rpc_real_state_scope_and_authentication(self):
+        from desk_companion import knowledge as k, local_sources, material_sources
+        from websockets.exceptions import ConnectionClosed
+        path = Path(self.temp.name)/'selected.txt'; path.write_text('material RPC evidence', encoding='utf-8')
+        selected = local_sources.stage([str(path)])['sources'][0]
+        registered = await self.notebook_rpc('material_operation', payload=dict(action='register', snapshot_id=selected['id'], title='RPC material'))
+        self.assertTrue(registered['ok']); ident = registered['source_id']
+        with patch.object(k, '_require_models'), patch.object(k, '_embed', side_effect=lambda texts: [[1., 0.] for _ in texts]):
+            indexed = await self.notebook_rpc('material_operation', payload=dict(action='refresh', source_id=ident))
+        self.assertTrue(indexed['ok']); version = indexed['sources'][0]['index_version']
+        self.host.conversation.running = True
+        try:
+            listed = await self.notebook_rpc('material_operation', payload=dict(action='list'))
+            self.assertEqual(listed['sources'][0]['id'], ident)
+            read = await self.notebook_rpc('material_operation', payload=dict(action='read_version', source_id=ident, version=version))
+            self.assertEqual(read['source']['text'], 'material RPC evidence')
+            denied = await self.notebook_rpc('material_operation', payload=dict(action='refresh', source_id=ident))
+            self.assertFalse(denied['ok'])
+        finally:
+            self.host.conversation.running = False
+        before = (material_sources.root()/'sources.json').read_bytes()
+        with self.assertRaises(ConnectionClosed):
+            async with connect(self.url.replace('test-token', 'bad-token'), proxy=None) as ws:
+                await ws.send(json.dumps(dict(type='rpc', id='bad-material', method='material_operation', args=dict(payload=dict(action='register', snapshot_id=selected['id'])))))
+                await asyncio.wait_for(ws.recv(), 3)
+        self.assertEqual((material_sources.root()/'sources.json').read_bytes(), before)
+
     async def test_onboarding_progress_uses_authenticated_rpc_and_actual_model_state(self):
         from desk_companion import onboarding
         with patch.object(onboarding, 'public_catalog', return_value={'items': []}):

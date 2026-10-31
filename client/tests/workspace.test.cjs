@@ -28,6 +28,13 @@ const markdown = { Markdown: ({ text }) => React.createElement('article', { 'dat
 const mocks = rpc => ({ './api': { rpc }, './Markdown': markdown, './terminal': { TerminalPane: () => React.createElement('section', { 'data-terminal': '' }, '终端') }, '@tauri-apps/api/core': { isTauri: () => false }, '@tauri-apps/api/event': {} });
 const workspaceProps = { info: { port: 1, token: 'test' }, enabled: true, attachments: [], onAttach() {}, onDetach() {}, onLink() {}, onRequest() {}, children: React.createElement('textarea', { defaultValue: '保留草稿' }) };
 
+test('same quoted text from different source versions keeps separate preview identities', () => {
+  const { quoteIdentity } = load('side-workspace', mocks(async () => ({ ok: true })));
+  const quote = { n: 1, doc: 'doc', title: 'title', doc_id: 'doc', text: 'same text', source_id: 'a'.repeat(32), source_version: 'b'.repeat(64) };
+  assert.notEqual(quoteIdentity(quote), quoteIdentity({ ...quote, source_version: 'c'.repeat(64) }));
+  assert.equal(quoteIdentity(quote), quoteIdentity({ ...quote }));
+});
+
 test('file preview paginates without attaching, and preserves the conversation across collapse and tab switches', async () => {
   environment(); const calls = []; let attached = [];
   const { SideWorkspace, previewSource, previewQuote } = load('side-workspace', mocks(async (_i, method, args) => {

@@ -22,6 +22,7 @@ import {
 } from "./debug";
 import { ContextCard, ContextSplit, modelVerbatim, splitIndex, type ContextView, type MemoryPayload } from "./memory";
 import { KnowledgePane, KnowledgeTraceView, mergeKnowledgePage, type FeishuDoc, type KnowledgePayload } from "./knowledge";
+import { MaterialsPane } from './materials';
 import { NoteMode, type NotebookPage, type NoteDoc, type NoteSession } from "./note";
 import { FeishuPane, feishuLoggedIn, feishuWaiting, type FeishuSnap } from "./feishu";
 import { FeishuAgentPane } from "./feishu-agent";
@@ -1881,6 +1882,7 @@ export function App() {
               className="flex-1 overflow-y-auto px-8 py-6"
             >
               <KnowledgePane
+                materials={<MaterialsPane info={info} debug={!!debugPane()} onIndexed={() => void openKnowledge()} />}
                 settings={<WikiConnectionSettings info={info} debug={!!debugPane()} onSaved={() => void openKnowledge()} />}
                 data={knowledge}
                 catalog={knowledgeCatalog}

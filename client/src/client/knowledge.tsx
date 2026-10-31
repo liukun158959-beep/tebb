@@ -225,6 +225,7 @@ function HitList(props: { mark: "candidate" | "kept"; rows: KnowledgeHit[] }) {
 
 export function KnowledgePane(props: {
   settings?: ReactNode;
+  materials?: ReactNode;
   data: KnowledgePayload | null;
   catalog: FeishuDoc[];
   catalogError: string;
@@ -241,7 +242,7 @@ export function KnowledgePane(props: {
 }) {
   const data = props.data;
   const failed = !data || data.ok === false;
-  const [section, setSection] = useState("docs");
+  const [section, setSection] = useState(props.materials ? 'materials' : 'docs');
   const [query, setQuery] = useState("");
   const [catalogQuery, setCatalogQuery] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
@@ -322,11 +323,13 @@ export function KnowledgePane(props: {
       <p className="mt-1 text-sm text-muted-foreground">
         管理飞书与本地资料，在笔记中基于来源检索；笔记可以作为资料带回伙伴聊天，伙伴回答也能收藏为笔记。
       </p>
-      <nav className="workspace-tabs mt-5" aria-label="知识库功能">{[['docs','资料库'],['check','检索检查'],['index','索引设置']].map(([id,label])=><button type="button" key={id} aria-pressed={section===id} onClick={()=>setSection(id)}>{label}</button>)}</nav>
+      <nav className="workspace-tabs mt-5" aria-label="知识库功能">{[...(props.materials ? [['materials','资料工作区']] : []),['docs','已索引资料'],['check','检索检查'],['index','索引设置']].map(([id,label])=><button type="button" key={id} aria-pressed={section===id} onClick={()=>setSection(id)}>{label}</button>)}</nav>
+      {props.materials && <div hidden={section !== 'materials'}>{props.materials}</div>}
       {data?.error ? <p data-knowledge-error="" className="mt-3 text-sm text-destructive">{data.error}</p> : null}
       {data && data.ok !== false ? (
         <section hidden={section!=="index"} data-knowledge-settings="" className="mt-6 border border-border px-3 py-3 text-sm">
           <h2 className="font-semibold">索引与检索设置</h2>
+          <p className="mt-2 text-xs text-muted-foreground">设置作用于全部资料范围；重建索引会逐项核对所有已索引来源的授权，任一失败则保留原索引。</p>
           <p className="mt-2">子代理 {data.subagent}</p>
           {data.endpoint ? (
             <p data-knowledge-endpoint="" className="mt-1 break-all text-muted-foreground">下载地址 {data.endpoint}</p>

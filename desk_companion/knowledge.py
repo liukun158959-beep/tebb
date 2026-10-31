@@ -12,7 +12,7 @@ import os
 import shutil
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext, ExitStack
 from contextvars import ContextVar
 from functools import wraps
 from .resource_lock import ResourceLock
@@ -278,11 +278,13 @@ def _ready(repo: str) -> bool:
     return (folder / "config.json").is_file() and (folder / "model.safetensors").is_file()
 
 
-def public_view() -> dict:
+def public_view(project_id='') -> dict:
     settings, index = _snapshot()
     docs = []
     chunks = []
     for doc in index["docs"]:
+        if doc.get('project_id', '') != project_id:
+            continue
         own = [row for row in index["chunks"] if row["doc_id"] == doc["id"]]
         docs.append({
             "id": doc["id"],
@@ -291,6 +293,7 @@ def public_view() -> dict:
             "chars": doc["chars"],
             "chunks": len(own),
             **_source_metadata(doc),
+            **{key: doc[key] for key in ('source_id', 'source_version', 'project_id', 'updated') if key in doc},
         })
         for row in own:
             chunks.append({
@@ -622,8 +625,13 @@ def add_doc(doc_id: str, label: str, source: dict | None = None) -> dict:
     _require_same_index(before, settings)
     if any(doc["id"] == target for doc in before["docs"]):
         raise RuntimeError(f"《{title}》已经在库里。")
-    if metadata.get('local_path') and any(doc.get('local_path') == metadata['local_path'] for doc in before['docs']):
+    if metadata.get('local_path') and any(doc.get('local_path') == metadata['local_path'] and not doc.get('project_id') for doc in before['docs']):
         raise RuntimeError(f'《{title}》已经在库里，可重建索引更新内容。')
+    if not target.startswith('local:'):
+        from .material_sources import listing
+        registered = next((r for r in listing() if r['kind'] == 'feishu' and r['locator'] == target), None)
+        if registered and any(d['id'] == registered['doc_id'] for d in before['docs']):
+            raise RuntimeError(f'《{title}》已经在库里，可刷新此来源更新内容。')
     with _using_settings(settings):
         _require_models()
         body = _fetch(target, title)
@@ -637,12 +645,17 @@ def add_doc(doc_id: str, label: str, source: dict | None = None) -> dict:
     return _changed_page(doc_id=target)
 
 
-def delete_doc(doc_id: str) -> dict:
+def delete_doc(doc_id: str, project_id='') -> dict:
     target = (doc_id or "").strip()
     if not target:
         raise RuntimeError("删除文档需要文档 id。")
     with _STORE:
         index = _read_index()
+        target_doc = next((doc for doc in index['docs'] if doc['id'] == target and doc.get('project_id', '') == project_id), None)
+        if target_doc is None:
+            if any(doc['id'] == target for doc in index['docs']):
+                raise ValueError('资料不在当前范围')
+            raise RuntimeError('库里没有这篇文档。')
         kept = [doc for doc in index["docs"] if doc["id"] != target]
         if len(kept) == len(index["docs"]):
             raise RuntimeError("库里没有这篇文档。")
@@ -658,26 +671,85 @@ def delete_doc(doc_id: str) -> dict:
     return _changed_page(doc_id=target)
 
 
+def replace_document(doc_id, title, body, metadata, *, guard=None):
+    """Index one captured body atomically; source identity/authorization belongs to its caller."""
+    settings, before = _snapshot()
+    _require_same_index(before, settings)
+    with _using_settings(settings):
+        _require_models()
+        made = _chunks_for(doc_id, title, body, settings)
+        _attach_vectors(made)
+    metadata = dict(metadata)
+    url = metadata.pop('url', '')
+    doc = dict(id=doc_id, title=title, url=url, chars=len(body), updated=_now(), **metadata)
+    index = dict(before, docs=[*[d for d in before['docs'] if d['id'] != doc_id], doc],
+                 chunks=[*[c for c in before['chunks'] if c['doc_id'] != doc_id], *made])
+    _stamp(index, settings)
+    with guard if guard is not None else nullcontext():
+        _commit_index(index, settings, before)
+    return doc
+
+
+def indexed_documents():
+    """Metadata snapshot for the material/index composition service; no file or model reads."""
+    return _snapshot()[1]['docs']
+
+
+def retrieve_sources(question, doc_ids=None, project_id=''):
+    """Read-only retrieval/debug entry with an explicit trusted scope; no LLM request."""
+    if doc_ids is not None and (not isinstance(doc_ids, list) or not doc_ids or any(not isinstance(v, str) for v in doc_ids)):
+        raise ValueError('资料编号列表无效')
+    found = _retrieve(question, set(doc_ids) if doc_ids is not None else None, project_id)
+    _, cites = _blocks(found['kept'], True)
+    return {**found, 'cites': cites}
+
+
 def rebuild() -> dict:
     settings, before = _snapshot()
     docs = [dict(doc) for doc in before["docs"]]
     if not docs:
         raise RuntimeError("库是空的，没有可以重建的文档。")
-    with _using_settings(settings):
-        _require_models()
-        chunks = []
-        refreshed = []
-        for doc in docs:
-            body = _fetch(doc["id"], doc["title"])
-            made = _chunks_for(doc["id"], doc["title"], body, settings)
-            _attach_vectors(made)
-            doc["chars"] = len(body)
-            doc["updated"] = _now()
-            refreshed.append(doc)
-            chunks.extend(made)
-    index = dict(before, docs=refreshed, chunks=chunks)
-    _stamp(index, settings)
-    _commit_index(index, settings, before)
+    from . import material_sources
+    import uuid
+    managed = []; committed = False
+    try:
+        with _using_settings(settings):
+            _require_models()
+            chunks = []
+            refreshed = []
+            for doc in docs:
+                if doc.get('source_id'):
+                    ident = uuid.uuid4().hex; pid = doc.get('project_id', '')
+                    material_sources.begin(doc['source_id'], pid, ident, 'rebuild')
+                    managed.append(dict(source_id=doc['source_id'], project_id=pid, operation_id=ident))
+                    observed, body = material_sources.observe(doc['source_id'], pid, ident)
+                    managed[-1].update(revision=observed['revision'], version=observed['observed_version'])
+                    doc['source_version'] = observed['observed_version']
+                    if observed['kind'] == 'local': doc['local_path'] = observed['locator']
+                else:
+                    body = _fetch(doc["id"], doc["title"])
+                made = _chunks_for(doc["id"], doc["title"], body, settings)
+                _attach_vectors(made)
+                doc["chars"] = len(body)
+                doc["updated"] = _now()
+                refreshed.append(doc)
+                chunks.extend(made)
+        index = dict(before, docs=refreshed, chunks=chunks)
+        _stamp(index, settings)
+        with ExitStack() as guards:
+            for row in managed:
+                guards.enter_context(material_sources.commit_guard(**row))
+            _commit_index(index, settings, before)
+        committed = True
+        for row in managed:
+            material_sources.finish(row['source_id'], row['project_id'], row['operation_id'])
+    except Exception as exc:
+        for row in managed:
+            try: material_sources.finish(row['source_id'], row['project_id'], row['operation_id'], error=str(exc))
+            except Exception: pass
+        if committed:
+            raise KnowledgeChangeError(str(exc), change_state='committed', stage='material_finalize') from exc
+        raise
     return _changed_page()
 
 
@@ -725,22 +797,25 @@ def ask_sources(question: str, doc_ids: list, complete) -> dict:
     }
 
 
-def _retrieve(question: str, only_ids: set[str] | None) -> dict:
+def _retrieve(question: str, only_ids: set[str] | None, project_id='') -> dict:
     text = (question or "").strip()
     if not text:
         raise RuntimeError("问题是空的。")
     settings, index = _snapshot()
     with _using_settings(settings):
-        return _retrieve_snapshot(text, only_ids, settings, index)
+        return _retrieve_snapshot(text, only_ids, settings, index, project_id)
 
 
-def _retrieve_snapshot(text, only_ids, settings, index):
+def _retrieve_snapshot(text, only_ids, settings, index, project_id=''):
+    from .material_sources import eligible, scope
+    scope(project_id)
+    visible = {doc['id'] for doc in index['docs'] if eligible(doc, project_id)}
     _require_models()
     if not index["docs"] or not index["chunks"]:
         raise RuntimeError("知识库是空的。恢复：在知识库页添加飞书文档。")
     _require_same_index(index, settings)
     if only_ids is not None:
-        known = {doc["id"] for doc in index["docs"]}
+        known = visible
         missing = [item for item in only_ids if item not in known]
         if missing:
             raise RuntimeError("这些来源不在库里：" + "、".join(missing) + "。恢复：重新勾选后再问。")
@@ -748,6 +823,8 @@ def _retrieve_snapshot(text, only_ids, settings, index):
     scored = []
     seen_chunk = False
     for row in index["chunks"]:
+        if row.get('doc_id') not in visible:
+            continue
         if only_ids is not None and row.get("doc_id") not in only_ids:
             continue
         seen_chunk = True
@@ -777,6 +854,8 @@ def _blocks(kept: list[dict], numbered: bool) -> tuple[list[str], list[dict]]:
     number = 0
     for item in kept:
         body = item.get("context") or item["text"]
+        if item.get('freshness') == 'legacy_unverified':
+            body = '【历史索引；尚未核对当前原文】\n' + body
         key = (item["doc"], item["title"], body)
         if key in seen:
             continue
@@ -796,6 +875,9 @@ def _blocks(kept: list[dict], numbered: bool) -> tuple[list[str], list[dict]]:
             "text": item["text"],
             "doc_id": doc_id.strip(),
         }
+        for key in ('source_id', 'source_version', 'project_id', 'indexed_at'):
+            if key in item:
+                cite[key] = item[key]
         if item.get("context"):
             cite["context"] = item["context"]
         cites.append(cite)
@@ -1319,6 +1401,13 @@ def _hit(score: float, row: dict, index: dict) -> dict:
         "score": round(float(score), 4),
         "text": row["text"],
     }
+    source = next((doc for doc in index['docs'] if doc['id'] == doc_id), {})
+    for key in ('source_id', 'source_version', 'project_id'):
+        if key in source:
+            hit[key] = source[key]
+    if 'updated' in source:
+        hit['indexed_at'] = source['updated']
+    hit['freshness'] = 'captured_version' if source.get('source_version') else 'legacy_unverified'
     context = row.get("context") or ""
     if type(context) is str and context.strip() and context.strip() != row["text"]:
         hit["context"] = context.strip()

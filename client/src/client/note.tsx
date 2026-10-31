@@ -6,6 +6,7 @@ import { LoadingText } from "./loading-text";
 import { WorkspaceDialog } from "./workspace-dialog";
 
 export type NoteCite = {
+  source_id?: string; source_version?: string; project_id?: string; indexed_at?: string;
   n: number;
   doc: string;
   title: string;
