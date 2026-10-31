@@ -55,7 +55,7 @@ def capture_runtime(destination):
             relative=Path(package.name)/path.relative_to(package);body=path.read_bytes();target=destination/relative
             target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(body)
             hashes[relative.as_posix()]=hashlib.sha256(body).hexdigest();originals[relative.as_posix()]=path
-    for relative in('scripts/benchmark_agent.py','requirements.txt'):
+    for relative in('scripts/benchmark_agent.py','requirements.txt','scripts/runtime-lock.txt'):
         path=source/relative
         if path.is_file():
             body=path.read_bytes();target=destination/relative;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(body)
@@ -201,7 +201,7 @@ def run_benchmark(plan,model,network,*,capacity=None,manager_factory=None):
                 manager_factory=TaskManager
             bootstrap=f"import sys;sys.path.insert(0,{snapshot['directory']!r});from desk_companion.task_worker import main;main()"
             interpreter=str(Path(plan.python).resolve())if plan.python else sys.executable
-            probe="import sys,json,importlib.metadata as m;print(json.dumps(dict(python=sys.version,executable=sys.executable,dependencies={p:m.version(p) for p in ('openai','httpx','jsonschema','psutil')})))"
+            probe="import sys,json,hashlib,pathlib,importlib.metadata as m;print(json.dumps(dict(python=sys.version,executable=sys.executable,executable_sha256=hashlib.sha256(pathlib.Path(sys.executable).read_bytes()).hexdigest(),dependencies={p:m.version(p) for p in ('openai','httpx','jsonschema','psutil')},installed_packages=sorted((d.metadata['Name'],d.version) for d in m.distributions() if d.metadata['Name']))))"
             runtime=subprocess.run([interpreter,'-c',probe],capture_output=True,timeout=15,check=True)
             report['worker_runtime']=json.loads(runtime.stdout);command=[interpreter,'-u','-c',bootstrap]
             warm_start=time.monotonic();report['manager_initialization']='starting'
