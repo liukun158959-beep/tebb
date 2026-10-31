@@ -3,7 +3,7 @@ import json
 import math
 import time
 
-CONTRACT_VERSION=8
+CONTRACT_VERSION=9
 
 
 class CancellationNotSettled(TimeoutError):
@@ -111,7 +111,7 @@ CASES = [
     case('answer_concept','routing','只解释什么是幂等，不执行任何操作。',dict(mode='answer'),kind='route',subset=True),
     case('workflow_transform','workflow','只输出JSON数组。将[5,3,5,1]去重升序。',[1,3,5]),
     case('workflow_extract','workflow','只输出JSON对象。输入“样本编号R2，共6项”，提取id和count。',dict(id='R2',count=6)),
-    case('workflow_evidence','workflow','只输出JSON对象。资料只说明验证了2例，不能声称100%可靠。返回verified_samples=2, universal_guarantee=false。',dict(verified_samples=2,universal_guarantee=False)),
+    case('workflow_evidence','workflow','只输出JSON对象，严格只含verified_samples和universal_guarantee两个键，不增加说明键或JSON外文字。资料只说明验证了2例，不能声称100%可靠。返回verified_samples=2, universal_guarantee=false。',dict(verified_samples=2,universal_guarantee=False)),
     case('research_public_source','research','请实际读取唯一指定来源。根据正文第2节和第3节，区分四个保留顶级域和三个示例二级域。只输出JSON对象，至少含tlds（按原文顺序，带前导点）、example_domains（原文顺序）和citation（指向实际已读来源的Markdown引用）。不得把示例二级域当顶级域。',
          dict(tlds=['.test','.example','.invalid','.localhost'],example_domains=['example.com','example.net','example.org']),
          executor='public_source',kind='task',tools=['网页读取'],budget=4,fetch_budget=1,subset=True,required_tools=['web_fetch']),
@@ -131,6 +131,15 @@ CASES = [
     case('cancel_active_model','lifecycle','请核对7和11的总和，逐步检查后给出结果。',
          executor='lifecycle',scenario='cancel',budget=10,phase_budget=8),
 ]
+
+
+def json_answer(text):
+    """One JSON value, optionally in a complete JSON/blank Markdown fence."""
+    if not isinstance(text,str):raise TypeError('answer must be text')
+    text=text.strip();lines=text.splitlines()
+    if len(lines)>=3 and lines[0].strip()in{'```','```json'}and lines[-1].strip()=='```':
+        text='\n'.join(lines[1:-1])
+    return json.loads(text)
 
 
 def evaluate(spec, task, *, verification=None):
@@ -162,10 +171,7 @@ def evaluate(spec, task, *, verification=None):
     if spec.get('executor')=='chart':
         return ('success' if all(t in tools for t in spec['required_tools']) else 'false_success'),evidence
     try:
-        text=task.get('answer','').strip()
-        if text.startswith('```'):
-            text='\n'.join(text.splitlines()[1:-1])
-        value=json.loads(text)
+        value=json_answer(task.get('answer',''))
     except (ValueError,TypeError):
         return 'false_success', dict(evidence,reason='answer_is_not_required_json')
     expected=spec['expected']

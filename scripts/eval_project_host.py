@@ -10,7 +10,7 @@ import time
 import uuid
 
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
-from desk_companion.agent_eval_projects import BUG,TEST,TEST_COMMAND,PYTHON_START,REPOSITORIES,atomic_json,read_json,receipts_bound_to_environment,final_test_receipt
+from desk_companion.agent_eval_projects import BUG,TEST,TEST_COMMAND,PYTHON_START,REPOSITORIES,atomic_json,read_json,receipts_bound_to_environment,final_test_receipt,active_tool_marker,original_cancel_command
 from desk_companion.collaboration import Collaboration
 from desk_companion.docker_sandboxes import SandboxesClient
 from desk_companion.local_api import server
@@ -21,15 +21,16 @@ from desk_companion.project_environments import ProjectEnvironmentService
 def snapshot(host):
     tasks=[manager.get(item['id'])for manager in host.collaboration.managers.values()for item in manager.list()['items']]
     environments=host.project_environments.store.list();marker=False
+    with host.project_environments.lock:
+        live=[dict(operation=key,pid=value.pid)for key,value in host.project_environments.processes.items()if value.poll()is None]
+    active={value['operation']for value in live}
     for environment in environments:
         operation=environment.get('active_operation')
         if not operation:continue
         record=host.project_environments.store.operation(operation)
-        if record['kind']=='execute'and record['owner_task']and record['state']=='running':
+        if record['kind']=='execute'and record['owner_task']and record['state']=='running'and operation in active:
             log=host.project_environments.log(environment['id'],environment['scope'],operation)
-            marker=marker or b'tebb-eval-tool-active' in base64.b64decode(log['base64'])
-    with host.project_environments.lock:
-        live=[dict(operation=key,pid=value.pid)for key,value in host.project_environments.processes.items()if value.poll()is None]
+            marker=marker or active_tool_marker(base64.b64decode(log['base64']))
     return dict(runs=host.collaboration.snapshot()['state']['runs'],tasks=tasks,environments=environments,
                 active_guest_marker=marker,owned_foreground_processes=live)
 
@@ -47,6 +48,8 @@ def verify(host,folder,scenario,variant,request,setup):
                  observed_commit=environment.get('commit'),identity_matches=scope=='conversation:dm-research')
     def runtime():return client.owned(environment['sandbox_name'],environment['sandbox_id'])
     if scenario=='cancel':
+        if not(request.get('cancel_requested')and request.get('active_guest_marker')and root.get('state')=='cancelled'):
+            return dict(**proof,fallback_cleanup_used=True,error='no active tool cancellation was requested and confirmed')
         deadline=time.monotonic()+75
         while time.monotonic()<deadline:
             environment=service.store.get(ident)
@@ -56,7 +59,8 @@ def verify(host,folder,scenario,variant,request,setup):
             if record.get('state')=='cancelled'and observed['status']=='stopped':
                 task_ids={value['id']for value in state['tasks']if value.get('session')=='collab-'+root['id']}
                 proof['identity_matches']=proof['identity_matches']and record.get('environment')==ident and record.get('owner_task')in task_ids
-                proof.update(sdk_stopped=True,cancelled_operation=record,actual_runtime=observed);break
+                proof.update(sdk_stopped=True,cancelled_operation=record,actual_runtime=observed,
+                             original_tool_command=original_cancel_command(state['tasks'],record.get('owner_task')));break
             time.sleep(.3)
         if not proof['sdk_stopped']:proof['fallback_cleanup_used']=True
         return proof

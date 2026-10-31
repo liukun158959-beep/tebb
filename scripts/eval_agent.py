@@ -239,6 +239,7 @@ def main():
                     def progress(value):
                         row.update(value)
                         if value.get('root_run'):row['collab_run']=value['root_run']
+                        if value.get('project_case',{}).get('stage'):row['stage']=value['project_case']['stage']
                         save()
                     task,verification,task_ids,calls=execute(spec,profile=profile,model_id=model['id'],timeout=args.project_timeout,sample=sample,official=args.live,progress=progress)
                     row['task_ids']=task_ids;task_id=task_ids[0]if task_ids else''

@@ -1,4 +1,5 @@
 """Project quality experiments through the normal authenticated parent and worker."""
+import copy
 import hashlib
 import http.client
 import json
@@ -57,7 +58,9 @@ def prompt(scenario,variant,environment=''):
             '不要修改测试或只口头给补丁，依据真实退出码交付。')
     if scenario=='cancel':
         return ('这是隔离的活动工具取消验收，已有项目环境 environment_id='+environment+'。'
-            '不要准备仓库、不要后台化；请立即使用project_execute原样运行以下命令并等待：'+HOLD_COMMAND+'。')
+            '允许并必须先通过内部start_background_task派发执行任务（这是产品调度，不是命令后台化）。'
+            '执行任务中不要重新准备仓库；通过project_execute原样前台运行下列命令并等待，'
+            '禁止在命令中使用&、nohup或screen脱离该执行调用：'+HOLD_COMMAND+'。')
     repository,ref=REPOSITORIES[variant]
     details=('最终启动命令必须原样使用npm start，port=3000' if variant=='node' else
              '运行原examples/tutorial/flaskr，使用项目.venv解释器，安装教程并初始化SQLite；'
@@ -82,6 +85,18 @@ def final_test_receipt(receipts,command):
     return {}
 
 
+def active_tool_marker(raw):
+    # Echoed command text is not proof that the guest reached its print statement.
+    return any(line.strip()==b'tebb-eval-tool-active'for line in raw.splitlines())
+
+
+def original_cancel_command(tasks,owner):
+    task=next((value for value in tasks if value['id']==owner),{})
+    starts=[event['data']for event in task.get('events',[])if event['kind']=='tool_start'
+            and isinstance(event.get('data'),dict)and event['data'].get('tool')=='project_execute']
+    return bool(starts and starts[-1].get('query')==HOLD_COMMAND)
+
+
 def judge(scenario,root,proof):
     """Negative receipt/identity/cleanup facts cannot be replaced by oral completion."""
     if not proof.get('sdk_stopped') or not proof.get('identity_matches') or not proof.get('model_workers_exited'):return False
@@ -89,6 +104,7 @@ def judge(scenario,root,proof):
     succeeded={value.get('tool')for value in receipts if value.get('ok')is True}
     if scenario=='cancel':
         return bool(root.get('state')=='cancelled' and proof.get('active_guest_marker') and proof.get('cancel_requested')
+                    and proof.get('original_tool_command')
                     and not proof.get('fallback_cleanup_used'))
     if root.get('state')!='succeeded':return False
     if scenario=='coding':
@@ -112,7 +128,7 @@ def execute(spec,*,profile,model_id,timeout,sample=1,official=False,progress=lam
     folder=Path(profile)/'project_cases'/(spec['id']+'-s'+str(sample)+'-'+uuid.uuid4().hex)
     folder.mkdir(parents=True)
     with socket.socket()as reserved:reserved.bind(('127.0.0.1',0));port=reserved.getsockname()[1]
-    token=uuid.uuid4().hex;backend=None;tree=None;stream=None;root={};calls=[];tasks=[];run_id='';expired=False
+    token=uuid.uuid4().hex;backend=None;tree=None;stream=None;root={};goal_root=None;goal_events=[];calls=[];tasks=[];run_id='';expired=False
     proof=dict(verified=False,scope='authenticated_project_lifecycle',provider_mode='official'if official else'fixture',
                variant=variant,scenario=scenario,case_directory=str(folder),cancel_requested=False,active_guest_marker=False,
                stage='parent_setup',timeout_seconds=timeout,worker_exit_grace_seconds=8,verification_grace_seconds=90,parent_exit_grace_seconds=110)
@@ -138,8 +154,11 @@ def execute(spec,*,profile,model_id,timeout,sample=1,official=False,progress=lam
             call_ids=[v['id']for v in calls],calls=[call_evidence(v)for v in calls],project_case=dict(proof),
             tools=[dict(kind=e['kind'],**e['data'])for task in tasks for e in task.get('events',[])if e['kind']in{'tool_start','tool_end'}and isinstance(e.get('data'),dict)]))
         return observed
+    def stage(value):
+        proof['stage']=value;progress(dict(project_case=copy.deepcopy(proof)))
     started=time.monotonic();deadline=started+timeout
     try:
+        stage('parent_setup')
         stream=(folder/'backend.log').open('wb')
         env={**os.environ,'DESK_COMPANION_DATA_DIR':str(profile),'DESK_TERMINAL_PORT':str(port),'DESK_TERMINAL_TOKEN':token,'PYTHONUTF8':'1'}
         backend=subprocess.Popen([sys.executable,'-u',str(ROOT/'scripts/eval_project_host.py'),'--port',str(port),'--token',token,
@@ -157,17 +176,18 @@ def execute(spec,*,profile,model_id,timeout,sample=1,official=False,progress=lam
             if backend.poll()is not None or time.monotonic()>=deadline:raise TimeoutError('project parent setup did not settle')
             time.sleep(.1)
         setup=read_json(folder/'ready.json');proof.update(setup=setup)
-        proof['stage']='configure_role'
+        stage('configure_role')
         state=rpc('load_collaboration')['state'];agent=next(value for value in state['agents']if value['id']=='research')
         configured=rpc('collaboration_action',action=dict(type='agent',agent={**agent,'model':model_id,'tools':['项目环境']},request_id=uuid.uuid4().hex))
         if not configured['ok']:raise ValueError('project role configuration rejected')
         goal=prompt(scenario,variant,setup.get('environment',''));proof['input']=goal
+        progress(dict(input=goal))
         before={value['id']for value in state['runs']}
-        proof['stage']='submit'
+        stage('submit')
         admitted=rpc('collaboration_action',action=dict(type='send',mode='task',conversation='dm-research',text=goal,
             sampling=dict(reasoning_effort='low',temperature=.1,top_p=1),request_id=uuid.uuid4().hex))
         root=next(value for value in admitted['state']['runs']if value['id']not in before);run_id=root['id']
-        proof['stage']='run'
+        stage('run')
         while True:
             observed=collect()
             if backend.poll()is not None:raise RuntimeError('project evaluation parent exited; see case backend.log')
@@ -179,22 +199,24 @@ def execute(spec,*,profile,model_id,timeout,sample=1,official=False,progress=lam
             if time.monotonic()>=deadline:
                 expired=True;rpc('collaboration_action',action=dict(type='cancel',id=run_id,request_id=uuid.uuid4().hex));break
             time.sleep(.15)
-        proof['stage']='verify'
-        atomic_json(folder/'verify-request.json',dict(run_id=run_id))
+        goal_root=copy.deepcopy(root)
+        stage('verify')
+        atomic_json(folder/'verify-request.json',dict(run_id=run_id,cancel_requested=proof['cancel_requested'],active_guest_marker=proof['active_guest_marker']))
         verify_deadline=time.monotonic()+90
         while not(folder/'verification.json').exists():
             collect()
             if backend.poll()is not None or time.monotonic()>=verify_deadline:raise TimeoutError('project result/SDK-stop verification unconfirmed')
             time.sleep(.2)
         proof.update(read_json(folder/'verification.json'));collect()
-        proof['model_receipts']=root.get('project_receipts',[])
-        proof['stage']='worker_exit'
+        proof['model_receipts']=goal_root.get('project_receipts',[])
+        stage('worker_exit')
         worker_deadline=time.monotonic()+8
         while any(worker_alive(value)for value in calls)and time.monotonic()<worker_deadline:
             time.sleep(.1);collect()
         proof['worker_exit_grace_seconds']=8
         proof['model_workers_exited']=bool(calls)and not any(worker_alive(value)for value in calls)
-        proof.update(deadline_exceeded=expired,verified=judge(scenario,root,proof))
+        goal_events=copy.deepcopy([e for task in tasks for e in task.get('events',[])])
+        proof.update(deadline_exceeded=expired,verified=judge(scenario,goal_root,proof))
     except Exception as exc:
         proof.update(error_type=type(exc).__name__,failure_stage=proof['stage'])
         if isinstance(exc,OSError):proof['io_error']=dict(errno=exc.errno,winerror=getattr(exc,'winerror',None),file=Path(exc.filename).name if exc.filename else None)
@@ -214,12 +236,15 @@ def execute(spec,*,profile,model_id,timeout,sample=1,official=False,progress=lam
         if stream:stream.close()
         if tree:tree.close()
         proof['parent_exited']=bool(backend and backend.poll()is not None)
+        proof['parent_exit_code']=backend.poll()if backend else None
         proof['cleanup']=read_json(folder/'cleanup.json')
         if not proof['cleanup']or not proof['cleanup'].get('sdk_stopped')or proof.get('forced_parent_stop'):proof['verified']=False
         try:collect()
         except Exception as exc:
             proof.update(verified=False,evidence_collection_error=type(exc).__name__)
+        proof['goal_state_before_cleanup']=(goal_root or{}).get('state')
+        proof['cleanup_root_state']=root.get('state')
         atomic_json(folder/'result.json',proof)
         progress(dict(project_case=dict(proof)))
-    events=[e for task in tasks for e in task.get('events',[])]
-    return dict(state=root.get('state','failed'),answer=root.get('answer',''),error=root.get('error',''),events=events),proof,[v['id']for v in tasks],calls
+    result=goal_root or root
+    return dict(state=result.get('state','failed'),answer=result.get('answer',''),error=result.get('error',''),events=goal_events),proof,[v['id']for v in tasks],calls

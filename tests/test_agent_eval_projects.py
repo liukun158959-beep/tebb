@@ -1,11 +1,78 @@
 import copy
 import hashlib
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 import unittest
-from desk_companion.agent_eval_projects import judge,receipts_bound_to_environment,final_test_receipt
+from desk_companion.agent_eval_projects import judge,receipts_bound_to_environment,final_test_receipt,active_tool_marker,original_cancel_command,HOLD_COMMAND,execute
 from desk_companion.agent_evals import CASES,evaluate
 
 
 class ProjectVerdictTests(unittest.TestCase):
+    def test_command_echo_is_not_an_active_guest_marker(self):
+        self.assertTrue(active_tool_marker(b'guest output\r\ntebb-eval-tool-active\r\n'))
+        self.assertFalse(active_tool_marker(b'python -c \'print("tebb-eval-tool-active")\''))
+        self.assertFalse(active_tool_marker(b'not-tebb-eval-tool-active'))
+
+    def test_cancel_command_must_be_the_last_execute_of_the_actual_operation_owner(self):
+        event=lambda command:dict(kind='tool_start',data=dict(tool='project_execute',query=command))
+        tasks=[dict(id='other',events=[event(HOLD_COMMAND)]),dict(id='owner',events=[event('echo marker')])]
+        self.assertFalse(original_cancel_command(tasks,'owner'))
+        self.assertFalse(original_cancel_command(tasks,'missing'))
+        tasks[1]['events'].append(event(HOLD_COMMAND))
+        self.assertTrue(original_cancel_command(tasks,'owner'))
+        tasks[1]['events'].append(event('echo marker'))
+        self.assertFalse(original_cancel_command(tasks,'owner'))
+
+    def test_cleanup_cancellation_cannot_replace_the_goal_needs_input_state(self):
+        # Reproduce v8: a route asks for clarification, then teardown cancels it.
+        # A fake transport/process isolates this evaluator bookkeeping defect.
+        with TemporaryDirectory()as directory:
+            folder=None;root=dict(id='root',state='needs_input',answer='需要澄清',error='');published=[]
+            def write(name,value):
+                (folder/name).write_text(json.dumps(value),'utf-8')
+            class Parent:
+                def __init__(self,command,**kwargs):
+                    nonlocal folder
+                    folder=Path(command[command.index('--directory')+1]);self.returncode=None
+                    write('ready.json',dict(environment='env'))
+                    write('progress.json',dict(runs=[root],tasks=[]))
+                    write('verification.json',dict(sdk_stopped=False,identity_matches=True))
+                    write('cleanup.json',dict(sdk_stopped=True))
+                def poll(self):return self.returncode
+                def wait(self,**kwargs):self.returncode=0;return 0
+            class Tree:
+                def __init__(self,parent):pass
+                def close(self):pass
+            class Connection:
+                def __init__(self,*args,**kwargs):pass
+                def request(self,*args,**kwargs):pass
+                def getresponse(self):return self
+                def read(self):return b''
+                def close(self):pass
+            class WS:
+                def __enter__(self):return self
+                def __exit__(self,*args):pass
+                def send(self,text):
+                    message=json.loads(text);method=message['method'];action=message['args'].get('action',{})
+                    if method=='load_collaboration':result=dict(state=dict(agents=[dict(id='research')],runs=[]))
+                    elif action.get('type')=='send':result=dict(state=dict(runs=[copy.deepcopy(root)]))
+                    else:
+                        result=dict(ok=True)
+                        if action.get('type')=='cancel':
+                            root['state']='cancelled';write('progress.json',dict(runs=[root],tasks=[]))
+                    self.response=json.dumps(dict(result=dict(ok=True,result=result)))
+                def recv(self,**kwargs):return self.response
+            with patch('desk_companion.agent_eval_projects.subprocess.Popen',Parent),patch('desk_companion.task_process.ProcessTree',Tree),patch('websockets.sync.client.connect',lambda *a,**k:WS()),patch('desk_companion.agent_eval_projects.http.client.HTTPConnection',Connection):
+                result,proof,_,_=execute(dict(id='cancel-test',scenario='cancel'),profile=directory,model_id='fake',timeout=20,progress=published.append)
+            self.assertEqual(result['state'],'needs_input')
+            self.assertEqual(proof['goal_state_before_cleanup'],'needs_input')
+            self.assertEqual(proof['cleanup_root_state'],'cancelled')
+            self.assertFalse(proof['verified']);self.assertEqual(proof['parent_exit_code'],0)
+            self.assertEqual(published[0]['project_case']['stage'],'parent_setup')
+            self.assertTrue(any('start_background_task'in value.get('input','')for value in published))
+
     def test_model_must_test_after_last_write_and_last_test_cannot_be_a_failure(self):
         command='original-test';digest=hashlib.sha256(command.encode()).hexdigest()
         test=lambda code:dict(tool='project_execute',command_sha256=digest,ok=code==0,exit_code=code)
@@ -33,7 +100,7 @@ class ProjectVerdictTests(unittest.TestCase):
                     model_receipts=[dict(tool=name,ok=True)for name in names],
                     original_tests_unchanged=True,implementation_changed=True,model_test_exit_code=0,verification_test_exit_code=0,
                     checkout_matches=True,tracked_files_unchanged=True,original_service_command=True,http_ready_before_stop=True,actual_log_bytes=42,
-                    preview_unreachable=True,model_stop_same_environment=True,active_guest_marker=True,cancel_requested=True)
+                    preview_unreachable=True,model_stop_same_environment=True,active_guest_marker=True,cancel_requested=True,original_tool_command=True)
 
     def test_coding_needs_unchanged_original_tests_and_real_test_exit_in_both_phases(self):
         root=dict(state='succeeded');proof=self.proof('coding')
@@ -53,7 +120,7 @@ class ProjectVerdictTests(unittest.TestCase):
 
     def test_cancel_needs_an_active_guest_and_worker_and_sdk_independently_stopped(self):
         proof=self.proof('cancel');self.assertTrue(judge('cancel',dict(state='cancelled'),proof))
-        for key in ('active_guest_marker','cancel_requested','sdk_stopped','model_workers_exited'):
+        for key in ('active_guest_marker','cancel_requested','original_tool_command','sdk_stopped','model_workers_exited'):
             self.assertFalse(judge('cancel',dict(state='cancelled'),{**proof,key:False}),key)
         self.assertFalse(judge('cancel',dict(state='succeeded'),proof))
         self.assertFalse(judge('cancel',dict(state='cancelled'),{**proof,'fallback_cleanup_used':True}))

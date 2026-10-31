@@ -1,5 +1,4 @@
 """Quality experiments over the public durable collaboration lifecycle."""
-import json
 import time
 import uuid
 import psutil
@@ -11,18 +10,18 @@ def worker_alive(call):
 
 
 def judge(scenario, root, runs, proof):
-    from .agent_evals import same_json
+    from .agent_evals import same_json,json_answer
     if scenario=='cancel':
         return bool(root['state']=='cancelled' and proof.get('cancel_observed_active')
                     and proof.get('workers_exited_before_shutdown') and proof.get('tasks_terminal'))
     if root['state']!='succeeded':return False
-    try:matched=same_json(json.loads(root['answer']),dict(total=18,checked=True))
+    try:matched=same_json(json_answer(root['answer']),dict(total=18,checked=True))
     except (ValueError,TypeError,KeyError):return False
     if scenario=='clarify':
         return bool(matched and proof.get('paused_root')==root['id'] and proof.get('resumed_root')==root['id'])
     children=[r for r in runs if r.get('parent')==root['id']]
     if len(children)!=1:return False
-    try:child_matched=same_json(json.loads(children[0].get('answer','')),dict(total=18,checked=True))
+    try:child_matched=same_json(json_answer(children[0].get('answer','')),dict(total=18,checked=True))
     except (ValueError,TypeError):child_matched=False
     return bool(matched and root.get('stage')=='deliver' and proof.get('accepted_delivery')
                 and child_matched and children[0]['agent']=='writer' and children[0]['state']=='succeeded')

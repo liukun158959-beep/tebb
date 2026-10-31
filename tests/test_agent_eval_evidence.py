@@ -77,6 +77,16 @@ class EvidenceTests(unittest.TestCase):
         self.assertFalse(judge('delegate',root,[],dict(accepted_delivery=True)))
         self.assertFalse(judge('delegate',root,[dict(parent='root',agent='writer',state='failed')],dict(accepted_delivery=True)))
 
+    def test_lifecycle_accepts_complete_json_fence_without_loosening_state_or_schema(self):
+        root=dict(id='root',state='succeeded',answer='```json\n{"total":18,"checked":true}\n```')
+        proof=dict(paused_root='root',resumed_root='root')
+        self.assertTrue(judge('clarify',root,[],proof))
+        for answer in [root['answer']+'\nextra prose','```json\n{"total":999,"checked":true}\n```',
+                       '```json\n{"total":18,"checked":1}\n```','```json\n{"total":18,"checked":true}']:
+            self.assertFalse(judge('clarify',{**root,'answer':answer},[],proof))
+        self.assertFalse(judge('clarify',{**root,'state':'failed'},[],proof))
+        self.assertFalse(judge('clarify',root,[],{**proof,'resumed_root':'other'}))
+
     def test_summary_counts_all_phases_separately_from_cases(self):
         _,total=summarize([dict(outcome='success',task_id='route',task_ids=['route','work'],call_ids=[]),
                            dict(outcome='success',task_id='next',task_ids=['next'],call_ids=[])])
