@@ -45,3 +45,7 @@ node --test tests/materials.test.cjs tests/local-sources.test.cjs tests/workspac
 ```
 
 测试使用临时源文件、假嵌入和真实本地认证WebSocket；无付费模型或真实飞书读写。配置/模型缺失按既有知识库规则报错，不自动下载模型或改走其他检索方式。
+
+## 交付验证
+
+95249f5 的[精确 CI 41208838109](https://github.com/liukun158959-beep/tebb/actions/runs/41208838109)全部通过：1088 项后端无失败/错误、12 项显式沙箱opt-in跳过，前端/类型/生产构建/Rust通过。源码已快进main并独立核对，#122完成；本轮未修改冻结发布包。真实浏览器在隔离示例中确认索引历史版本与当前原文分别读取，读取不会自动重建索引。
