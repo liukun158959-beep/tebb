@@ -2,6 +2,7 @@
 import hashlib
 import io
 import json
+import re
 import uuid
 
 PUBLIC_URL='https://www.rfc-editor.org/rfc/rfc2606.txt'
@@ -79,6 +80,52 @@ def calendar_digest(calendar):
     return hashlib.sha256(json.dumps(page['events'],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
 
+def source_proof(spec,task,context):
+    from .web_snapshots import PageReader
+    from .web_sources import check_citations
+    from .json_document import json_answer
+    sources=[e['data']for e in task.get('events',[])if e['kind']=='evidence'and isinstance(e['data'],dict)
+        and e['data'].get('level')=='body'and e['data'].get('url')==context['source_url']]
+    snapshots={source.get('snapshot_id')for source in sources}
+    for ident in snapshots:
+        saved=PageReader(context['run_id']).load(ident)
+        group=[s for s in sources if s.get('snapshot_id')==ident];ranges=[]
+        if any(s.get('sha256')!=saved['sha256']or s.get('url')!=saved['url']for s in group):raise ValueError('source_snapshot_mismatch')
+        for source in group:
+            for span in source.get('read_ranges',[]):
+                if (not isinstance(span,list)or len(span)!=2 or any(type(n)is not int for n in span)
+                        or not 0<=span[0]<span[1]<=saved['characters']):raise ValueError('invalid_source_read_range')
+                if saved['text'][span[0]:span[1]]not in source.get('text',''):raise ValueError('read_range_body_mismatch')
+                ranges.append(span)
+        required=[];sections=spec.get('source_sections',[])
+        headings=list(re.finditer(r'(?m)^(?:#{1,6}[ \t]+)?(\d+)\.[ \t]+[^\n]+$',saved['text']))
+        for number in sections:
+            matched=[index for index,m in enumerate(headings)if int(m[1])==number]
+            if len(matched)!=1:raise ValueError('requested_section_not_identified')
+            index=matched[0]
+            if index+1==len(headings)and saved.get('truncated'):raise ValueError('requested_section_end_unknown')
+            required.append([headings[index].start(),headings[index+1].start()if index+1<len(headings)else saved['characters']])
+        if not sections:
+            if saved.get('truncated'):raise ValueError('full_source_not_captured')
+            required=[[0,saved['characters']]]
+        covered=True
+        for start,end in required:
+            cursor=start
+            for low,high in sorted(ranges):
+                if low<=cursor:cursor=max(cursor,high)
+            if cursor<end:covered=False
+        if not covered:continue
+        answer=json_answer(task.get('answer',''))
+        citation_text=answer.get(spec.get('citation_field','citation'))if isinstance(answer,dict)else None
+        if not isinstance(citation_text,str)or not citation_text.strip():raise ValueError('required_citation_field_missing')
+        citation=check_citations(citation_text,group)
+        if not citation['ok']or not citation['pages_read']:raise ValueError('actual_source_citation_missing')
+        return dict(verified=True,source_url=saved['url'],snapshot_id=ident,sha256=saved['sha256'],
+            characters=saved['characters'],required_ranges=required,read_ranges=ranges,
+            requested_sections=sections,requested_coverage_complete=True,whole_source_read=any(s.get('complete')for s in group),citation=citation)
+    raise ValueError('requested_source_sections_not_read')
+
+
 def verify(spec, task, context):
     """A successful tool event cannot substitute for a loadable, matching result."""
     executor=spec.get('executor')
@@ -111,17 +158,7 @@ def verify(spec, task, context):
             proof.update(before_sha256=context['before'],after_sha256=after)
             if context['before']!=after:raise ValueError('readonly_calendar_changed')
         elif executor=='public_source':
-            from .web_snapshots import PageReader
-            from .web_sources import check_citations
-            sources=[e['data'] for e in task.get('events',[]) if e['kind']=='evidence'
-                     and isinstance(e['data'],dict) and e['data'].get('level')=='body']
-            source=next(s for s in sources if s.get('url')==context['source_url'] and s.get('complete') and not s.get('truncated'))
-            saved=PageReader(context['run_id']).load(source['snapshot_id'])
-            if saved['sha256']!=source['sha256']:raise ValueError('source_snapshot_mismatch')
-            citation=check_citations(task.get('answer',''),sources)
-            if not citation['ok'] or not citation['pages_read']:raise ValueError('actual_source_citation_missing')
-            proof.update(source_url=source['url'],snapshot_id=source['snapshot_id'],sha256=saved['sha256'],
-                         characters=saved['characters'],complete=True,citation=citation)
+            proof.update(source_proof(spec,task,context))
         elif executor=='chart':
             from PIL import Image
             from . import report_charts

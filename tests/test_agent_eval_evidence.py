@@ -16,6 +16,30 @@ def spec(ident):return next(c for c in CASES if c['id']==ident)
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_source_sections_accept_omitted_preamble_but_not_missing_requested_body(self):
+        from desk_companion.web_snapshots import PageReader
+        from scripts.eval_fixture_worker import fetch_page
+        case=spec('research_public_source');context=prepare(case,self.workspace,self.run_id,fixture=True)
+        reader=PageReader(self.run_id)
+        with patch('desk_companion.web_snapshots.fetch_page',fetch_page):full=reader.read(FIXTURE_URL)
+        start=full['text'].index('2.')
+        partial=reader.read(FIXTURE_URL,snapshot_id=full['snapshot_id'],offset=start)
+        task=dict(state='succeeded',answer=json.dumps({**case['expected'],'citation':'[source](<'+FIXTURE_URL+'>)'}),
+            events=[dict(kind='evidence',data=partial)])
+        proof=verify(case,task,context)
+        self.assertTrue(proof['verified'],proof)
+        self.assertFalse(partial['complete'])
+        # A prefix before section three is not enough, even with correct prose.
+        end=full['text'].index('3.')
+        incomplete={**partial,'text':full['text'][start:end],'read_ranges':[[start,end]]}
+        self.assertFalse(verify(case,{**task,'events':[dict(kind='evidence',data=incomplete)]},context)['verified'])
+        for bad in [{**partial,'sha256':'0'*64},{**partial,'level':'snippet'},
+                    {**partial,'text':'not the saved body'},{**partial,'url':'https://wrong.invalid/'}]:
+            with self.subTest(source=bad.get('level'),url=bad.get('url')):
+                self.assertFalse(verify(case,{**task,'events':[dict(kind='evidence',data=bad)]},context)['verified'])
+        missing=json.dumps({**case['expected'],'unrelated_url':'[source]('+FIXTURE_URL+')'})
+        self.assertFalse(verify(case,{**task,'answer':missing},context)['verified'])
+
     def setUp(self):
         folder=tempfile.TemporaryDirectory();self.addCleanup(folder.cleanup)
         self.profile=Path(folder.name)

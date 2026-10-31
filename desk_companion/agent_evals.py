@@ -4,7 +4,7 @@ import math
 import time
 from .json_document import json_answer
 
-CONTRACT_VERSION=14
+CONTRACT_VERSION=15
 
 
 class CancellationNotSettled(TimeoutError):
@@ -115,7 +115,7 @@ CASES = [
     case('workflow_evidence','workflow','只输出JSON对象，严格只含verified_samples和universal_guarantee两个键，不增加说明键或JSON外文字。资料只说明验证了2例，不能声称100%可靠。返回verified_samples=2, universal_guarantee=false。',dict(verified_samples=2,universal_guarantee=False)),
     case('research_public_source','research','请实际读取唯一指定来源。根据正文第2节和第3节，区分四个保留顶级域和三个示例二级域。只输出JSON对象，至少含tlds（按原文顺序，带前导点）、example_domains（原文顺序）和citation（指向实际已读来源的Markdown引用）。不得把示例二级域当顶级域。',
          dict(tlds=['.test','.example','.invalid','.localhost'],example_domains=['example.com','example.net','example.org']),
-         executor='public_source',kind='task',tools=['网页读取'],budget=4,fetch_budget=1,subset=True,required_tools=['web_fetch']),
+         executor='public_source',kind='task',tools=['网页读取'],budget=4,fetch_budget=1,subset=True,required_tools=['web_fetch'],source_sections=[2,3],citation_field='citation'),
     case('chart_from_evidence','charts','先实际调用read_local_source读取本轮附件，再调用build_chart生成流程示意。标题“交付流程”，按附件三个节点原顺序连接；type=flow，flow_style=steps，source_ids=[]（本地附件不能伪造网页来源编号）。最终原样插入工具返回的tebb-chart围栏，说明是关系示意，不输出JSON，不编数值或增加分支。',
          dict(type='flow',nodes=['接收','核对','交付'],edges=[[0,1],[1,2]],source_ids=[],flow_style='steps'),
          executor='chart',kind='task',tools=['构建图表'],budget=5,required_tools=['read_local_source','build_chart']),
