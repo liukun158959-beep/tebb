@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from desk_companion.tasks import TaskManager
@@ -71,7 +72,43 @@ emit('result',r['text'])
 
 
 class TaskTests(unittest.TestCase):
+    def controlled_clock(self):
+        clock = {'offset': 0}
+        timer = SimpleNamespace(time=time.time, sleep=time.sleep,
+                                monotonic=lambda: time.monotonic() + clock['offset'])
+        replacement = patch('desk_companion.tasks.time', timer)
+        replacement.start()
+        self.addCleanup(replacement.stop)
+        return clock
+
+    def test_deadline_uses_observed_completion_not_supervisor_resume_time(self):
+        start = threading.Thread.start
+        for late_result in (True, False):
+            with self.subTest(late_result=late_result):
+                clock = {'offset': 0}
+                timer = SimpleNamespace(time=time.time, sleep=time.sleep,
+                                        monotonic=lambda: time.monotonic() + clock['offset'])
+                def handoff(thread):
+                    reader = getattr(thread._target, '__name__', '') == 'read'
+                    if reader and late_result: clock['offset'] = 10
+                    result = start(thread)
+                    if reader:
+                        thread.join(4)
+                        if thread.is_alive(): raise TimeoutError('reader barrier did not settle')
+                        if not late_result: clock['offset'] = 10
+                    return result
+                self.manager.settings.update(call_timeout=5, task_timeout=5)
+                with patch('desk_companion.tasks.time', timer), patch.object(threading.Thread, 'start', handoff):
+                    task = self.manager.wait(self.manager.submit('instant', 'deadline-' + str(late_result)))
+                self.assertEqual(task['state'], 'timed_out' if late_result else 'succeeded')
+                if late_result:
+                    self.assertIn('任务总时限', task['error'])
+                    self.assertNotIn('自动归档', task['error'])
+                    self.assertEqual(next(e['data'] for e in task['events'] if e['kind'] == 'timeout_phase'),
+                                     dict(stage='outside_call', scope='task'))
+
     def test_shutdown_reports_pending_reader_without_releasing_session(self):
+        clock = self.controlled_clock()
         entered, release = threading.Event(), threading.Event()
         original = self.manager.event
         def event(task, kind, data, **kwargs):
@@ -82,10 +119,11 @@ class TaskTests(unittest.TestCase):
                     if not release.wait(15): raise TimeoutError('reader barrier not released')
             return original(task, kind, data, **kwargs)
         self.manager.event = event
-        self.manager.settings.update(call_timeout=.2, task_timeout=.3)
+        self.manager.settings.update(call_timeout=30, task_timeout=30)
         try:
             ident = self.manager.submit('stream', 'pending-reader-database')
             self.assertTrue(entered.wait(5))
+            clock['offset'] = 40
             self.assertEqual(self.manager.wait(ident)['state'], 'timed_out')
             started = time.monotonic()
             result = self.manager.shutdown()
@@ -98,6 +136,7 @@ class TaskTests(unittest.TestCase):
             self.assertTrue(self.manager.shutdown()['complete'])
 
     def test_shutdown_waits_for_reader_database_io_after_terminal_task_state(self):
+        clock = self.controlled_clock()
         entered,release,returned=threading.Event(),threading.Event(),threading.Event()
         original=self.manager.event;results=[];closer=None
         def event(task,kind,data,**kwargs):
@@ -106,10 +145,11 @@ class TaskTests(unittest.TestCase):
                     connection.execute('SELECT id FROM tasks').fetchall();entered.set()
                     if not release.wait(12):raise TimeoutError('reader barrier not released')
             return original(task,kind,data,**kwargs)
-        self.manager.event=event;self.manager.settings.update(call_timeout=.2,task_timeout=.3)
+        self.manager.event=event;self.manager.settings.update(call_timeout=30,task_timeout=30)
         try:
             ident=self.manager.submit('stream','reader-database-barrier')
             self.assertTrue(entered.wait(5))
+            clock['offset'] = 40
             self.assertEqual(self.manager.wait(ident)['state'],'timed_out')
             self.assertIn(ident,self.manager.active)
             def shutdown():results.append(self.manager.shutdown());returned.set()

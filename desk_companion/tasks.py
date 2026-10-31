@@ -243,6 +243,7 @@ class TaskManager:
                     if row["session"] in busy:
                         continue
                     control = {"session": row["session"], "cancel": threading.Event(),
+                               "started_monotonic": time.monotonic(),
                                "execution_done": False, "reader_done": True}
                     self.active[row["id"]] = control
                     busy.add(row["session"])
@@ -263,8 +264,9 @@ class TaskManager:
         task_id = row["id"]
         request = json.loads(row["request"])
         request.update(task_id=task_id, channel=row["channel"])
+        deadline = control.get('started_monotonic', time.monotonic()) + request['limits']['task_timeout']
         tree = process = None
-        phase = {"deadline": None, "hard_deadline": None, "kind": None, "waiting_note": None}
+        phase = {"deadline": None, "hard_deadline": None, "kind": None, "waiting_note": None, "tool": None}
         ended = threading.Event()
         outcome = {}
         try:
@@ -276,8 +278,9 @@ class TaskManager:
             self.event(task_id,'worker_pool',dict(prewarmed=bool(spare),
                 spawn_duration_ms=int((time.monotonic()-spawn_started)*1000)))
             # worker 初始化前挂入 Job；从此包括工具子进程在内都能及时停止。
-            process.stdin.write(json.dumps(request) + "\n")
-            process.stdin.flush()
+            if time.monotonic() < deadline and not control['cancel'].is_set():
+                process.stdin.write(json.dumps(request) + "\n")
+                process.stdin.flush()
 
             def read():
                 try:
@@ -285,6 +288,7 @@ class TaskManager:
                         event = json.loads(line)
                         kind, data = event["kind"], event.get("data")
                         if kind == "result":
+                            outcome['answer_received'] = time.monotonic()
                             outcome["answer"] = str(data)
                             self.update(task_id, answer=outcome["answer"])
                         elif kind == "answer_reset":
@@ -308,12 +312,14 @@ class TaskManager:
                                         wait = max(wait,command_wait)
                                 phase["deadline"] = time.monotonic() + wait
                                 phase["kind"] = kind
+                                phase['tool'] = data.get('tool') if kind == 'tool_start' and isinstance(data, dict) else None
                                 phase["hard_deadline"] = time.monotonic() + max(300, request["limits"]["call_timeout"]) if kind == "llm_start" else None
                                 phase["waiting_note"] = time.monotonic() + 30
                             elif kind in ("llm_end", "tool_end"):
                                 phase["deadline"] = None
                                 phase["hard_deadline"] = None
                                 phase["kind"] = None
+                                phase['tool'] = None
                                 phase["waiting_note"] = None
                             elif kind in ("token", "think", "llm_progress") and data and phase["kind"] == "llm_start":
                                 phase["deadline"] = time.monotonic() + request["limits"]["call_timeout"]
@@ -325,6 +331,7 @@ class TaskManager:
                 except Exception:
                     outcome["error"] = "任务通信中断，工具可能已经执行，请查看时间线。"
                 finally:
+                    outcome['ended_at'] = time.monotonic()
                     ended.set()
                     self._settled(task_id, control, 'reader_done')
 
@@ -334,37 +341,45 @@ class TaskManager:
             except Exception:
                 self._settled(task_id, control, 'reader_done')
                 raise
-            deadline = time.monotonic() + request["limits"]["task_timeout"]
             reason = ""
-            while not ended.wait(.05):
+            timeout_scope = timeout_stage = None
+            while True:
+                completed = ended.wait(.05)
+                observed = outcome['ended_at'] if completed else time.monotonic()
                 if control["cancel"].is_set():
                     reason = "cancelled"
                     break
-                if time.monotonic() >= deadline or (phase["deadline"] and time.monotonic() >= phase["deadline"]) or (phase["hard_deadline"] and time.monotonic() >= phase["hard_deadline"]):
+                if observed >= deadline or (phase["deadline"] and observed >= phase["deadline"]) or (phase["hard_deadline"] and observed >= phase["hard_deadline"]):
                     reason = "timed_out"
+                    timeout_scope = 'task' if observed >= deadline else 'call'
+                    timeout_stage = phase['kind'] or 'outside_call'
+                    break
+                if completed:
                     break
                 if phase["waiting_note"] and time.monotonic() >= phase["waiting_note"]:
                     self.event(task_id, "status", "当前调用仍在等待返回；此提示不代表超时或失败。")
                     phase["waiting_note"] = None
             if reason:
+                completed_note = (reason == 'timed_out' and 'answer' in outcome
+                                  and outcome.get('answer_received', float('inf')) <= deadline
+                                  and phase['kind'] == 'tool_start' and phase['tool'] == 'archive_video_notes')
                 if reason == 'timed_out':
                     self.event(task_id, 'timeout_phase', dict(
-                        stage=phase['kind'] or 'outside_call',
-                        scope='task' if time.monotonic() >= deadline else 'call'))
+                        stage=timeout_stage, scope=timeout_scope))
                 control["cancel"].set()
                 tree.close()
                 reader.join(2)
                 if reason == 'cancelled':
                     message = '任务已停止。'
-                elif time.monotonic() >= deadline:
+                elif timeout_scope == 'task':
                     message = '任务总时限已到，已停止等待。'
-                elif phase['kind'] == 'llm_start':
+                elif timeout_stage == 'llm_start':
                     message = '模型接口等待达到时限，已停止等待。可在调用调试中查看连接与响应耗时。'
-                elif phase['kind'] == 'tool_start':
+                elif timeout_stage == 'tool_start':
                     message = '工具执行等待达到时限，已停止等待。请查看工具回执。'
                 else:
                     message = '调用达到时限，已停止等待。'
-                if reason == "timed_out" and "answer" in outcome:
+                if completed_note:
                     self.finish(task_id, "succeeded", "笔记已完成；自动归档达到时限，请核实飞书保存回执。", answer=outcome["answer"])
                 else:
                     self.finish(task_id, reason, message + "已保留部分答案和工具记录；继续前请确认已执行的操作。")
