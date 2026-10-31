@@ -4,7 +4,7 @@ import copy
 
 from .feedback import check
 from .json_document import json_answer
-from .web_sources import source_catalog,url_key
+from .web_sources import source_catalog,url_key,is_http_url
 
 
 INSTRUCTION='''反馈审阅协议 v3。你是独立交付审阅者，只核对给定当前目标、候选答复与真实读取/操作回执。
@@ -40,7 +40,7 @@ def material(goal,draft,sources,receipts,handoffs=(),assignment=None):
             dict(id='assignment',level='actual_assignment',segments=[json.dumps({k:v for k,v in assignment.items()if k!='global_goal'},ensure_ascii=False,sort_keys=True)])])
     # Keep actual separately retrieved segments; quotes cannot bridge unread gaps.
     for source in source_catalog(sources):
-        segments=[s.get('text','')for s in sources if s.get('level')==source.get('level')and url_key(s.get('url',''))==url_key(source['url'])and isinstance(s.get('text'),str)]
+        segments=[s.get('text','')for s in sources if isinstance(s,dict)and s.get('level')==source.get('level')and is_http_url(s.get('url'))and url_key(s['url'])==url_key(source['url'])and isinstance(s.get('text'),str)]
         if source.get('level')in{'service_preview','checkout'}:
             segments=[json.dumps(source,ensure_ascii=False,sort_keys=True)]
         rows.append(dict(id=source['id'],level=source.get('level'),url=source['url'],segments=segments,

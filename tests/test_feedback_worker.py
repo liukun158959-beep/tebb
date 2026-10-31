@@ -49,6 +49,22 @@ class FeedbackWorkerTests(unittest.TestCase):
 
     def run_model(self,model):execute(self.request,lambda k,d:self.events.append((k,d)),llm=model)
 
+    def test_project_log_json_escapes_do_not_discard_receipt_or_block_review(self):
+        self.request['role']['tools']=['项目环境']
+        arguments=dict(environment='a'*32,operation='b'*32)
+        invocation=dict(tool_calls=[dict(id='log-call',function=dict(name='project_log',arguments=json.dumps(arguments)))])
+        model=ScriptedModel([invocation,'{"log_read":true}'])
+        result=dict(ok=True,**arguments,text='Running on http://172.17.0.57:5000\n\x1b[33mPress CTRL+C\x1b[0m\n')
+        with patch('desk_companion.project_tools.call',return_value=result):self.run_model(model)
+        ends=[data for kind,data in self.events if kind=='tool_end'and data['tool']=='project_log']
+        self.assertEqual(ends[0]['status'],'success')
+        self.assertTrue(any(kind=='feedback_check'for kind,_ in self.events))
+        for call in model.calls:
+            for row in call['messages']:
+                if row.get('role')=='tool'and row.get('tool_call_id')=='log-call':
+                    self.assertEqual(json.loads(row['content'])['text'],result['text'])
+        self.assertFalse(any(kind=='evidence'and any(s.get('level')=='body'for s in data.get('sources',[]))for kind,data in self.events))
+
     def test_structured_citation_and_real_review_have_separate_checks(self):
         source=dict(kind='page',level='body',url='https://example.org/source',text='Launch was in 2020.')
         self.request.update(text='只输出JSON对象，含year和citation来源。',source_evidence=[source])

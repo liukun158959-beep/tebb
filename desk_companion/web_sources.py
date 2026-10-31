@@ -18,7 +18,17 @@ import urllib.request
 
 MAX_BYTES = 1500000
 MAX_TEXT = 12000
-URL_RE = re.compile(r'https?://[^\s<>"\u3000，。；：、（）《》]+')
+URL_RE = re.compile(r'https?://[^\s<>"\\\x00-\x1f\x7f\u3000，。；：、（）《》]+')
+
+
+def is_http_url(value):
+    """Syntax only: this grants neither network access nor source provenance."""
+    if not isinstance(value,str)or len(value)>2048 or re.search(r'[\s<>"\\\x00-\x1f\x7f]',value):return False
+    try:
+        parsed=urlsplit(value)
+        return bool(parsed.scheme in {'http','https'}and parsed.hostname and parsed.username is None
+                    and parsed.password is None and (parsed.port is None or 0<parsed.port<=65535))
+    except ValueError:return False
 
 
 def urls(text):
@@ -30,8 +40,9 @@ def urls(text):
             if char=='(':depth+=1
             if char==')':depth-=1
             piece.append(char)
-        link=''.join(piece).rstrip('.,;:]}')
-        if link and link not in out:out.append(link)
+        link=''.join(piece).rstrip('.,;:}')
+        while link.endswith(']')and link.count(']')>link.count('['):link=link[:-1]
+        if is_http_url(link)and link not in out:out.append(link)
     return out
 
 
@@ -220,7 +231,11 @@ def _fetch_page(url,deadline,on_body=None):
         title=""; extraction="text"; links=[]
         if mime in {"text/html","application/xhtml+xml"}:
             page=PageText();page.feed(decoded);text,extraction=page.content();title="".join(page.title).strip()[:240]
-            links=list(dict.fromkeys(urljoin(current,href) for href in page.links if urlsplit(urljoin(current,href)).scheme in {"http","https"}))[:60]
+            for href in page.links:
+                try:link=urljoin(current,href)
+                except ValueError:continue
+                if is_http_url(link)and link not in links:links.append(link)
+                if len(links)>=60:break
         else: text=decoded.strip()
         if len(text)<80 or any(marker in (title+" "+text[:500]).lower() for marker in ("verify you are human","just a moment...","captcha challenge")):
             raise ValueError("网页没有可用正文，可能需要登录、验证码或 JavaScript")
@@ -255,9 +270,7 @@ def source_catalog(sources):
     """Stable evidence IDs; a later body upgrades the same URL's snippet."""
     rows={}
     for source in sources:
-        link=source.get('url','')
-        parsed=urlsplit(link)
-        if parsed.scheme not in {'http','https'} or not parsed.hostname or parsed.username is not None or parsed.password is not None or re.search(r'[\s<>"\\\x00-\x1f]',link):continue
+        if not isinstance(source,dict)or not is_http_url(source.get('url')):continue
         key=url_key(source['url'])
         if key not in rows: rows[key]=dict(source,id='S'+hashlib.sha256(key.encode()).hexdigest()[:12].upper())
         elif source.get('level')=='body':
@@ -310,13 +323,14 @@ def check_citations(text, sources, *, structured=False):
     prose=re.sub(r"```[\s\S]*?```|`[^`\n]*`", "", text)
     cited=urls(prose)
     known={}
-    for source in source_catalog(sources):
+    catalog=source_catalog(sources)
+    for source in catalog:
         for link in (source.get("url"),source.get("requested_url")):
-            if link:
+            if is_http_url(link):
                 key=url_key(link)
                 if key not in known or source.get("level")=="body":known[key]=source
     missing=[url for url in cited if url_key(url) not in known]
     matched=[dict(url=url,level=known[url_key(url)].get("level","snippet"),truncated=bool(known[url_key(url)].get("truncated")),read_ranges=known[url_key(url)].get('read_ranges'),characters=known[url_key(url)].get('characters')) for url in cited if url_key(url) in known]
     return dict(ok=not missing and bool(cited),checked=len(cited),matched=matched,unverified=missing,
-                pages_read=len({url_key(s["url"]) for s in sources if s.get("level")=="body"}),
+                pages_read=len({url_key(s["url"]) for s in catalog if s.get("level")=="body"}),
                 scope="仅核验链接是否来自实际工具证据；不代表语义、事实或结论已自动验证")
