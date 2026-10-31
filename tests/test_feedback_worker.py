@@ -135,6 +135,27 @@ class FeedbackWorkerTests(unittest.TestCase):
         self.assertFalse(any(k=='result'for k,d in self.events))
         self.assertEqual(self.events[-1],('token','{"total":19}'))
 
+    def test_invalid_review_quote_repairs_reviewer_without_regenerating_candidate(self):
+        source=dict(kind='page',level='body',url='https://example.org/source',text='Launch was in 2020.')
+        self.request.update(text='只输出JSON对象，含year和citation来源。',source_evidence=[source],budget=3)
+        candidate=json.dumps(dict(year=2020,citation='[source](https://example.org/source)'))
+        class RepairingReview(ScriptedModel):
+            reviewed=0
+            def chat(inner,messages,tools=None,on_delta=None):
+                value=super().chat(messages,tools,on_delta)
+                if messages[0]['content'].startswith('反馈审阅协议'):
+                    inner.reviewed+=1
+                    if inner.reviewed==1:
+                        raw=json.loads(value['message']['content']);raw['requirements'][0]['evidence'][0]['quote']='not actually in source'
+                        value['message']['content']=json.dumps(raw)
+                return value
+        model=RepairingReview([candidate])
+        self.run_model(model)
+        self.assertEqual(len(model.calls),3);self.assertEqual(model.reviewed,2)
+        self.assertEqual(json.loads(self.events[-1][1]),json.loads(candidate))
+        self.assertTrue(any(k=='feedback_review_repair'for k,d in self.events))
+        self.assertTrue(json.loads(model.calls[-1]['messages'][1]['content'])['previous_protocol_issues'])
+
     def test_unknown_create_blocks_another_create_before_any_final_draft(self):
         self.request.update(text='准备公开项目。只输出JSON。',role=dict(id='writer',name='writer',role='write',tools=['项目环境']),budget=8)
         def prepare(ident):return dict(tool_calls=[dict(id=ident,function=dict(name='project_prepare',arguments=json.dumps(dict(repository='https://github.com/example/project'))))])

@@ -279,6 +279,9 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
         messages[0]['content'] += prompt_extra
         messages.append(dict(role='user',content='当前工作目录授权：'+json.dumps(request.get('workspace',{}),ensure_ascii=False)))
     messages[0]['content']+='\n当前任务职责是本阶段需要执行的工作，整体目标用于理解背景与约束；不要把其他伙伴或其他阶段的分工动作重复当作自己的职责。已完成的工作依据实际交接与回执，不再次调度；无回执的事实仍是未知，工具权限不因整体目标扩大。'
+    if kind=='task'and not extra and not allowed_search and not allowed_fetch:
+        messages[0]['content']+='\n本轮未提供执行工具。对已给定文本、计算或写作直接处理，不调用虚构函数或查询成员；需要外部操作却没有能力时按用户格式明确缺失，不能假报成功。'
+        if request.get('stage')=='collect':messages[0]['content']+='当前已是父任务创建的子任务，分工已发生，不再做成员发现或重新委派；只完成本角色收到的具体工作。'
     messages.append(dict(role='user',content='本轮当前任务职责（按本阶段与真实工具范围完成；整体目标保留为背景，不重做其他阶段动作）：\n'+json.dumps(dict(task=request['text'],stage=request.get('stage'),global_goal_reference=request.get('objective',request['text']),members=request.get('members',[]),draft=request.get('draft',''),required_sources=request.get('required_sources',[]),source_topics=request.get('source_topics',[])),ensure_ascii=False)))
 
     def extra_call(name, arguments):
@@ -536,7 +539,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
         if kind=='task' and is_tool_markup(text):
             if format_repairs>=1:raise PublicFailure('模型返回了无效的工具调用语法，没有执行该调用，也未确认交付。')
             format_repairs+=1
-            messages.extend([revision_message(text,answer),dict(role='user',content='这段XML是正文而非实际工具调用，未执行。需要工具时只使用本轮提供的函数调用接口；工具已不可用则输出完整Markdown成果并如实说明证据缺口，禁止输出伪工具调用。')]);emit('answer_reset',True);continue
+            messages.extend([revision_message(text,answer),dict(role='user',content='这段XML是正文而非实际工具调用，未执行。只使用本轮实际提供的函数；没有工具时直接处理给定文本、计算或写作，不再查成员或重新委派。严格遵守用户要求的JSON或其他输出格式，不追加说明；确需外部操作但无法执行时如实保留缺口，禁止虚构工具调用或成功。')]);emit('answer_reset',True);continue
         if (tool_count or fetch_count) and not search_success and not sources:
             raise PublicFailure("联网搜索未取得可用来源："+"；".join(search_errors)[-500:]+"。已停止后续交接。")
         if not text or len(text) > 24000: raise PublicFailure("模型未返回有效正文或超出长度限制，未确认交付。")
@@ -588,7 +591,12 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                         llm.on_tool_delta=old_delta
                         emit('llm_end',dict(phase='feedback_review',duration_ms=int((time.monotonic()-started)*1000)))
                 try:
-                    feedback_checks.extend(review(goal,text,sources,tool_receipts,review_call,handoffs=request.get('handoffs',[])))
+                    reviewed=review(goal,text,sources,tool_receipts,review_call,handoffs=request.get('handoffs',[]),verified_checks=feedback_checks)
+                    protocol_issues=[c for c in reviewed if c['id']=='review_protocol'or c.get('invalid_evidence_ids')]
+                    if protocol_issues and consumed<budget and repair.begin():
+                        emit('feedback_review_repair',dict(reason='review_protocol_or_quote',candidate_unchanged=True))
+                        reviewed=review(goal,text,sources,tool_receipts,review_call,handoffs=request.get('handoffs',[]),verified_checks=feedback_checks,protocol_issues=protocol_issues)
+                    feedback_checks.extend(reviewed)
                 except Exception as exc:
                     feedback_checks.append(feedback.check('review_unavailable','task_acceptance','unknown','独立审阅未完成，保留成果并标记待核验。',basis='model_assessment',error_type=type(exc).__name__))
                 assessment=feedback.report(feedback_checks,receipts=tool_receipts)

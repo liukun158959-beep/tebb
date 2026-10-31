@@ -32,6 +32,7 @@ class FeedbackTests(unittest.TestCase):
         self.assertEqual(feedback.check_output('{"checked":false,"checked":true}',goal)[0]['status'],'fail')
         self.assertIsNone(feedback.output_contract('只输出JSON。\n最终只返回Markdown。'))
         self.assertEqual(feedback.check_output('# report\n{}','Return only JSON object.')[0]['status'],'fail')
+        self.assertEqual(feedback.check_output('not JSON','【输出格式】只返回一个合法 JSON 对象，包含数据。')[0]['status'],'fail')
 
     def test_remote_schema_reference_is_rejected_without_network(self):
         with self.assertRaises(ValueError):
@@ -136,6 +137,53 @@ class FeedbackTests(unittest.TestCase):
         rows=material('read whole','claim',sources[:1],[])
         item['evidence']=[dict(source_id=ident,quote='summary')]
         self.assertEqual(interpret(dict(requirements=[item]),rows)[0]['status'],'unknown')
+
+    def test_whole_candidate_json_equivalence_is_not_external_quote_fuzziness(self):
+        from desk_companion.feedback_review import material,interpret
+        rows=material('JSON only','{"n": 18, "checked": true}',[],[])
+        item=dict(requirement='JSON shape',dimension='task_acceptance',status='supported',reason='matching structured candidate',evidence=[dict(source_id='draft',quote='{"checked":true,"n":18}')])
+        result=interpret(dict(requirements=[item]),rows)[0]
+        self.assertEqual(result['status'],'pass');self.assertEqual(result['evidence'][0]['match_kind'],'json_value_equivalent')
+        for bad in ['{"checked":1,"n":18}','{"checked":true,"n":19}','{"checked":true}', '{"n":18,"checked":false,"checked":true}']:
+            item['evidence'][0]['quote']=bad
+            self.assertEqual(interpret(dict(requirements=[item]),rows)[0]['status'],'unknown')
+
+    def test_reason_alias_and_level_metadata_cannot_override_source_ownership(self):
+        from desk_companion.feedback_review import material,interpret
+        rows=material('check','claim',[dict(level='snippet',url='https://example.org/source',text='summary')],[])
+        item=dict(requirement='claim',dimension='claim_support',status='supported',status_reason='model explanation',evidence=[dict(source_id=rows[-1]['id'],quote='summary',level='body')])
+        result=interpret(dict(requirements=[item]),rows)[0]
+        self.assertEqual(result['status'],'unknown');self.assertEqual(result['evidence'][0]['level'],'snippet')
+        item['reason']='conflicting canonical field'
+        with self.assertRaises(ValueError):interpret(dict(requirements=[item]),rows)
+
+    def test_actual_receipts_can_ground_observations_but_handoffs_are_not_body(self):
+        from desk_companion.feedback_review import material,interpret
+        rows=material('run preview','ready',[],[dict(call_id='start',result=dict(service_ready=True))],
+            [dict(id='child',answer='ready')])
+        receipt=next(r for r in rows if r['level']=='actual_receipt')
+        item=dict(requirement='preview observed',dimension='claim_support',status='supported',reason='actual service receipt',evidence=[dict(source_id=receipt['id'],quote=receipt['segments'][0])])
+        self.assertEqual(interpret(dict(requirements=[item]),rows)[0]['status'],'pass')
+        handoff=rows[-1];item['evidence']=[dict(source_id=handoff['id'],quote=handoff['segments'][0])]
+        self.assertEqual(interpret(dict(requirements=[item]),rows)[0]['status'],'unknown')
+
+    def test_candidate_equivalence_does_not_normalize_external_body_quotes(self):
+        from desk_companion.feedback_review import material,interpret
+        sources=[dict(level='body',url='https://example.org/source',text='{"n": 18}')]
+        rows=material('read','{"n": 18}',sources,[])
+        item=dict(requirement='quoted body',dimension='claim_support',status='supported',reason='model claim',evidence=[dict(source_id=rows[-1]['id'],quote='{"n":18}')])
+        self.assertEqual(interpret(dict(requirements=[item]),rows)[0]['status'],'unknown')
+
+    def test_verified_project_observation_is_not_research_body(self):
+        from desk_companion.feedback_review import material,interpret
+        from desk_companion.delivery_feedback import assess
+        source=dict(kind='project_preview',level='service_preview',url='http://127.0.0.1:12345/',title='verified preview',scope='startup HTTP observation, not research body')
+        rows=material('verify startup','verified',[source],[]);row=rows[-1]
+        item=dict(requirement='startup observed',dimension='claim_support',status='supported',reason='recorded observation',evidence=[dict(source_id=row['id'],quote=row['segments'][0])])
+        check=interpret(dict(requirements=[item]),rows)[0]
+        self.assertEqual(check['status'],'pass');self.assertEqual(check['evidence'][0]['level'],'service_preview')
+        _,checks,_=assess(dict(text='read research',collab_run='test',required_sources=['web']),'[preview](http://127.0.0.1:12345/)',[source],None,[])
+        self.assertTrue(any(c['id']=='required_source_web'and c['status']=='fail'for c in checks))
 
 
 if __name__=='__main__':unittest.main()

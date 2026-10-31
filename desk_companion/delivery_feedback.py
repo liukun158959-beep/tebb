@@ -20,9 +20,10 @@ def assess(request,text,sources,delivery,receipts,*,goal=None):
         checks.append(feedback.check('citation_provenance','source_url','pass'if audit['ok']else 'fail'if required else 'unknown',
             '仅核对引用来自实际工具记录，不证明断言受支持。',required=required,audit=audit))
         catalog=source_catalog(sources)
-        partial=[s['id']for s in catalog if s.get('level')!='body'or s.get('truncated')is True or s.get('complete')is False]
+        readable=[s for s in catalog if s.get('level')in{'body','snippet'}]
+        partial=[s['id']for s in readable if s.get('level')!='body'or s.get('truncated')is True or s.get('complete')is False]
         checks.append(feedback.check('reading_coverage','reading','unknown'if partial else 'pass',
-            '存在摘要或未读完整材料；只能使用实际取得区间。'if partial else '已记录正文读取；是否支持具体断言另行审阅。',required=False,partial_source_ids=partial))
+            '存在摘要或未读完整材料；只能使用实际取得区间。'if partial else '已记录正文读取；是否支持具体断言另行审阅。'if readable else '本轮为操作观察回执，未将其计为研究正文。',required=False,partial_source_ids=partial))
     from .report_charts import validate_report
     try:
         validate_report(text,request.get('source_scope',request['collab_run']),request.get('requires_charts',False))
