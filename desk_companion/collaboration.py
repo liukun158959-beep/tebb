@@ -227,7 +227,9 @@ def initialize_workspace(path=None):
 
 
 class Collaboration:
-    def __init__(self, path=None, managers=None, start=True):
+    def __init__(self, path=None, managers=None, start=True,readonly_runtime='atlas'):
+        if readonly_runtime not in {'atlas','legacy'}:raise ValueError('未知只读研究运行时。')
+        self.readonly_runtime=readonly_runtime
         self.path = Path(path or workspace_path())
         self.lock = threading.RLock()
         initialize_workspace(self.path)
@@ -752,7 +754,7 @@ class Collaboration:
                         reference_time=run.get("created",0), supplemented_at=run.get("supplemented_at"), members=run.get("members", []), require_execution=run.get('require_execution',False), applied=run["applied"], draft=run.get("parent_draft", ""), budget=max(0, call_budget(run['agent'],run['kind'],run.get('agent_config',{}).get('tools',()))-phase_calls(run)),
                         objective=run.get('objective',run['input']),parent_run=run.get('parent'),stage=run.get('stage','collect'),required_sources=run.get('required_sources',[]),requires_charts=run.get('requires_charts',False),
                         search_budget=max(0, run.get('search_limit',2)-run.get("search_calls",0)),fetch_budget=max(0,run.get('fetch_limit',4)-run.get("fetch_calls",0)),
-                        source_topics=run.get('source_topics',[]),
+                        source_topics=run.get('source_topics',[]),dependencies=dependencies(run),execution_runtime=run.get('execution_runtime','legacy'),
                         source_evidence=run.get("source_evidence",[]),evidence=run.get("evidence",[]),handoffs=run.get('handoffs',[]))
                     run["task"] = manager.submit(run["input"], "collab-"+run["id"], "collaboration", submission_key=f"collab:{run['id']}:{run['attempt']}",
                         _budget_root=run['budget_id'],_budget_root_member=not run.get('parent'),
@@ -784,6 +786,10 @@ class Collaboration:
                     elif kind == 'feedback_invalidated':run.pop('feedback_check',None)
                     elif kind in {'unknown_operation_blocked','repair_tool_blocked'}:
                         run['events'].append('工具未执行：'+str(data.get('tool',''))+'；保留原回执，先核对未知结果。')
+                    elif kind == 'execution_runtime':
+                        if data.get('name')in{'legacy','atlas_readonly'}:
+                            run['execution_runtime']=data['name']
+                            observations=run.setdefault('runtime_observations',[]);observations.append(data);del observations[:-8]
                     elif kind == 'project_receipt':
                         receipts=run.setdefault('project_receipts',[])
                         receipts.append(data)
@@ -877,6 +883,9 @@ class Collaboration:
                         child.update(dependencies=deps,objective=run['input'],stage=stage,required_sources=plan.get('required_sources',[]),requires_charts=run.get('requires_charts',False) and stage=='deliver')
                         topics=list(dict.fromkeys(plan.get('source_topics',[])))
                         child.update(source_topics=topics,search_limit=max(2,len(topics)),fetch_limit=max(4,len(topics)*2))
+                        from .readonly_research import eligible_child
+                        candidate=dict(kind=child['kind'],role=child['agent_config'],parent_run=child.get('parent'),stage=stage,dependencies=deps)
+                        child['execution_runtime']='atlas_readonly'if self.readonly_runtime=='atlas'and eligible_child(candidate)else'legacy'
                         if stage=='deliver': child['required_sources']=list(dict.fromkeys(child['required_sources']+[s for previous in children for s in previous.get('required_sources',[])]))
                         child["workspace"] = run["workspace"]; child["title"] = plan["title"]; child["selection"] = run.get("selection", {}); children.append(child)
                     run['events'].append('委派已校验：'+ '；'.join(next(a['name'] for a in state['agents'] if a['id']==p['agent_id'])+'：'+p['title'] for p in plans))

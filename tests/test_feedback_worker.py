@@ -49,6 +49,47 @@ class FeedbackWorkerTests(unittest.TestCase):
 
     def run_model(self,model):execute(self.request,lambda k,d:self.events.append((k,d)),llm=model)
 
+    @unittest.skipUnless(os.name=='nt','first readonly runtime pilot requires Windows parent-exit protection')
+    def test_atlas_collect_child_keeps_actual_body_and_independent_acceptance(self):
+        from desk_companion.readonly_research import ReadonlyLoop
+        instances=[]
+        class ObservedLoop(ReadonlyLoop):
+            def __init__(loop,**kwargs):super().__init__(**kwargs);instances.append(loop)
+        source=dict(kind='page',level='body',url='https://example.org/read',text='Actual controlled original sentence.',truncated=False)
+        ident=source_catalog([source])[0]['id']
+        self.request.update(parent_run='actual-parent',stage='collect',dependencies=[],execution_runtime='atlas_readonly',
+            text='只输出JSON，含reading和citation，依据给定链接正文。',role=dict(id='research',name='research',role='read',tools=['网页读取']),
+            context=[dict(sender='user',text=source['url'])])
+        invocation=dict(tool_calls=[dict(id='actual-read',function=dict(name='web_fetch',arguments=json.dumps(dict(url=source['url']))))])
+        model=ScriptedModel([invocation,json.dumps(dict(reading=True,citation=f'[{ident}]'))]);reads=[]
+        with patch('desk_companion.readonly_research.ReadonlyLoop',ObservedLoop):
+            execute(self.request,lambda k,d:self.events.append((k,d)),llm=model,fetch=lambda url:(reads.append(url)or source))
+        self.assertEqual(reads,[source['url']])
+        self.assertTrue(any(kind=='execution_runtime'and data['name']=='atlas_readonly'for kind,data in self.events))
+        self.assertTrue(next(data for kind,data in self.events if kind=='feedback_check')['ok'])
+        result=json.loads(self.events[-1][1]);self.assertTrue(result['reading']);self.assertIn(source['url'],result['citation'])
+        import dataclasses
+        journal=[dataclasses.asdict(event)for event in instances[0].journal.get_events(instances[0].agent.last_result.run_id)]
+        self.assertNotIn('test-only',json.dumps(journal,ensure_ascii=False))
+        self.assertTrue(all(isinstance(event['payload'].get('model'),str)for event in journal if event['event_type']=='llm_before_call'))
+
+    def test_atlas_failed_source_is_not_handed_off_as_model_success(self):
+        self.request.update(parent_run='actual-parent',stage='collect',dependencies=[],execution_runtime='atlas_readonly',
+            role=dict(id='research',name='research',role='read',tools=['网页读取']),context=[dict(sender='user',text='https://example.org/read')])
+        call=dict(tool_calls=[dict(id='failed-read',function=dict(name='web_fetch',arguments=json.dumps(dict(url='https://example.org/read'))))])
+        attempts=[];model=ScriptedModel([call,'{"read":true}'])
+        def fetch(url):attempts.append(url);raise TimeoutError('controlled source timeout')
+        with self.assertRaises(PublicFailure):execute(self.request,lambda k,d:self.events.append((k,d)),llm=model,fetch=fetch)
+        self.assertEqual(attempts,['https://example.org/read'])
+        self.assertFalse(any(kind=='result'for kind,_ in self.events))
+
+    def test_runtime_hint_cannot_move_a_project_capability_into_readonly_driver(self):
+        self.request.update(parent_run='actual-parent',stage='collect',dependencies=[],execution_runtime='atlas_readonly',
+            role=dict(id='research',name='research',role='read',tools=['项目环境']))
+        self.run_model(ScriptedModel(['{"provided":true}']))
+        runtimes=[data for kind,data in self.events if kind=='execution_runtime']
+        self.assertEqual(runtimes[0]['name'],'legacy');self.assertEqual(runtimes[0]['requested'],'atlas_readonly')
+
     def test_project_log_json_escapes_do_not_discard_receipt_or_block_review(self):
         self.request['role']['tools']=['项目环境']
         arguments=dict(environment='a'*32,operation='b'*32)

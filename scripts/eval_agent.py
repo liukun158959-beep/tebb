@@ -102,6 +102,9 @@ class Fixture(BaseHTTPRequestHandler):
                         started=next(json.loads(m['content'])for m in receipts if json.loads(m['content']).get('service_ready'))
                         delta=dict(content='合成SDK服务已核对并停止。实际回执中的[仓库]('+repository+'/tree/'+ref+')；'
                                    '[验证预览（已停止）]('+started['service']['url']+')。')
+        elif executor=='lifecycle'and spec['scenario']=='readonly':
+            from desk_companion.agent_eval_research import fixture_delta
+            delta=fixture_delta(request,spec,tool)
         elif executor=='lifecycle':
             names={t['function']['name'] for t in request.get('tools',[])}
             if 'request_clarification' in names:
@@ -159,6 +162,7 @@ def main():
     parser.add_argument('--project-timeout',type=int,default=600)
     parser.add_argument('--timeout',type=int,default=120)
     parser.add_argument('--output-limit-bindings',type=Path,help='Explicit verified generation-binding SQLite snapshot for this isolated live cohort')
+    parser.add_argument('--research-corpus',type=Path,help='Explicit frozen actual-source corpus for live readonly runtime comparison')
     args=parser.parse_args()
     if not 1<=args.limit<=len(CASES) or not 20<=args.timeout<=300 or not 1<=args.samples<=5:parser.error(f'limit 1..{len(CASES)}, timeout 20..300, samples 1..5')
     if args.output.exists():parser.error('--output must be a new directory; earlier failures are retained')
@@ -166,6 +170,9 @@ def main():
     selected=[s for s in CASES if not args.case or s['id'] in args.case][:args.limit]
     if not selected or set(args.case)-{s['id'] for s in CASES}:parser.error('unknown or empty case selection')
     projects=any(s.get('executor')=='project'for s in selected)
+    readonly=any(s.get('scenario')=='readonly'for s in selected)
+    if args.research_corpus and(not readonly or not args.research_corpus.is_dir()):parser.error('research-corpus requires readonly cases and an existing corpus directory')
+    if args.live and readonly and not args.research_corpus:parser.error('live readonly comparison requires --research-corpus')
     if args.project_variant and not projects:parser.error('project-variant requires a project case')
     if args.project_sdk=='official'and not args.live:parser.error('official SDK requires --live')
     if args.live and projects and args.project_sdk!='official':parser.error('live project cases require explicit --project-sdk official')
@@ -197,6 +204,10 @@ def main():
         with closing(sqlite3.connect(args.output_limit_bindings.resolve().as_uri()+'?mode=ro',uri=True))as source,closing(sqlite3.connect(destination))as target:
             source.backup(target)
     previous=os.environ.get('DESK_COMPANION_DATA_DIR')
+    research_corpus=None
+    if readonly:
+        from desk_companion.agent_eval_research import prepare_corpus
+        research_corpus=prepare_corpus(profile,args.research_corpus,live=args.live)
     os.environ['DESK_COMPANION_DATA_DIR']=str(profile)
     for key in ('DESK_TERMINAL_PORT','DESK_TERMINAL_TOKEN'):os.environ.pop(key,None)
     report=dict(schema_version=1,contract_version=CONTRACT_VERSION,mode='live' if args.live else 'fixture',model=model['model'],cases=[],attempts=1,
@@ -208,6 +219,7 @@ def main():
     import subprocess
     report['source_commit']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     report['root_budget_policy_version']=1
+    if research_corpus:report['research_corpus']=research_corpus
     report['verified_output_binding_snapshot']=bool(args.output_limit_bindings)
     report['capacity_snapshot']=dict(window=capacity.get('window'),output_reserve=capacity.get('output_reserve'),
         tokenizer_bound=bool(capacity.get('tokenizer_dir')),tokenizer_signature=capacity.get('tokenizer_signature'))
@@ -218,6 +230,7 @@ def main():
             'desk_companion/collaboration_llm.py','desk_companion/workflow_worker.py','desk_companion/workflow_nodes.py',
             'desk_companion/local_calendar.py','desk_companion/tebb_tools.py','desk_companion/collaboration.py',
             'desk_companion/agent_eval_tools.py','desk_companion/agent_eval_lifecycle.py','scripts/eval_fixture_worker.py',
+            'desk_companion/research_tools.py','desk_companion/readonly_research.py','desk_companion/agent_eval_research.py','scripts/eval_readonly_worker.py',
             'desk_companion/agent_eval_projects.py','scripts/eval_project_host.py','scripts/eval_project_fixture.py',
             'desk_companion/project_environments.py','desk_companion/project_environment_store.py','desk_companion/resource_lock.py','desk_companion/project_operations.py',
             'desk_companion/project_tools.py','desk_companion/project_receipts.py','desk_companion/project_integrity.py','desk_companion/docker_sandboxes.py',
@@ -252,6 +265,8 @@ def main():
             row['call_budget']=spec.get('budget',2)
             row['sample']=sample
             report['cases'].append(row);save()
+            if spec.get('research_mode')=='atlas_parallel'and os.name!='nt':
+                row.update(outcome='skip',reason='windows_parent_exit_protection_required');save();continue
             if spec['prerequisite']:
                 row.update(outcome='incomplete',reason='executor_not_implemented:'+spec['prerequisite']);save();continue
             Fixture.spec=spec
@@ -281,7 +296,8 @@ def main():
                 elif lifecycle:
                     from desk_companion.agent_eval_lifecycle import execute
                     def progress(value):row.update(value);save()
-                    task,verification,task_ids,calls=execute(spec,profile=profile,workspace=workspace,model_id=model['id'],timeout=args.timeout,command=command,progress=progress)
+                    lifecycle_command=[sys.executable,'-u',str(ROOT/'scripts/eval_readonly_worker.py')]if spec.get('scenario')=='readonly'else command
+                    task,verification,task_ids,calls=execute(spec,profile=profile,workspace=workspace,model_id=model['id'],timeout=args.timeout,command=lifecycle_command,progress=progress)
                     row['task_ids']=task_ids;task_id=task_ids[0] if task_ids else ''
                     expired=verification['deadline_exceeded']
                 elif spec['category']=='workflow':

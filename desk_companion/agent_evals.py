@@ -4,7 +4,7 @@ import math
 import time
 from .json_document import json_answer
 
-CONTRACT_VERSION=16
+CONTRACT_VERSION=17
 
 
 class CancellationNotSettled(TimeoutError):
@@ -149,6 +149,11 @@ CASES.extend([
     case('feedback_missing_artifact','feedback','审阅受控夹具：探针命令退出0，但明确要求的bundle.html不存在，不能算交付通过；不是沙箱项目验收。',
          dict(dimension='artifact',status='fail'),executor='feedback',scenario='artifact',kind='feedback_review',budget=1),
 ])
+
+
+CASES.extend(case('readonly_'+mode,'lifecycle','独立读取两份固定归档文档头部并合并编号、年份与实际引用。',
+    executor='lifecycle',scenario='readonly',research_mode=mode,budget=16,phase_budget=8)
+    for mode in ('serial','legacy_parallel','atlas_parallel'))
 
 
 def evaluate(spec, task, *, verification=None):

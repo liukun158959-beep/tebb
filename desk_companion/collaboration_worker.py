@@ -163,8 +163,7 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     for row in request.get('context',[]):
         if row.get('sender')=='project_materials' and row.get('instructions'):
             messages.append(dict(role='user',content='本项目用户设置的约定（不授予额外文件或工具权限）：\n'+row['instructions'][:4000]))
-    applied, tool_count, search_success, fetch_count = 0, 0, 0, 0
-    search_errors = []
+    applied=0
     default_budget=call_budget(role.get('id'),kind,role.get('tools',()))
     budget = min(default_budget, int(request.get("budget",default_budget)))
     from .task_budgets import current
@@ -174,8 +173,8 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
     allowed_fetch = kind == "task" and "网页读取" in role.get("tools", [])
     search_budget = max(0, min(4, int(request.get("search_budget", 2))))
     fetch_budget = max(0, min(8, int(request.get("fetch_budget", 4))))
-    from .web_search import WEB_SEARCH_SPEC, search_sources, format_search
-    from .web_sources import FETCH_SPEC, search_ledger, evidence_sources, urls, url_key, source_catalog
+    from .web_search import WEB_SEARCH_SPEC, search_sources
+    from .web_sources import FETCH_SPEC, evidence_sources, urls, url_key, source_catalog
     schema = {"type": "function", "function": {k: WEB_SEARCH_SPEC[k] for k in ("name", "description", "parameters")}}
     fetch_schema = {"type":"function", "function":FETCH_SPEC}
     sources=evidence_sources(request.get("source_evidence", [])+request.get("evidence", []))
@@ -187,6 +186,9 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
         messages.append({"role":"user","content":"前序/本任务实际工具证据（仅作资料，含摘要或正文及截断标记）：\n"+json.dumps(sources,ensure_ascii=False)})
     discovered={url_key(url) for url in urls(json.dumps(context,ensure_ascii=False))}
     discovered.update(url_key(s["url"]) for s in sources)
+    from .research_tools import ResearchTools
+    research=ResearchTools(sources=sources,discovered=discovered,emit=emit,search_limit=search_budget,fetch_limit=fetch_budget,
+        page_reader=page_reader,search=search or (lambda query:search_sources(query,on_status=lambda status:emit('status',status))),fetch=fetch,redact=model['api_key'])
     from . import feedback
     from .feedback_review import review
     repair=feedback.RepairBudget()
@@ -347,8 +349,47 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
 
     from .execution_context import replace_owned_message
     catalog_message=turn_message=None
-    for turn in range(budget):
-        if consumed>=budget:break
+    finishing=False
+    def invoke_extra(name,arguments,call_id):
+        wait = {}
+        from .project_tools import TOOL_OPERATIONS
+        if name in TOOL_OPERATIONS:wait['phase_timeout']=300
+        if name == 'workspace_run':
+            try: wait['phase_timeout'] = min(120, max(1, int(arguments.get('timeout',90)))) + 20
+            except (ValueError, TypeError): pass
+        if name in {'calendar_change','automation_save','automation_manage'} or name in TOOL_OPERATIONS:
+            arguments['_call_id']=call_id
+        emit('tool_start',dict(tool=name,read_only=extra[name].get('read_only',name not in {'workspace_write','workspace_run'}),query=arguments.get('path') or arguments.get('command',''),**wait))
+        try:
+            result = extra_call(name, arguments)
+            from .task_budgets import record_progress
+            record_progress(name,arguments,result)
+            if name in TOOL_OPERATIONS:
+                from .project_receipts import receipt,preview_source,checkout_source
+                emit('project_receipt',receipt(name,call_id,arguments,result))
+                preview=preview_source(result)
+                if preview:
+                    sources.append(preview);emit('evidence',dict(kind='project_preview',sources=[preview]))
+                checkout=checkout_source(result) if name=='project_prepare' else None
+                if checkout:
+                    sources.append(checkout);emit('evidence',dict(kind='repository_checkout',sources=[checkout]))
+            if isinstance(result,dict) and result.get('ok') is False and name not in {'calendar_change','automation_save','automation_manage','calendar_query'} and name not in TOOL_OPERATIONS: raise ValueError(result.get('error','工具操作未成功'))
+            discovered.update(url_key(url) for url in urls(json.dumps(result,ensure_ascii=False) if not isinstance(result,str) else result))
+            if name == 'github_repository' and result.get('source'):
+                sources.append(result['source']); emit('evidence',dict(kind='github',sources=[result['source']]))
+            emit('tool_end',dict(tool=name,status='failed' if isinstance(result,dict) and result.get('ok') is False or name=='workspace_run' and result.get('state')!='succeeded' else 'success',path=arguments.get('path','')))
+        except Exception as exc:
+            reason = str(exc).replace(model['api_key'],'[密钥已隐藏]')[:800]
+            result = dict(ok=False,error=reason,**getattr(exc,'details',{}))
+            from .task_budgets import BudgetExceeded
+            if isinstance(exc,BudgetExceeded):result.update(budget_denied=True,operation=dict(state='not_started'))
+            emit('tool_end',dict(tool=name,status='failed',error=reason))
+
+        tool_receipts.append(dict(tool=name,call_id=call_id,arguments=arguments,result=result,read_only=extra[name].get('read_only',False)))
+        return ToolOutcome(not isinstance(result,dict)or result.get('ok')is not False,json.dumps(result,ensure_ascii=False)if not isinstance(result,str)else result)
+
+    def prepare_turn():
+        nonlocal catalog_message,turn_message,finishing
         latest_updates()
         if kind=='task' and sources:
             catalog_message=replace_owned_message(messages,catalog_message,'当前实际证据编号（仅body为已读正文；snippet仅摘要）：'+json.dumps([{k:s.get(k) for k in ('id','url','level','title','truncated')} for s in source_catalog(sources)],ensure_ascii=False))
@@ -357,7 +398,17 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
         if finishing:
             turn_message=replace_owned_message(messages,turn_message,'进入交付收尾，本轮不再发起采集或执行工具。用实际已取得资料完成当前交付，保留Markdown来源链接；不足须说明，不编造。实际可引用链接：'+json.dumps(list(dict.fromkeys(s['url'] for s in sources)),ensure_ascii=False))
         elif kind=='task' and (allowed_search or allowed_fetch):
-            turn_message=replace_owned_message(messages,turn_message,f'本轮剩余实际搜索请求 {max(0,search_budget-tool_count)} 次，网页请求 {max(0,fetch_budget-fetch_count)} 次。工具调用必须使用提供的函数接口；不要在正文输出XML或伪工具调用。工具不可用时根据已取得资料交付，标明缺口。')
+            turn_message=replace_owned_message(messages,turn_message,f'本轮剩余实际搜索请求 {max(0,search_budget-research.search_count)} 次，网页请求 {max(0,fetch_budget-research.fetch_count)} 次。工具调用必须使用提供的函数接口；不要在正文输出XML或伪工具调用。工具不可用时根据已取得资料交付，标明缺口。')
+        tools=[{k:v for k,v in spec.items() if k not in {"implementation","read_only"}} for spec in extra.values()]+([schema] if allowed_search and research.search_count<search_budget else [])+([fetch_schema] if allowed_fetch and research.fetch_count<fetch_budget else [])
+        if repair.used:tools=[t for t in tools if t['function']['name']in{'web_search','web_fetch','submit_deliverable'}or repair.allows(t['function']['name'],extra.get(t['function']['name'],{}))]
+        if any(p['write_attempted']for p in feedback.pending_operations(tool_receipts)):
+            tools=[t for t in tools if t['function']['name']in{'web_search','web_fetch','submit_deliverable','build_chart'}or extra.get(t['function']['name'],{}).get('read_only')is True]
+        if finishing: tools=[t for t in tools if t['function']['name']=='submit_deliverable']
+        return tools
+
+    def chat_once(current_messages,tools=None,on_delta=None):
+        nonlocal consumed
+        if consumed>=budget:raise PublicFailure('达到阶段模型额度，未发送新请求。')
         emit("status", "正在生成委派计划。" if kind == "plan" else "正在调用模型处理。")
         emit("llm_start", {"model": model["model"], "turn": consumed+1})
         consumed+=1
@@ -376,20 +427,44 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
             elif kind == 'route':
                 emit('llm_progress',True);route_text.push(piece)
             else: emit('token', piece)
+            if on_delta:on_delta(piece)
         def tool_delta(index, name, arguments):
             progress('正在整理报告，交付前将核对来源。' if name == 'submit_deliverable' else '正在准备工具调用。')
             if delivering: report_text.push(index, name, arguments)
         llm.on_tool_delta = tool_delta
         try:
-            tools=[{k:v for k,v in spec.items() if k not in {"implementation","read_only"}} for spec in extra.values()]+([schema] if allowed_search and tool_count<search_budget else [])+([fetch_schema] if allowed_fetch and fetch_count<fetch_budget else [])
-            if repair.used:tools=[t for t in tools if t['function']['name']in{'web_search','web_fetch','submit_deliverable'}or repair.allows(t['function']['name'],extra.get(t['function']['name'],{}))]
-            if any(p['write_attempted']for p in feedback.pending_operations(tool_receipts)):
-                tools=[t for t in tools if t['function']['name']in{'web_search','web_fetch','submit_deliverable','build_chart'}or extra.get(t['function']['name'],{}).get('read_only')is True]
-            if finishing: tools=[t for t in tools if t['function']['name']=='submit_deliverable']
-            response = llm.chat(messages, tools=tools, on_delta=content_delta)
+            response = llm.chat(current_messages, tools=tools, on_delta=content_delta)
         finally:
             emit("llm_end", {"duration_ms": int((time.monotonic()-started)*1000)})
         record_usage(request,response.get('usage') or {},model['model'],emit)
+        return response
+
+    from .research_tools import ToolOutcome
+    from .readonly_research import ReadonlyLoop,eligible_child,READ_TOOLS
+    atlas_loop=None
+    requested_atlas=request.get('execution_runtime')=='atlas_readonly'
+    if requested_atlas and eligible_child(request):
+        # Registration grants no file access: extra_call still checks actual selected IDs.
+        extra.setdefault('read_local_source',attachment_spec)
+        registry=list(extra.values())+([{**schema,'read_only':True}]if allowed_search else[])+([{**fetch_schema,'read_only':True}]if allowed_fetch else[])
+        if all(spec['function']['name']in READ_TOOLS and spec.get('read_only')is True for spec in registry):
+            def invoke_readonly(name,arguments,call_id):
+                return research.invoke(name,arguments)if name in {'web_search','web_fetch'}else invoke_extra(name,arguments,call_id)
+            atlas_loop=ReadonlyLoop(model_name=model['model'],schemas=registry,messages=messages,prepare=prepare_turn,
+                chat=chat_once,invoke=invoke_readonly,on_tools=lambda:emit('answer_reset',True))
+            messages=atlas_loop.messages
+    if kind=='task':emit('execution_runtime',dict(name='atlas_readonly'if atlas_loop else'legacy',requested='atlas_readonly'if requested_atlas else'legacy'))
+    for turn in range(budget):
+        if consumed>=budget:break
+        if atlas_loop:
+            result=atlas_loop.run(budget-consumed)
+            emit('execution_runtime',dict(name='atlas_readonly',loop_status=result.status,atlas_run=result.run_id))
+            if result.status!='success':raise PublicFailure('只读研究循环已终止，已有材料与错误保留，未确认交付。')
+            response=dict(message=atlas_loop.last_message)
+            if messages and messages[-1]is atlas_loop.last_message:messages.pop()
+        else:
+            tools=prepare_turn()
+            response=chat_once(messages,tools=tools)
         answer = response["message"]
         text = str(answer.get("content") or "").strip()
         calls = answer.get("tool_calls") or []
@@ -467,102 +542,18 @@ def _execute(request, emit, llm=None, search=None, fetch=None):
                 arguments = json.loads(function.get("arguments") or "{}")
                 if not isinstance(arguments,dict): raise ValueError("工具参数无效")
                 if name in extra:
-                    wait = {}
-                    from .project_tools import TOOL_OPERATIONS
-                    if name in TOOL_OPERATIONS:wait['phase_timeout']=300
-                    if name == 'workspace_run':
-                        try: wait['phase_timeout'] = min(120, max(1, int(arguments.get('timeout',90)))) + 20
-                        except (ValueError, TypeError): pass
-                    if name in {'calendar_change','automation_save','automation_manage'} or name in TOOL_OPERATIONS:
-                        arguments['_call_id']=call['id']
-                    emit('tool_start',dict(tool=name,read_only=extra[name].get('read_only',name not in {'workspace_write','workspace_run'}),query=arguments.get('path') or arguments.get('command',''),**wait))
-                    try:
-                        result = extra_call(name, arguments)
-                        from .task_budgets import record_progress
-                        record_progress(name,arguments,result)
-                        if name in TOOL_OPERATIONS:
-                            from .project_receipts import receipt,preview_source,checkout_source
-                            emit('project_receipt',receipt(name,call['id'],arguments,result))
-                            preview=preview_source(result)
-                            if preview:
-                                sources.append(preview);emit('evidence',dict(kind='project_preview',sources=[preview]))
-                            checkout=checkout_source(result) if name=='project_prepare' else None
-                            if checkout:
-                                sources.append(checkout);emit('evidence',dict(kind='repository_checkout',sources=[checkout]))
-                        if isinstance(result,dict) and result.get('ok') is False and name not in {'calendar_change','automation_save','automation_manage','calendar_query'} and name not in TOOL_OPERATIONS: raise ValueError(result.get('error','工具操作未成功'))
-                        discovered.update(url_key(url) for url in urls(json.dumps(result,ensure_ascii=False) if not isinstance(result,str) else result))
-                        if name == 'github_repository' and result.get('source'):
-                            sources.append(result['source']); emit('evidence',dict(kind='github',sources=[result['source']]))
-                        emit('tool_end',dict(tool=name,status='failed' if isinstance(result,dict) and result.get('ok') is False or name=='workspace_run' and result.get('state')!='succeeded' else 'success',path=arguments.get('path','')))
-                    except Exception as exc:
-                        reason = str(exc).replace(model['api_key'],'[密钥已隐藏]')[:800]
-                        result = dict(ok=False,error=reason,**getattr(exc,'details',{}))
-                        from .task_budgets import BudgetExceeded
-                        if isinstance(exc,BudgetExceeded):result.update(budget_denied=True,operation=dict(state='not_started'))
-                        emit('tool_end',dict(tool=name,status='failed',error=reason))
-                    messages.append(dict(role='tool',tool_call_id=call['id'],content=json.dumps(result,ensure_ascii=False) if not isinstance(result,str) else result))
-                    tool_receipts.append(dict(tool=name,call_id=call['id'],arguments=arguments,result=result,read_only=extra[name].get('read_only',False)))
+                    outcome=invoke_extra(name,arguments,call['id'])
+                    messages.append(dict(role='tool',tool_call_id=call['id'],content=outcome.text))
                     continue
-                query=arguments.get("query") if name=="web_search" else arguments.get("url")
-                if (name=='web_search' and tool_count>=search_budget) or (name=='web_fetch' and fetch_count>=fetch_budget):
-                    emit('tool_end',dict(tool=name,status='failed',error='本任务该工具调用预算已用尽，未发送请求'))
-                    messages.append(dict(role='tool',tool_call_id=call['id'],content='该工具调用预算已用尽，未发送请求。请使用已取得证据，不能编造未取得的内容。'))
-                    continue
-                if not isinstance(query,str) or not query.strip() or len(query)>(200 if name=="web_search" else 2048): raise ValueError("工具参数无效")
-                if name=='web_fetch' and url_key(query) not in discovered:
-                    emit('tool_end',dict(tool=name,status='failed',error='链接尚未发现，请先读取已发现资料中的链接或搜索；本次未发送请求、未占用读取额度。'))
-                    messages.append(dict(role='tool',tool_call_id=call['id'],content='链接尚未从用户资料或实际来源中发现，未发送请求，也未占用网页读取额度。请先读已发现来源，使用其实际链接；不能猜URL。'))
-                    continue
-                if name=="web_search": tool_count+=1
-                else: fetch_count+=1
-                emit("tool_start", {"tool": name, "read_only": True, "query" if name=="web_search" else "url": query})
-                from .task_budgets import current
-                if current():current().tool(True,name)
-                try:
-                    if name=="web_search":
-                        payload=search(query) if search else search_sources(query,on_status=lambda status:emit("status",status))
-                        if isinstance(payload,str):
-                            result=payload
-                            ledger=[dict(url=url,title=url,text=payload[:600],level="snippet",kind="search") for url in urls(payload)]
-                            payload={"provider":"injected-search"}
-                        else:
-                            result=format_search(payload);ledger=search_ledger(payload)
-                        if not ledger: raise ValueError("搜索未返回可追溯来源")
-                        evidence=dict(kind="search",query=query,text=result[:18000],sources=ledger,
-                                      provider=payload.get("provider"),fallback_reason=payload.get("fallback_reason",""),
-                                      attempts=payload.get("attempts",[]),primary_failure=payload.get("primary_failure"))
-                    else:
-                        if url_key(query) not in discovered: raise ValueError("只允许读取用户提供或实际来源中发现的链接，请先搜索")
-                        evidence=fetch(query) if fetch else page_reader.read(query,**{k:arguments[k] for k in ('snapshot_id','offset','query','section') if k in arguments})
-                        if not evidence.get("text") or evidence.get("level")!="body": raise ValueError("未取得可用正文")
-                        ledger=[evidence];result=json.dumps(evidence,ensure_ascii=False)
-                except Exception as exc:
-                    reason = (type(exc).__name__+": "+str(exc)).replace(model["api_key"], "[密钥已隐藏]")[:400]
-                    emit("tool_end", {"tool": name, "status": "failed", "error": reason,
-                        "diagnostic":exc.diagnostic() if callable(getattr(exc,"diagnostic",None)) else None,
-                        "attempts":getattr(exc,"attempts",[])})
-                    search_errors.append(reason)
-                    messages.append({"role": "tool", "tool_call_id": call["id"], "content": "来源工具失败，没有取得该来源。"+reason+"。可在剩余预算内重试或读取已提供的公开链接；不能据此编造结论。"})
-                    continue
-                emit("tool_end", {"tool": name, "status": "success", "provider":evidence.get("provider"), "url":evidence.get("url"), "truncated":evidence.get("truncated",False)})
-                search_success+=1
-                sources.extend(ledger)
-                if current():
-                    for source in ledger:
-                        if source.get('level')=='body'and source.get('text'):
-                            import hashlib
-                            current().progress('body',source['url'],hashlib.sha256(source['text'].encode()).hexdigest())
-                discovered.update(url_key(s["url"]) for s in ledger)
-                discovered.update(url_key(url) for url in evidence.get("links",[]))
-                emit("evidence", evidence)
-                messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(result)})
+                outcome=research.invoke(name,arguments)
+                messages.append(dict(role='tool',tool_call_id=call['id'],content=outcome.text))
             continue
         if kind=='task' and is_tool_markup(text):
             if format_repairs>=1:raise PublicFailure('模型返回了无效的工具调用语法，没有执行该调用，也未确认交付。')
             format_repairs+=1
             messages.extend([revision_message(text,answer),dict(role='user',content='这段XML是正文而非实际工具调用，未执行。只使用本轮实际提供的函数；没有工具时直接处理给定文本、计算或写作，不再查成员或重新委派。严格遵守用户要求的JSON或其他输出格式，不追加说明；确需外部操作但无法执行时如实保留缺口，禁止虚构工具调用或成功。')]);emit('answer_reset',True);continue
-        if (tool_count or fetch_count) and not search_success and not sources:
-            raise PublicFailure("联网搜索未取得可用来源："+"；".join(search_errors)[-500:]+"。已停止后续交接。")
+        if (research.search_count or research.fetch_count) and not research.successes and not sources:
+            raise PublicFailure("联网搜索未取得可用来源："+"；".join(research.errors)[-500:]+"。已停止后续交接。")
         if not text or len(text) > 24000: raise PublicFailure("模型未返回有效正文或超出长度限制，未确认交付。")
         if changes:
             fresh = [c for c in checks if not c.get('stale')]

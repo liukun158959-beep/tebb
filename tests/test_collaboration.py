@@ -645,6 +645,23 @@ class CollaborationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "另一项操作"):
             self.service.action({**action, "text": "不同消息"})
 
+    def test_new_independent_research_child_selects_atlas_but_dependency_stays_legacy(self):
+        self.action(type='send',text='研究并写作',target='',mode='task');self.service.tick()
+        self.work.complete(next(iter(self.work.items)),self.plan());self.service.tick()
+        rows=self.state()['runs'];research,writer=rows[1:]
+        expected_runtime='atlas_readonly'if os.name=='nt'else'legacy'
+        self.assertEqual(research['execution_runtime'],expected_runtime)
+        self.assertEqual(writer['execution_runtime'],'legacy')
+        self.service.tick();request=self.work.requests['collab:'+research['id']+':0']
+        self.assertEqual(request['execution_runtime'],expected_runtime);self.assertEqual(request['dependencies'],[])
+
+    def test_old_unmarked_child_keeps_legacy_runtime_when_dispatched(self):
+        self.action(type='send',text='研究并写作',target='',mode='task');self.service.tick()
+        self.work.complete(next(iter(self.work.items)),self.plan());self.service.tick()
+        with transaction(self.service.path)as(state,_):state['runs'][1].pop('execution_runtime',None)
+        research=self.state()['runs'][1];self.service.tick()
+        self.assertEqual(self.work.requests['collab:'+research['id']+':0']['execution_runtime'],'legacy')
+
     def test_valid_plan_handoff_and_failure_never_uses_empty_result(self):
         self.action(type="send", text="研究并写作", target="", mode="task"); self.service.tick()
         self.work.complete(next(iter(self.work.items)), self.plan())

@@ -28,8 +28,9 @@ class EvalVerdictTests(unittest.TestCase):
         self.assertEqual(wait_task(Queue(),'task',0),(dict(state='succeeded'),False))
 
     def test_named_cases_have_explicit_conditions_and_separate_cancellation_scopes(self):
-        self.assertEqual(len(CASES),30)
-        self.assertEqual(len({c['id'] for c in CASES}),30)
+        self.assertEqual(len(CASES),33)
+        self.assertEqual(len({c['id'] for c in CASES}),33)
+        self.assertEqual({c['research_mode']for c in CASES if c.get('scenario')=='readonly'},{'serial','legacy_parallel','atlas_parallel'})
         self.assertTrue(all('expected_state' in c and 'prerequisite' in c for c in CASES))
 
     def test_queue_success_with_wrong_content_is_false_success(self):

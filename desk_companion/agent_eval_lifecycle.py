@@ -10,6 +10,9 @@ def worker_alive(call):
 
 
 def judge(scenario, root, runs, proof):
+    if scenario=='readonly':
+        from .agent_eval_research import judge as judge_readonly
+        return judge_readonly(root,runs,proof)
     from .agent_evals import same_json,json_answer
     if scenario=='cancel':
         return bool(root['state']=='cancelled' and proof.get('cancel_observed_active')
@@ -38,6 +41,7 @@ def execute(spec, *, profile, workspace, model_id, timeout, command=None, progre
     root={};runs=[];tasks={};calls={};run_id='';expired=False
     started=time.monotonic();deadline=started+timeout;cancel_deadline=None
     scenario=spec['scenario']
+    readonly=scenario=='readonly'
     def collect():
         for manager in managers.values():
             for item in manager.list()['items']:
@@ -51,14 +55,21 @@ def execute(spec, *, profile, workspace, model_id, timeout, command=None, progre
     try:
         for kind in ('work','chat'):
             managers[kind]=TaskManager(path=profile/'memory'/f'eval-{tag}-{kind}.sqlite3',command=command)
-        service=Collaboration(path=workspace,managers=managers,start=False)
-        for manager in managers.values():manager.configure(1,min(timeout,90),timeout,False)
+        service=Collaboration(path=workspace,managers=managers,start=False,
+            readonly_runtime='atlas'if not readonly or spec['research_mode']=='atlas_parallel'else'legacy')
+        for kind,manager in managers.items():manager.configure(2 if readonly and kind=='work'and spec['research_mode']!='serial'else 1,min(timeout,90),timeout,False)
         for ident in ('research','writer'):
             agent=next(a for a in service.snapshot()['state']['agents'] if a['id']==ident)
             service.action(dict(type='agent',agent={**agent,'model':model_id,'tools':[]},request_id=uuid.uuid4().hex))
-        if scenario=='delegate':
-            state=service.action(dict(type='group',title='合成求和验收',goal='写作者核对数值，研究员汇总',members=['research','writer'],request_id=uuid.uuid4().hex))['state']
-            conversation=state['selected'];before={r['id'] for r in state['runs']}
+        if scenario in{'delegate','readonly'}:
+            if readonly:
+                from .agent_eval_research import configure
+                conversation,prompt=configure(spec,service,model_id,profile,proof)
+                state=service.snapshot()['state'];progress(dict(input=prompt))
+            else:
+                state=service.action(dict(type='group',title='合成求和验收',goal='写作者核对数值，研究员汇总',members=['research','writer'],request_id=uuid.uuid4().hex))['state']
+                conversation=state['selected']
+            before={r['id'] for r in state['runs']}
             state=service.action(dict(type='send',conversation=conversation,text=spec['prompt'],mode='task',
                 sampling=dict(reasoning_effort='low',temperature=.1,top_p=1),request_id=uuid.uuid4().hex))['state']
             run_id=next(r['id'] for r in state['runs'] if r['id'] not in before)
@@ -92,7 +103,7 @@ def execute(spec, *, profile, workspace, model_id, timeout, command=None, progre
             if root['state'] in TERMINAL:
                 proof['tasks_terminal']=all(t['state'] in TERMINAL for t in tasks.values())
                 proof['workers_exited_before_shutdown']=bool(calls) and not any(worker_alive(c) for c in calls.values())
-                if scenario!='cancel' or proof['workers_exited_before_shutdown'] and proof['tasks_terminal']:break
+                if scenario not in{'cancel','readonly'}or proof['workers_exited_before_shutdown']and proof['tasks_terminal']:break
             now=time.monotonic()
             if now>=deadline and not expired:
                 expired=True;cancel_deadline=now+8
@@ -101,9 +112,19 @@ def execute(spec, *, profile, workspace, model_id, timeout, command=None, progre
             time.sleep(.1)
         events=[e for task in tasks.values() for e in task.get('events',[])]
         proof['accepted_delivery']=any(e['kind']=='delivery_check' and isinstance(e['data'],dict) and e['data'].get('ok') for e in events)
+        if readonly:
+            children=[run for run in runs if run.get('parent')==run_id]
+            # Public collaboration snapshots deliberately hide the private task field.
+            # Correlate actual TaskManager rows by their durable, exact session owner.
+            intervals=[dict(run=run['id'],task=task['id'],started=task.get('started'),ended=task.get('ended'),runtime=run.get('execution_runtime'))
+                for run in children for task in tasks.values()if task.get('session')=='collab-'+run['id']]
+            proof['child_intervals']=intervals
+            proof['child_intervals_complete']=bool(len(intervals)==2 and len({item['run']for item in intervals})==2
+                and all(type(item['started'])in(int,float)and type(item['ended'])in(int,float)and 0<item['started']<item['ended']for item in intervals))
+            proof['worker_overlap']=None if not proof['child_intervals_complete']else max(item['started']for item in intervals)<min(item['ended']for item in intervals)
         proof.update(verified=not expired and judge(scenario,root,runs,proof),deadline_exceeded=expired,
                      root_state=root.get('state'),chain_state=root.get('chain',{}).get('state'),
-                     runs=[{k:r.get(k) for k in ('id','parent','agent','kind','stage','state')} for r in runs],
+                     runs=[{k:r.get(k) for k in ('id','parent','agent','kind','stage','state','execution_runtime','runtime_observations')} for r in runs],
                      task_states={ident:t['state'] for ident,t in tasks.items()})
         result=dict(state=root['state'],answer=root.get('answer',''),error=root.get('chain',{}).get('error') or root.get('error',''),events=events,
                     task_budget=root.get('task_budget'))
